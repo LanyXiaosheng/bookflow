@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>看板 — BookFlow</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif; }
+        .admin-locale-select {
+            background-image: linear-gradient(45deg, transparent 50%, #6b7280 50%), linear-gradient(135deg, #6b7280 50%, transparent 50%);
+            background-position: calc(100% - 8px) 52%, calc(100% - 4px) 52%;
+            background-size: 4px 4px, 4px 4px;
+            background-repeat: no-repeat;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+
+<!-- ============ 顶部导航 (对齐 GEOFlow header) ============ -->
+<nav class="bg-white shadow-sm border-b">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex h-16 items-center gap-3 lg:gap-4 min-w-0">
+            <a href="dashboard.html" class="shrink-0 text-lg sm:text-xl font-semibold text-gray-900">BookFlow</a>
+            <nav class="hidden md:flex flex-1 min-w-0 items-center">
+                <div class="flex w-full min-w-0 items-center gap-3 lg:gap-5 overflow-x-auto py-2 -my-2">
+                    <a href="dashboard.html" class="text-blue-600 font-medium shrink-0 whitespace-nowrap text-[15px]">看板</a>
+                    <a href="#" class="text-gray-500 hover:text-gray-700 shrink-0 whitespace-nowrap text-[15px]">选题</a>
+                    <a href="#" class="text-gray-500 hover:text-gray-700 shrink-0 whitespace-nowrap text-[15px]">项目</a>
+                    <a href="#" class="text-gray-500 hover:text-gray-700 shrink-0 whitespace-nowrap text-[15px]">已发</a>
+                    <a href="#" class="text-gray-500 hover:text-gray-700 shrink-0 whitespace-nowrap text-[15px]">复盘</a>
+                    <a href="#" class="text-gray-500 hover:text-gray-700 shrink-0 whitespace-nowrap text-[15px]">赛道</a>
+                    <a href="#" class="text-gray-500 hover:text-gray-700 shrink-0 whitespace-nowrap text-[15px]">手册</a>
+                    <a href="#" class="text-gray-500 hover:text-gray-700 shrink-0 whitespace-nowrap text-[15px]">设置</a>
+                </div>
+            </nav>
+            <div class="flex items-center gap-2 lg:gap-3 shrink-0">
+                <button class="relative inline-flex h-9 w-9 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100">
+                    <i data-lucide="bell" class="h-5 w-5"></i>
+                    <span class="absolute top-1.5 right-1.5 inline-flex h-2 w-2 rounded-full bg-red-500"></span>
+                </button>
+                <div class="hidden md:flex items-center rounded-lg border border-gray-200 bg-white px-2 py-1 shadow-sm">
+                    <i data-lucide="languages" class="w-4 h-4 text-gray-400 mr-1.5"></i>
+                    <select class="admin-locale-select appearance-none bg-transparent pr-5 text-sm font-medium text-gray-700 outline-none cursor-pointer">
+                        <option>简体中文</option>
+                        <option>English</option>
+                        <option>日本語</option>
+                    </select>
+                </div>
+                <button class="flex items-center space-x-1 text-sm text-gray-600 hover:text-gray-900">
+                    <div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+                        <i data-lucide="user" class="w-4 h-4 text-blue-600"></i>
+                    </div>
+                    <i data-lucide="chevron-down" class="w-4 h-4"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+    <div class="px-4 sm:px-0">
+
+        <!-- ============ ① 页头 ============ -->
+        <div class="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+                <h1 class="text-3xl font-bold text-gray-900">生产看板</h1>
+                <p class="mt-1 text-sm leading-6 text-gray-600">从一个脑洞到发布上线再到复盘归档，全流程在这一页。当前赛道：<span class="font-medium text-gray-900">现言婚恋火葬场</span> · 账号：<span class="font-medium text-gray-900">新号</span></p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <a href="#" class="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50">
+                    <i data-lucide="refresh-cw" class="mr-2 h-4 w-4"></i>
+                    刷新
+                </a>
+                <a href="#" class="inline-flex h-10 items-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                    <i data-lucide="plus" class="mr-2 h-4 w-4"></i>
+                    新建选题
+                </a>
+            </div>
+        </div>
+
+        <!-- ============ ② 快速开始（已就绪态，折叠展示）============ -->
+        <section class="mb-8 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
+            <div class="flex flex-col gap-4 border-b border-gray-100 px-6 py-5 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">QUICK START</p>
+                    <h2 class="mt-2 text-xl font-semibold text-gray-900">三步启动你的生产线</h2>
+                    <p class="mt-2 max-w-3xl text-sm leading-6 text-gray-500">接 LLM、配赛道与 playbook、立第一个项目。已配置的步骤会显示绿勾，点击仍可调整。</p>
+                </div>
+                <span class="inline-flex w-fit items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                    <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
+                    基础已就绪
+                </span>
+            </div>
+            <div class="grid grid-cols-1 divide-y divide-gray-100 lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+                <div class="p-6">
+                    <div class="flex items-start gap-4">
+                        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-semibold text-white">
+                            <i data-lucide="check" class="h-5 w-5"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-base font-semibold text-gray-900">接 LLM API</h3>
+                            <p class="mt-2 text-sm leading-6 text-gray-500">用于选题加速 / 写作 / 去 AI 味。当前接入：Claude Sonnet 4.6。</p>
+                            <a href="#" class="mt-4 inline-flex items-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                                <i data-lucide="settings-2" class="mr-1.5 h-4 w-4"></i>
+                                调整
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                <div class="p-6">
+                    <div class="flex items-start gap-4">
+                        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-sm font-semibold text-white">
+                            <i data-lucide="check" class="h-5 w-5"></i>
+                        </div>
+                        <div class="min-w-0 flex-1">
+                            <h3 class="text-base font-semibold text-gray-900">配置赛道与 playbook</h3>
+                            <p class="mt-2 text-sm leading-6 text-gray-500">已就绪 4 个赛道、11 篇 playbook。新号当前主攻"现言婚恋火葬场"。</p>
+                            <div class="mt-4 flex flex-wrap gap-2">
+                                <a href="#" class="inline-flex items-center rounded-full border border-orange-100 bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100">现言婚恋火葬场</a>
+                                <a href="#" class="inline-flex items-center rounded-full border border-green-100 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-100">古言重生打脸</a>
+                                <a href="#" class="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100">古言替嫁冲喜</a>
+                                <a href="#" class="inline-flex items-center rounded-full border border-purple-100 bg-purple-50 px-3 py-1.5 text-xs font-medium text-purple-700 hover:bg-purple-100">悬疑规则怪谈</a>
+                                <a href="#" class="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100">+ playbook</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="p-6">
+                    <div class="flex items-start gap-4">
+                        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-semibold text-white">3</div>
+                        <div>
+                            <h3 class="text-base font-semibold text-gray-900">立第一个项目</h3>
+                            <p class="mt-2 text-sm leading-6 text-gray-500">从一句话脑洞开始，30 分钟到待发。当前在产 9 个项目，本周已发 3 篇。</p>
+                            <a href="#" class="mt-4 inline-flex items-center rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                                <i data-lucide="plus" class="mr-1.5 h-4 w-4"></i>
+                                新建选题
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ ③ Pipeline 流水（核心）============ -->
+        <section class="mb-8 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
+            <div class="flex flex-col gap-4 border-b border-gray-100 px-6 py-5 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                    <h2 class="text-xl font-semibold text-gray-900">生产流水线</h2>
+                    <p class="mt-2 max-w-4xl text-sm leading-6 text-gray-500">6 个阶段串起一篇文章的完整生命周期。点击节点查看该阶段所有项目，拖拽不直接迁移——会先跑 SOP 判定。</p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <span class="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
+                        <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
+                        进行中 5
+                    </span>
+                    <span class="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
+                        <span class="mr-2 h-1.5 w-1.5 rounded-full bg-current"></span>
+                        待关注 3
+                    </span>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 gap-5 p-5 2xl:grid-cols-[minmax(0,1fr)_360px]">
+                <!-- 6 节点流水 -->
+                <div class="min-w-0">
+                    <div class="mb-5 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                            <h3 class="text-base font-semibold text-gray-900">阶段节点</h3>
+                            <p class="mt-1 text-sm leading-6 text-gray-500">选题 → 立项 → 写作 → 待发 → 已发 → 归档</p>
+                        </div>
+                        <a href="#" class="inline-flex items-center text-sm font-medium text-blue-600 hover:text-blue-700">
+                            查看完整 Kanban <i data-lucide="arrow-right" class="ml-1 h-4 w-4"></i>
+                        </a>
+                    </div>
+
+                    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                        <!-- 节点 1：选题 -->
+                        <div class="rounded-lg border border-gray-200 bg-white p-5 transition hover:ring-2 hover:ring-blue-100">
+                            <div class="flex items-start gap-3">
+                                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+                                    <i data-lucide="target" class="h-5 w-5"></i>
+                                </div>
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <h4 class="text-base font-semibold text-gray-900">选题</h4>
+                                        <span class="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700">0 项</span>
+                                    </div>
+                                    <ul class="mt-2 space-y-1 text-xs text-gray-500">
+                                        <li>评分 ≥28：0</li>
+                                        <li>备选池：0</li>
+                                    </ul>
+                                    <div class="mt-3 flex gap-2">
+                                        <a href="#" class="inline-flex items-center rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700">新建</a>
+                                        <a href="#" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">AI 加速</a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 节点 2：立项 -->
+                        <div class="rounded-lg border border-gray-200 bg-white p-5 transition hover:ring-2 hover:ring-blue-100">
+                            <div class="flex items-start gap-3">
+                                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
+                                    <i data-lucide="clipboard-list" class="h-5 w-5"></i>
+                                </div>
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <h4 class="text-base font-semibold text-gray-900">立项</h4>
+                                        <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">4 项</span>
+                                    </div>
+                                    <ul class="mt-2 space-y-1 text-xs text-gray-500">
+                                        <li>大纲完成：4</li>
+                                        <li>言情向占比：100%</li>
+                                    </ul>
+                                    <div class="mt-3 flex gap-2">
+                                        <a href="#" class="inline-flex items-center rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700">查看</a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 节点 3：写作 -->
+                        <div class="rounded-lg border border-amber-200 bg-amber-50/30 p-5 transition hover:ring-2 hover:ring-amber-100 ring-1 ring-amber-200">
+                            <div class="flex items-start gap-3">
+                                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+                                    <i data-lucide="pen-line" class="h-5 w-5"></i>
+                                </div>
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <h4 class="text-base font-semibold text-gray-900">写作</h4>
+                                        <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">5 项</span>
+                                    </div>
+                                    <ul class="mt-2 space-y-1 text-xs text-gray-500">
+                                        <li>字数达标：3 / 5</li>
+                                        <li class="text-amber-700">2 项 ≥3 天未变动</li>
+                                    </ul>
+                                    <div class="mt-3 flex gap-2">
+                                        <a href="#" class="inline-flex items-center rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700">查看</a>
+                                        <a href="../bookflow-prototype/write.html" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">开写 →</a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 节点 4：待发 -->
+                        <div class="rounded-lg border border-gray-200 bg-white p-5 transition hover:ring-2 hover:ring-blue-100">
+                            <div class="flex items-start gap-3">
+                                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                                    <i data-lucide="send" class="h-5 w-5"></i>
+                                </div>
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <h4 class="text-base font-semibold text-gray-900">待发</h4>
+                                        <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">24 项</span>
+                                    </div>
+                                    <ul class="mt-2 space-y-1 text-xs text-gray-500">
+                                        <li>7 项检查全过：22</li>
+                                        <li>需补禁用词扫描：2</li>
+                                    </ul>
+                                    <div class="mt-3 flex gap-2">
+                                        <a href="#" class="inline-flex items-center rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700">推荐发布</a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 节点 5：已发 -->
+                        <div class="rounded-lg border border-gray-200 bg-white p-5 transition hover:ring-2 hover:ring-blue-100">
+                            <div class="flex items-start gap-3">
+                                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                                    <i data-lucide="rocket" class="h-5 w-5"></i>
+                                </div>
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <h4 class="text-base font-semibold text-gray-900">已发</h4>
+                                        <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">7 项</span>
+                                    </div>
+                                    <ul class="mt-2 space-y-1 text-xs text-gray-500">
+                                        <li>本周新发：3</li>
+                                        <li class="text-amber-700">T+72h 待复盘：2</li>
+                                    </ul>
+                                    <div class="mt-3 flex gap-2">
+                                        <a href="#" class="inline-flex items-center rounded-md bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700">去复盘</a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 节点 6：归档 -->
+                        <div class="rounded-lg border border-gray-200 bg-white p-5 transition hover:ring-2 hover:ring-blue-100">
+                            <div class="flex items-start gap-3">
+                                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
+                                    <i data-lucide="archive" class="h-5 w-5"></i>
+                                </div>
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-center justify-between gap-2">
+                                        <h4 class="text-base font-semibold text-gray-900">归档</h4>
+                                        <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">0 项</span>
+                                    </div>
+                                    <ul class="mt-2 space-y-1 text-xs text-gray-500">
+                                        <li>累计归档：0</li>
+                                        <li>等待复盘归档</li>
+                                    </ul>
+                                    <div class="mt-3 flex gap-2">
+                                        <a href="#" class="inline-flex items-center rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">导出</a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 推荐侧栏 360px -->
+                <aside class="space-y-4 2xl:max-w-[360px]">
+                    <div class="rounded-lg border border-blue-100 bg-blue-50 p-5">
+                        <div class="flex items-center gap-2">
+                            <i data-lucide="sparkles" class="h-4 w-4 text-blue-600"></i>
+                            <h3 class="text-sm font-semibold text-blue-900">下一篇发什么</h3>
+                        </div>
+                        <p class="mt-2 text-sm leading-6 text-blue-800/80">基于 next-publish 算法 · 今晚 21:00 档</p>
+                        <div class="mt-4 rounded-lg bg-white/70 p-3 ring-1 ring-blue-100">
+                            <div class="text-sm font-semibold text-gray-900 line-clamp-2">闺蜜订婚宴上她未婚夫把我当小三我先公开了合伙协议</div>
+                            <div class="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                                <span class="rounded bg-orange-50 px-1.5 py-0.5 text-orange-700">现言火葬场</span>
+                                <span class="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">10,456 字</span>
+                                <span class="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">评分 33</span>
+                            </div>
+                            <p class="mt-2 text-xs text-gray-500 leading-5">现言适合晚间沉浸阅读 · 与上一篇题材不重复</p>
+                        </div>
+                        <div class="mt-3 rounded-lg bg-white/70 p-3 ring-1 ring-blue-100">
+                            <div class="text-xs text-gray-500 mb-1">备选 #2 · 12:00 午休档</div>
+                            <div class="text-sm text-gray-900 line-clamp-1">公司上市敲钟那天前夫发现首席法务官是我</div>
+                        </div>
+                        <a href="#" class="mt-4 inline-flex items-center text-sm font-medium text-blue-700 hover:text-blue-800">
+                            查看推荐理由 <i data-lucide="arrow-right" class="ml-1 h-4 w-4"></i>
+                        </a>
+                    </div>
+
+                    <div class="rounded-lg border border-amber-200 bg-amber-50 p-5">
+                        <div class="flex items-center gap-2">
+                            <i data-lucide="alarm-clock" class="h-4 w-4 text-amber-700"></i>
+                            <h3 class="text-sm font-semibold text-amber-900">催复盘</h3>
+                            <span class="ml-auto inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">2</span>
+                        </div>
+                        <ul class="mt-3 space-y-2 text-sm">
+                            <li class="rounded-md bg-white/70 p-2.5 ring-1 ring-amber-100">
+                                <div class="text-gray-900 line-clamp-1">陪他创业八年公司上市敲钟名单里没有我的名字</div>
+                                <div class="mt-1 text-xs text-amber-700">已发 78h · 数据未录入</div>
+                            </li>
+                            <li class="rounded-md bg-white/70 p-2.5 ring-1 ring-amber-100">
+                                <div class="text-gray-900 line-clamp-1">银行流水那天他十年工资全进了陌生女人账户</div>
+                                <div class="mt-1 text-xs text-amber-700">已发 75h · 数据未录入</div>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-5">
+                        <div class="flex items-center gap-2">
+                            <i data-lucide="flag" class="h-4 w-4 text-emerald-700"></i>
+                            <h3 class="text-sm font-semibold text-emerald-900">本周目标</h3>
+                        </div>
+                        <ul class="mt-3 space-y-2 text-sm text-emerald-900/90">
+                            <li class="flex items-start gap-2">
+                                <i data-lucide="square" class="mt-0.5 h-4 w-4 shrink-0 text-emerald-700"></i>
+                                <span>新号选题：现言婚恋火葬场方向批量出题</span>
+                            </li>
+                            <li class="flex items-start gap-2">
+                                <i data-lucide="square" class="mt-0.5 h-4 w-4 shrink-0 text-emerald-700"></i>
+                                <span>新号立项：完成第一批大纲</span>
+                            </li>
+                        </ul>
+                        <div class="mt-3 h-1.5 w-full rounded-full bg-emerald-100">
+                            <div class="h-1.5 rounded-full bg-emerald-500" style="width: 50%"></div>
+                        </div>
+                        <p class="mt-2 text-xs text-emerald-800">完成度 50% · 还剩 2 天</p>
+                    </div>
+                </aside>
+            </div>
+        </section>
+
+        <!-- ============ ④ 健康指标（4 联）============ -->
+        <section class="mb-8 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+            <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                <div class="flex items-center justify-between gap-3">
+                    <h3 class="text-base font-semibold text-gray-900">在产项目</h3>
+                    <i data-lucide="layers" class="h-5 w-5 text-blue-600"></i>
+                </div>
+                <div class="mt-5 text-3xl font-bold text-gray-900">9</div>
+                <div class="mt-2 text-sm font-medium text-gray-500">立项 4 / 写作 5</div>
+            </div>
+            <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                <div class="flex items-center justify-between gap-3">
+                    <h3 class="text-base font-semibold text-gray-900">本周已发</h3>
+                    <i data-lucide="rocket" class="h-5 w-5 text-emerald-600"></i>
+                </div>
+                <div class="mt-5 text-3xl font-bold text-gray-900">3</div>
+                <div class="mt-2 text-sm font-medium text-gray-500">较上周 +1</div>
+            </div>
+            <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                <div class="flex items-center justify-between gap-3">
+                    <h3 class="text-base font-semibold text-gray-900">待复盘</h3>
+                    <i data-lucide="clipboard-check" class="h-5 w-5 text-amber-600"></i>
+                </div>
+                <div class="mt-5 text-3xl font-bold text-gray-900">2</div>
+                <div class="mt-2 text-sm font-medium text-gray-500">已超 72h：2</div>
+            </div>
+            <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                <div class="flex items-center justify-between gap-3">
+                    <h3 class="text-base font-semibold text-gray-900">字数告警</h3>
+                    <i data-lucide="triangle-alert" class="h-5 w-5 text-red-600"></i>
+                </div>
+                <div class="mt-5 text-3xl font-bold text-gray-900">1</div>
+                <div class="mt-2 text-sm font-medium text-gray-500">第 3 章 &lt; 1000 字</div>
+            </div>
+        </section>
+
+        <!-- ============ ⑤ Lanes（3 栏）============ -->
+        <section class="mb-8 grid grid-cols-1 gap-5 xl:grid-cols-3">
+            <!-- Lane 1: 写作素材 -->
+            <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                <h2 class="text-xl font-semibold text-gray-900">写作素材</h2>
+                <p class="mt-2 text-sm leading-6 text-gray-500">赛道、playbook、模板、禁用词表 — 写作时一键打开</p>
+                <div class="mt-5 grid gap-3">
+                    <a href="#" class="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                        <span class="flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500">
+                            <i data-lucide="route" class="h-4 w-4"></i>
+                        </span>
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-gray-900">赛道配置</span>
+                            <span class="mt-1 block truncate text-xs text-gray-500">4 个赛道，含受众画像、套路、禁忌</span>
+                        </span>
+                        <span class="whitespace-nowrap text-sm font-bold text-gray-900">4</span>
+                    </a>
+                    <a href="#" class="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                        <span class="flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500">
+                            <i data-lucide="book-open" class="h-4 w-4"></i>
+                        </span>
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-gray-900">Playbook 写作手册</span>
+                            <span class="mt-1 block truncate text-xs text-gray-500">去 AI 味 / 钩子 / 反转 / 精修清单</span>
+                        </span>
+                        <span class="whitespace-nowrap text-sm font-bold text-gray-900">11</span>
+                    </a>
+                    <a href="#" class="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                        <span class="flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500">
+                            <i data-lucide="file-plus" class="h-4 w-4"></i>
+                        </span>
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-gray-900">项目模板</span>
+                            <span class="mt-1 block truncate text-xs text-gray-500">立项时一键复制</span>
+                        </span>
+                        <span class="whitespace-nowrap text-sm font-bold text-gray-900">1</span>
+                    </a>
+                    <a href="#" class="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                        <span class="flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500">
+                            <i data-lucide="ban" class="h-4 w-4"></i>
+                        </span>
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-gray-900">禁用词表</span>
+                            <span class="mt-1 block truncate text-xs text-gray-500">写作 + 发布检查双重扫描</span>
+                        </span>
+                        <span class="whitespace-nowrap text-sm font-bold text-gray-900">217</span>
+                    </a>
+                </div>
+            </div>
+
+            <!-- Lane 2: 近期产出 -->
+            <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                <h2 class="text-xl font-semibold text-gray-900">近期产出</h2>
+                <p class="mt-2 text-sm leading-6 text-gray-500">最近 5 篇按时间倒序，点击跳详情</p>
+                <div class="mt-5 grid gap-3">
+                    <a href="#" class="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                        <span class="flex h-7 w-7 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-600">
+                            <i data-lucide="rocket" class="h-4 w-4"></i>
+                        </span>
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-gray-900">陪他创业八年公司上市敲钟名单里没有我的名字</span>
+                            <span class="mt-1 block truncate text-xs text-gray-500">已发 · 05-30 · 新号</span>
+                        </span>
+                        <span class="whitespace-nowrap text-xs text-amber-700">+78h</span>
+                    </a>
+                    <a href="#" class="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                        <span class="flex h-7 w-7 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-600">
+                            <i data-lucide="rocket" class="h-4 w-4"></i>
+                        </span>
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-gray-900">领养面谈那天福利院说他每周看的是亲生女儿</span>
+                            <span class="mt-1 block truncate text-xs text-gray-500">已发 · 05-30 · 新号</span>
+                        </span>
+                        <span class="whitespace-nowrap text-xs text-amber-700">+75h</span>
+                    </a>
+                    <a href="#" class="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                        <span class="flex h-7 w-7 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-600">
+                            <i data-lucide="rocket" class="h-4 w-4"></i>
+                        </span>
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-gray-900">银行流水那天他十年工资全进了陌生女人账户</span>
+                            <span class="mt-1 block truncate text-xs text-gray-500">已发 · 05-30 · 新号</span>
+                        </span>
+                        <span class="whitespace-nowrap text-xs text-amber-700">+72h</span>
+                    </a>
+                    <a href="#" class="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                        <span class="flex h-7 w-7 items-center justify-center rounded-lg border border-violet-200 bg-violet-50 text-violet-600">
+                            <i data-lucide="clipboard-list" class="h-4 w-4"></i>
+                        </span>
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-gray-900">婚礼彩排那天伴娘群里弹出他和伴娘的开房记录</span>
+                            <span class="mt-1 block truncate text-xs text-gray-500">立项 · 05-28 · 评分 33</span>
+                        </span>
+                        <span class="whitespace-nowrap text-xs text-gray-400">3d</span>
+                    </a>
+                    <a href="#" class="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                        <span class="flex h-7 w-7 items-center justify-center rounded-lg border border-violet-200 bg-violet-50 text-violet-600">
+                            <i data-lucide="clipboard-list" class="h-4 w-4"></i>
+                        </span>
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-gray-900">他说前妻死了所以没有离婚证但我在超市遇见了她</span>
+                            <span class="mt-1 block truncate text-xs text-gray-500">立项 · 05-28 · 评分 33</span>
+                        </span>
+                        <span class="whitespace-nowrap text-xs text-gray-400">3d</span>
+                    </a>
+                </div>
+            </div>
+
+            <!-- Lane 3: 外部资源 -->
+            <div class="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                <h2 class="text-xl font-semibold text-gray-900">外部资源</h2>
+                <p class="mt-2 text-sm leading-6 text-gray-500">选题加速 / 对标分析 / 数据回收</p>
+                <div class="mt-5 grid gap-3">
+                    <a href="#" target="_blank" class="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                        <span class="flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500">
+                            <i data-lucide="flame" class="h-4 w-4"></i>
+                        </span>
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-gray-900">番茄热榜</span>
+                            <span class="mt-1 block truncate text-xs text-gray-500">爆款标题拆解法的素材源</span>
+                        </span>
+                        <i data-lucide="external-link" class="h-4 w-4 text-gray-400"></i>
+                    </a>
+                    <a href="#" target="_blank" class="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                        <span class="flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500">
+                            <i data-lucide="message-circle" class="h-4 w-4"></i>
+                        </span>
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-gray-900">评论区痛点挖掘</span>
+                            <span class="mt-1 block truncate text-xs text-gray-500">同赛道爆款评论 → 痛点 → 选题</span>
+                        </span>
+                        <i data-lucide="external-link" class="h-4 w-4 text-gray-400"></i>
+                    </a>
+                    <a href="#" target="_blank" class="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50">
+                        <span class="flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500">
+                            <i data-lucide="line-chart" class="h-4 w-4"></i>
+                        </span>
+                        <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-gray-900">番茄作者后台</span>
+                            <span class="mt-1 block truncate text-xs text-gray-500">复盘数据回收源（手动录入）</span>
+                        </span>
+                        <i data-lucide="external-link" class="h-4 w-4 text-gray-400"></i>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ ⑥ 技能资源（3 卡）============ -->
+        <section>
+            <div class="mb-5">
+                <h2 class="text-xl font-semibold text-gray-900">技能资源</h2>
+                <p class="mt-1 text-sm text-gray-600">流程权威源 · 写作手册 · 命令参考。点击在新页打开。</p>
+            </div>
+            <div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
+                <a href="../SOP.md" target="_blank" class="rounded-lg bg-white p-5 shadow-sm ring-1 ring-gray-200 transition hover:-translate-y-0.5 hover:shadow-md">
+                    <div class="flex items-start gap-4">
+                        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+                            <i data-lucide="book-marked" class="h-5 w-5"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <h3 class="text-base font-semibold text-gray-900">SOP 流程速查</h3>
+                            <p class="mt-2 text-sm leading-6 text-gray-500">6 个阶段的入场/出场标准、字数硬底线、阶段迁移规则。</p>
+                            <span class="mt-4 inline-flex items-center text-sm font-medium text-blue-600">
+                                打开 SOP.md <i data-lucide="external-link" class="ml-1.5 h-4 w-4"></i>
+                            </span>
+                        </div>
+                    </div>
+                </a>
+                <a href="../playbook" target="_blank" class="rounded-lg bg-white p-5 shadow-sm ring-1 ring-gray-200 transition hover:-translate-y-0.5 hover:shadow-md">
+                    <div class="flex items-start gap-4">
+                        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                            <i data-lucide="book-open-check" class="h-5 w-5"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <h3 class="text-base font-semibold text-gray-900">Playbook 写作手册</h3>
+                            <p class="mt-2 text-sm leading-6 text-gray-500">去 AI 味 / 代入感 / 钩子 / 反转 / 精修 / 禁用词表 共 11 篇。</p>
+                            <span class="mt-4 inline-flex items-center text-sm font-medium text-blue-600">
+                                打开 playbook/ <i data-lucide="external-link" class="ml-1.5 h-4 w-4"></i>
+                            </span>
+                        </div>
+                    </div>
+                </a>
+                <a href="../pipeline-manage/SKILL.md" target="_blank" class="rounded-lg bg-white p-5 shadow-sm ring-1 ring-gray-200 transition hover:-translate-y-0.5 hover:shadow-md">
+                    <div class="flex items-start gap-4">
+                        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
+                            <i data-lucide="terminal" class="h-5 w-5"></i>
+                        </div>
+                        <div class="min-w-0">
+                            <h3 class="text-base font-semibold text-gray-900">pipeline-manage 命令</h3>
+                            <p class="mt-2 text-sm leading-6 text-gray-500">status / tidy / write / pre-publish / next-publish 子命令参考。</p>
+                            <span class="mt-4 inline-flex items-center text-sm font-medium text-blue-600">
+                                打开 SKILL.md <i data-lucide="external-link" class="ml-1.5 h-4 w-4"></i>
+                            </span>
+                        </div>
+                    </div>
+                </a>
+            </div>
+        </section>
+
+    </div>
+</main>
+
+<footer class="border-t border-gray-200 bg-white py-6 mt-8">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center text-xs text-gray-400">
+        BookFlow Prototype v0.1 · 番茄短篇生产线后台 · 设计基线对齐 GEOFlow
+    </div>
+</footer>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+    });
+</script>
+</body>
+</html>
