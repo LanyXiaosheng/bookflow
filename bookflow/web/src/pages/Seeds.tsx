@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Sparkles, TriangleAlert, Check } from 'lucide-react'
-import { seedsApi, type Score, type Tier } from '../api/seeds'
+import { Sparkles, TriangleAlert, Check, Wand2, X, Loader2 } from 'lucide-react'
+import { seedsApi, type AiScoreResponse, type Score, type Tier } from '../api/seeds'
 
 const DIM_LABELS: Record<keyof Score, string> = {
   title: '标题张力',
@@ -40,6 +40,28 @@ export default function Seeds() {
   const [title, setTitle] = useState('')
   const [track, setTrack] = useState('现言婚恋火葬场')
   const [score, setScore] = useState<Score>(DEFAULT_SCORE)
+  const [drawer, setDrawer] = useState(false)
+
+  const aiScore = useMutation<AiScoreResponse, Error, { title: string; track: string }>({
+    mutationFn: seedsApi.aiScore,
+  })
+
+  const aiTotal = aiScore.data
+    ? DIM_KEYS.reduce((a, k) => a + aiScore.data!.score[k], 0)
+    : 0
+  const aiTier = aiScore.data ? tierOf(aiTotal) : null
+
+  function runAiScore() {
+    if (!title.trim() || titleErr) return
+    setDrawer(true)
+    aiScore.mutate({ title: title.trim(), track })
+  }
+
+  function adoptAiScore() {
+    if (!aiScore.data) return
+    setScore(aiScore.data.score)
+    setDrawer(false)
+  }
 
   const total = useMemo(() => DIM_KEYS.reduce((a, k) => a + score[k], 0), [score])
   const tier = tierOf(total)
@@ -61,6 +83,7 @@ export default function Seeds() {
   }
 
   return (
+    <>
     <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
         <section className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-6">
@@ -87,6 +110,16 @@ export default function Seeds() {
               <span className={titleErr ? 'text-rose-600' : 'text-gray-400'}>
                 {titleErr ?? `${titleLen} / 25`}
               </span>
+              <button
+                type="button"
+                onClick={runAiScore}
+                disabled={!title.trim() || !!titleErr || aiScore.isPending}
+                className="inline-flex items-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2 py-1 text-violet-700 hover:bg-violet-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="ai-score-btn"
+              >
+                {aiScore.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                AI 试评
+              </button>
             </div>
           </label>
 
@@ -185,5 +218,124 @@ export default function Seeds() {
         </aside>
       </div>
     </main>
+
+    {drawer && (
+      <div className="fixed inset-0 z-40" data-testid="ai-drawer">
+        <div
+          className="absolute inset-0 bg-black/30"
+          onClick={() => setDrawer(false)}
+        />
+        <aside className="absolute right-0 top-0 h-full w-full sm:w-[420px] bg-white shadow-xl border-l border-gray-200 flex flex-col">
+          <header className="flex items-center gap-2 px-5 py-4 border-b border-gray-200">
+            <Wand2 className="h-4 w-4 text-violet-600" />
+            <h2 className="font-semibold text-gray-900">AI 试评</h2>
+            <button
+              type="button"
+              className="ml-auto rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              onClick={() => setDrawer(false)}
+              data-testid="ai-drawer-close"
+              aria-label="关闭"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </header>
+
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            <p className="text-xs text-gray-500 mb-3">
+              用 Claude 按 7 维爽文标准给「{title}」打分。
+            </p>
+
+            {aiScore.isPending && (
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                AI 评估中（通常 4-10 秒）…
+              </div>
+            )}
+
+            {aiScore.isError && (
+              <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+                <div className="flex items-center gap-1 font-medium">
+                  <TriangleAlert className="h-4 w-4" />
+                  调用失败
+                </div>
+                <p className="mt-1 text-xs whitespace-pre-wrap">
+                  {(aiScore.error as Error).message}
+                </p>
+                <button
+                  type="button"
+                  onClick={runAiScore}
+                  className="mt-2 inline-flex items-center rounded-md bg-rose-600 px-3 py-1 text-xs font-medium text-white hover:bg-rose-700"
+                >
+                  重试
+                </button>
+              </div>
+            )}
+
+            {aiScore.data && (
+              <div className="space-y-4" data-testid="ai-result">
+                <div className="flex items-baseline gap-3">
+                  <span className="text-3xl font-bold font-mono text-gray-900" data-testid="ai-total">
+                    {aiTotal}
+                  </span>
+                  <span className="text-sm text-gray-500">/ 35</span>
+                  {aiTier && (
+                    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${TIER_BG[aiTier]}`}>
+                      {TIER_LABEL[aiTier]}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  {DIM_KEYS.map((k) => (
+                    <div key={k} className="flex items-center justify-between">
+                      <span className="text-gray-600">{DIM_LABELS[k]}</span>
+                      <span className="font-mono font-semibold text-gray-900">
+                        {aiScore.data!.score[k]}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="rounded-md bg-gray-50 border border-gray-200 p-3 text-sm leading-relaxed text-gray-700">
+                  {aiScore.data.rationale}
+                </div>
+
+                {aiScore.data.suggestions.length > 0 && (
+                  <div>
+                    <h3 className="text-xs font-semibold text-gray-700 mb-1">优化建议</h3>
+                    <ul className="space-y-1 text-sm text-gray-600 list-disc pl-5">
+                      {aiScore.data.suggestions.map((s, i) => (
+                        <li key={i}>{s}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {aiScore.data && (
+            <footer className="border-t border-gray-200 px-5 py-3 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setDrawer(false)}
+                className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                关闭
+              </button>
+              <button
+                type="button"
+                onClick={adoptAiScore}
+                className="flex-1 rounded-md bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-700"
+                data-testid="ai-adopt"
+              >
+                采纳分数
+              </button>
+            </footer>
+          )}
+        </aside>
+      </div>
+    )}
+    </>
   )
 }

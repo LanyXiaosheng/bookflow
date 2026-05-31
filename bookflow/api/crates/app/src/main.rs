@@ -10,7 +10,7 @@ use axum::{
 };
 use bookflow_domain::{DomainError, NewSeed, Seed};
 use bookflow_storage::{pool, SeedRepo};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -18,10 +18,14 @@ use tower_http::{
 };
 use tracing::info;
 
+mod ai;
+use ai::{score_seed, AiClient, AiConfig, AiScoreRequest, AiScoreResponse};
+
 #[derive(Clone)]
 struct AppState {
     pool: PgPool,
     seeds: SeedRepo,
+    ai: AiClient,
 }
 
 #[tokio::main]
@@ -47,14 +51,20 @@ async fn main() -> anyhow::Result<()> {
     bookflow_storage::migrate(&pool).await.context("migration 失败")?;
     info!("db connected & migrated");
 
+    let ai_cfg = AiConfig::from_env().context("AI 配置缺失")?;
+    info!(provider = ?ai_cfg.provider, model = %ai_cfg.model, "ai client ready");
+    let ai = AiClient::new(ai_cfg).context("AI client 构建失败")?;
+
     let state = AppState {
         seeds: SeedRepo::new(pool.clone()),
         pool,
+        ai,
     };
 
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/api/seeds", post(create_seed).get(list_seeds))
+        .route("/api/seeds/ai-score", post(ai_score_seed))
         .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -94,12 +104,41 @@ async fn list_seeds(State(s): State<AppState>) -> Result<Json<Vec<Seed>>, AppErr
     Ok(Json(seeds))
 }
 
+#[derive(Debug, Deserialize)]
+struct AiScoreBody {
+    title: String,
+    track: String,
+}
+
+async fn ai_score_seed(
+    State(s): State<AppState>,
+    Json(body): Json<AiScoreBody>,
+) -> Result<Json<AiScoreResponse>, AppError> {
+    if body.title.trim().is_empty() {
+        return Err(AppError::Domain(DomainError::TitleLength { len: 0 }));
+    }
+    let req = AiScoreRequest {
+        title: body.title.trim(),
+        track: body.track.trim(),
+    };
+    let started = std::time::Instant::now();
+    let resp = score_seed(&s.ai, &req).await.map_err(AppError::Ai)?;
+    info!(
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        title = %req.title,
+        "ai score done"
+    );
+    Ok(Json(resp))
+}
+
 #[derive(Debug, thiserror::Error)]
 enum AppError {
     #[error(transparent)]
     Domain(DomainError),
     #[error(transparent)]
     Storage(bookflow_storage::StorageError),
+    #[error("ai: {0}")]
+    Ai(anyhow::Error),
 }
 
 impl IntoResponse for AppError {
@@ -115,6 +154,14 @@ impl IntoResponse for AppError {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": "internal" })),
+                )
+                    .into_response()
+            }
+            AppError::Ai(e) => {
+                tracing::error!(err = %e, "ai error");
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(serde_json::json!({ "error": "ai", "detail": e.to_string() })),
                 )
                     .into_response()
             }

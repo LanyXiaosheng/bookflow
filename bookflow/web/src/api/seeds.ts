@@ -33,6 +33,12 @@ export interface NewSeed {
   score: Score
 }
 
+export interface AiScoreResponse {
+  score: Score
+  rationale: string
+  suggestions: string[]
+}
+
 export const seedsApi = {
   async list(): Promise<Seed[]> {
     const { data } = await api.get<Seed[]>('/seeds')
@@ -40,6 +46,12 @@ export const seedsApi = {
   },
   async create(payload: NewSeed): Promise<Seed> {
     const { data } = await api.post<Seed>('/seeds', payload)
+    return data
+  },
+  async aiScore(payload: { title: string; track: string }): Promise<AiScoreResponse> {
+    const { data } = await api.post<AiScoreResponse>('/seeds/ai-score', payload, {
+      timeout: 90_000,
+    })
     return data
   },
 }
