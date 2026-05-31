@@ -530,6 +530,45 @@
                 </ol>
             </div>
         </div>
+
+        <!-- Tab Content: 评论区痛点挖掘 -->
+        <div class="flex-1 overflow-y-auto p-6 space-y-5 hidden" id="tab-content-comment">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1.5">同赛道高赞评论（粘贴 ≥30 条）</label>
+                <textarea rows="8" class="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm font-mono" placeholder="一行一条&#10;现实里我也是这样的，他从来不会主动叫我吃饭&#10;离婚那天我发现他给小三买的车比我嫁妆还贵&#10;..."></textarea>
+                <p class="mt-1 text-xs text-gray-500">建议来源：番茄评论区 / 小红书同主题笔记 / 微博热搜评论</p>
+            </div>
+            <button class="w-full inline-flex items-center justify-center rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-700">
+                <i data-lucide="search" class="mr-2 h-4 w-4"></i>
+                提取 5 个痛点 + 反应弧
+            </button>
+
+            <!-- AI 输出示例 -->
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">AI 输出 · 模型 claude-sonnet-4-6</span>
+                    <button class="text-xs text-blue-600 hover:underline">重新生成</button>
+                </div>
+                <ol class="space-y-3 text-sm text-gray-700">
+                    <li class="rounded-md bg-white p-3 ring-1 ring-gray-100">
+                        <div class="font-medium text-gray-900">痛点 1 · 隐性家务分工</div>
+                        <div class="mt-1 text-xs text-gray-500">命中 12 条评论，关键词："他从不"/"我一个人"/"加班晚回"</div>
+                        <div class="mt-2 text-xs text-violet-700">→ 反应弧：累积委屈 → 一次崩溃 → 算总账</div>
+                    </li>
+                    <li class="rounded-md bg-white p-3 ring-1 ring-gray-100">
+                        <div class="font-medium text-gray-900">痛点 2 · 财产隐蔽外流</div>
+                        <div class="mt-1 text-xs text-gray-500">命中 8 条，关键词："转账"/"信用卡"/"他妈"</div>
+                        <div class="mt-2 text-xs text-violet-700">→ 反应弧：偶然发现 → 取证 → 反向布局</div>
+                    </li>
+                    <li class="rounded-md bg-white p-3 ring-1 ring-gray-100">
+                        <div class="font-medium text-gray-900">痛点 3 · 仪式感打脸</div>
+                        <div class="mt-1 text-xs text-gray-500">命中 7 条，关键词："婚礼"/"求婚"/"纪念日"</div>
+                        <div class="mt-2 text-xs text-violet-700">→ 反应弧：铺垫期待 → 当众撕裂 → 体面撤场</div>
+                    </li>
+                    <li class="text-xs text-gray-400 pl-3">… 还有 2 个痛点，滚动查看</li>
+                </ol>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -630,9 +669,15 @@
                 });
                 tab.classList.remove('border-transparent','text-gray-500');
                 tab.classList.add('border-blue-600','text-blue-600');
+
+                const target = tab.dataset.tab;
+                document.querySelectorAll('[id^="tab-content-"]').forEach(c => {
+                    c.classList.toggle('hidden', c.id !== `tab-content-${target}`);
+                });
             });
         });
     });
 </script>
+<script src="assets/stub.js" defer></script>
 </body>
 </html>

@@ -183,13 +183,13 @@
     <div class="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-2">
         <div class="flex items-center gap-3 text-xs">
             <i data-lucide="triangle-alert" class="h-4 w-4 text-amber-600 shrink-0"></i>
-            <span class="font-medium text-amber-800 shrink-0">字数 <span class="font-mono font-bold">6,842</span> / 10,000</span>
+            <span class="font-medium text-amber-800 shrink-0">字数 <span id="word-total" class="font-mono font-bold">6,842</span> / 10,000</span>
             <div class="flex-1 max-w-md">
                 <div class="h-1.5 w-full rounded-full bg-amber-100 overflow-hidden">
-                    <div class="h-full bg-amber-500 rounded-full" style="width: 68.4%"></div>
+                    <div id="word-progress" class="h-full bg-amber-500 rounded-full" style="width: 68.4%"></div>
                 </div>
             </div>
-            <span class="text-amber-700 shrink-0">还需 <span class="font-semibold">3,158</span> 字</span>
+            <span class="text-amber-700 shrink-0">还需 <span id="word-remaining" class="font-semibold">3,158</span> 字</span>
             <span class="text-gray-300">·</span>
             <div class="flex items-center gap-1 text-gray-600 overflow-x-auto scroll-thin">
                 <span class="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-mono shrink-0">1: 1,124</span>
@@ -525,10 +525,46 @@
     </div>
 </main>
 
-<script>
-    document.addEventListener('DOMContentLoaded', function () {
-        if (typeof lucide !== 'undefined') lucide.createIcons();
-    });
-</script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+
+            // ===== 字数实时统计（仅算中文 + 英文单词，剔除空白）=====
+            const TARGET = 10000;
+            const totalEl = document.getElementById('word-total');
+            const progressEl = document.getElementById('word-progress');
+            const remainingEl = document.getElementById('word-remaining');
+            const fmt = n => n.toLocaleString('en-US');
+
+            function countChars(text) {
+                if (!text) return 0;
+                // 中文：每字符 1；英文：每词 1（连续 [a-zA-Z0-9_] 算一词）
+                const cn = (text.match(/[一-鿿㐀-䶿]/g) || []).length;
+                const en = (text.match(/[A-Za-z0-9_]+/g) || []).length;
+                return cn + en;
+            }
+
+            function recalc() {
+                let total = 0;
+                document.querySelectorAll('.manuscript-body').forEach(el => {
+                    total += countChars(el.innerText || el.textContent || '');
+                });
+                totalEl.textContent = fmt(total);
+                const pct = Math.min(100, Math.round((total / TARGET) * 1000) / 10);
+                progressEl.style.width = pct + '%';
+                const remaining = Math.max(0, TARGET - total);
+                remainingEl.textContent = fmt(remaining);
+            }
+
+            // 让正文可编辑，并挂监听
+            document.querySelectorAll('.manuscript-body').forEach(el => {
+                el.setAttribute('contenteditable', 'true');
+                el.setAttribute('spellcheck', 'false');
+                el.addEventListener('input', recalc);
+            });
+            recalc();
+        });
+    </script>
+<script src="assets/stub.js" defer></script>
 </body>
 </html>

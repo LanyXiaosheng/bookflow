@@ -1,0 +1,16 @@
+{
+  "name": "bookflow-prototype",
+  "private": true,
+  "version": "0.1.0",
+  "description": "BookFlow 静态原型 — 三页 + Playwright smoke",
+  "scripts": {
+    "serve": "python3 -m http.server 5173",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.2"
+  }
+}
