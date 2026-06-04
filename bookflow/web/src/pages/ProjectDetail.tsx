@@ -12,11 +12,13 @@ import {
   Sparkles,
   TriangleAlert,
   Wand2,
+  Zap,
 } from 'lucide-react'
 import { projectsApi, type ArtifactKind, type ProjectArtifact } from '../api/projects'
 import { chaptersApi, type Chapter } from '../api/chapters'
 import { useSSE } from '../hooks/useSSE'
 import { useFullBook } from '../hooks/useFullBook'
+import { usePipeline } from '../hooks/usePipeline'
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>()
@@ -61,6 +63,26 @@ export default function ProjectDetail() {
   const refreshArtifacts = () =>
     qc.invalidateQueries({ queryKey: ['project-artifacts', projectId] })
 
+  /** SOP 阶段 2 一键立项流：README → 大纲（链式 SSE，自动落库） */
+  const pipeline = usePipeline()
+  const runProjectizeFlow = async () => {
+    const ok = await pipeline.run([
+      {
+        key: 'readme',
+        label: 'README',
+        url: `/api/projects/${projectId}/ai-readme/stream`,
+        stream: true,
+      },
+      {
+        key: 'outline',
+        label: '大纲',
+        url: `/api/projects/${projectId}/ai-outline/stream`,
+        stream: true,
+      },
+    ])
+    if (ok) refreshArtifacts()
+  }
+
   return (
     <div className="bg-gray-50">
       <header className="sticky top-14 z-20 bg-white border-b border-gray-200">
@@ -78,13 +100,52 @@ export default function ProjectDetail() {
           <span className="text-xs text-gray-400 truncate">
             {project.data?.track}
           </span>
+          <button
+            type="button"
+            onClick={runProjectizeFlow}
+            disabled={pipeline.progress.running || (!!readme && !!outline)}
+            title={
+              !!readme && !!outline
+                ? 'README + 大纲都已生成，重新生成请用对应卡片'
+                : '一键链式生成 README → 大纲（SOP 阶段 2）'
+            }
+            className="ml-auto inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+            data-testid="projectize-flow-btn"
+          >
+            {pipeline.progress.running ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Zap className="h-3 w-3" />
+            )}
+            {pipeline.progress.running
+              ? `${pipelineLabel(pipeline.progress.currentKey)} · ${pipeline.progress.chars}字`
+              : !!readme && !!outline
+                ? '立项已完成'
+                : '一键立项流'}
+          </button>
+          {pipeline.progress.running && (
+            <button
+              type="button"
+              onClick={pipeline.abort}
+              className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+              data-testid="projectize-flow-abort-btn"
+            >
+              中断
+            </button>
+          )}
           <Link
             to={`/projects/${projectId}/write`}
-            className="ml-auto inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+            className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
           >
             <Pencil className="h-3 w-3" /> 进入写作
           </Link>
         </div>
+        {pipeline.progress.error && (
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-600 inline-flex items-center gap-1">
+            <TriangleAlert className="h-3 w-3" />
+            立项流失败：{pipeline.progress.error}
+          </div>
+        )}
       </header>
 
       <main className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -260,6 +321,15 @@ function pickLatest(
   return list
     .filter((a) => a.kind === kind)
     .sort((a, b) => b.version - a.version)[0]
+}
+
+const PIPELINE_LABELS: Record<'readme' | 'outline' | 'body', string> = {
+  readme: 'README',
+  outline: '大纲',
+  body: '正文',
+}
+function pipelineLabel(key: 'readme' | 'outline' | 'body' | null): string {
+  return key ? PIPELINE_LABELS[key] : ''
 }
 
 interface ArtifactStreamCardProps {

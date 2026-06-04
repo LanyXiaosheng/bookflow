@@ -141,23 +141,59 @@ export default function Write() {
             </span>
           )}
           {project.data?.status === 'writing' && (
-            <button
-              type="button"
-              onClick={async () => {
-                const ok = await confirm({
-                  title: '定稿进入「待发」？',
-                  description: '定稿后该项目不可再编辑章节，仅能继续生成发布稿/配套。',
-                  confirmText: '定稿',
-                })
-                if (ok) finalize.mutate()
-              }}
-              disabled={finalize.isPending || !chapters.data || chapters.data.length === 0}
-              className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-              data-testid="finalize-btn"
-            >
-              {finalize.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-              定稿 → 待发
-            </button>
+            <>
+              {(() => {
+                const total = chapters.data?.reduce((a, c) => a + c.word_count, 0) ?? 0
+                const need = 10000
+                const enough = total >= need
+                return (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: '定稿进入「待发」？',
+                        description:
+                          '定稿后该项目不可再编辑章节，仅能继续生成发布稿/配套。',
+                        confirmText: '定稿',
+                      })
+                      if (ok) finalize.mutate()
+                    }}
+                    disabled={
+                      finalize.isPending ||
+                      !chapters.data ||
+                      chapters.data.length === 0 ||
+                      !enough
+                    }
+                    title={
+                      enough
+                        ? '正文 ≥ 10000 字，可定稿'
+                        : `SOP 硬底线：正文 ≥10000 字才能定稿，还差 ${need - total} 字`
+                    }
+                    className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 ${
+                      enough
+                        ? 'bg-emerald-600 hover:bg-emerald-700'
+                        : 'bg-gray-300 cursor-not-allowed'
+                    }`}
+                    data-testid="finalize-btn"
+                  >
+                    {finalize.isPending ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Check className="h-3 w-3" />
+                    )}
+                    {enough
+                      ? '定稿 → 待发'
+                      : `定稿 (${total}/${need})`}
+                  </button>
+                )
+              })()}
+            </>
+          )}
+          {finalize.isError && (
+            <span className="text-xs text-rose-600 inline-flex items-center gap-1">
+              <TriangleAlert className="h-3 w-3" />
+              定稿失败：{(finalize.error as { response?: { data?: { detail?: string } }; message?: string }).response?.data?.detail ?? (finalize.error as Error).message}
+            </span>
           )}
         </div>
       </header>

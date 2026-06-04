@@ -476,6 +476,20 @@ impl ChapterRepo {
         })
     }
 
+    /// 项目总字数（按章节 word_count 聚合，跟前端口径一致）
+    pub async fn total_words(&self, project_id: Uuid) -> Result<i64> {
+        let row = sqlx::query!(
+            r#"
+            SELECT COALESCE(SUM(word_count), 0) AS "total!: i64"
+            FROM chapters WHERE project_id = $1
+            "#,
+            project_id,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.total)
+    }
+
     pub async fn update_body(&self, id: Uuid, title: &str, body: &str) -> Result<Chapter> {
         let wc = count_chars(body);
         let r = sqlx::query!(

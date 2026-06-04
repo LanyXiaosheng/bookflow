@@ -279,6 +279,9 @@ struct TransitionBody {
     to: String,
 }
 
+/// SOP 阶段 3 硬底线：正文中文字数必须 ≥ MIN_WORDS_TO_READY 才允许 writing→ready
+const MIN_WORDS_TO_READY: i64 = 10000;
+
 async fn transition_project(
     State(s): State<AppState>,
     Path(id): Path<Uuid>,
@@ -289,6 +292,18 @@ async fn transition_project(
     })?;
     let cur = s.projects.get(id).await.map_err(AppError::Storage)?;
     ProjectStatus::validate_transition(cur.status, to).map_err(AppError::Domain)?;
+    // SOP 阶段 3：定稿前校验正文字数
+    if cur.status == ProjectStatus::Writing && to == ProjectStatus::Ready {
+        let total = s.chapters.total_words(id).await.map_err(AppError::Storage)?;
+        if total < MIN_WORDS_TO_READY {
+            return Err(AppError::Storage(
+                bookflow_storage::StorageError::Conflict(format!(
+                    "正文字数 {total}/{MIN_WORDS_TO_READY}，不足 {} 字不允许定稿（SOP 硬底线）",
+                    MIN_WORDS_TO_READY - total
+                )),
+            ));
+        }
+    }
     let p = s.projects.update_status(id, to).await.map_err(AppError::Storage)?;
     Ok(Json(p))
 }
