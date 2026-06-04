@@ -23,4 +23,8 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 dotenvy = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true }
 reqwest = { workspace = true }
+tokio-stream = { workspace = true }
+futures-util = { workspace = true }
+async-stream = { workspace = true }

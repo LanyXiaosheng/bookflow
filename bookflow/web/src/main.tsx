@@ -6,7 +6,16 @@ import './index.css'
 import Shell from './Shell'
 import Dashboard from './pages/Dashboard'
 import Seeds from './pages/Seeds'
+import Projects from './pages/Projects'
+import Ready from './pages/Ready'
+import Published from './pages/Published'
+import Archived from './pages/Archived'
+import Write from './pages/Write'
+import ProjectDetail from './pages/ProjectDetail'
 import Stub from './pages/Stub'
+import Settings from './pages/Settings'
+import Tracks from './pages/Tracks'
+import Playbook from './pages/Playbook'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 5_000, refetchOnWindowFocus: false } },
@@ -20,12 +29,16 @@ createRoot(document.getElementById('root')!).render(
           <Route element={<Shell />}>
             <Route index element={<Dashboard />} />
             <Route path="/seeds" element={<Seeds />} />
-            <Route path="/projects" element={<Stub />} />
-            <Route path="/published" element={<Stub />} />
+            <Route path="/projects" element={<Projects />} />
+            <Route path="/projects/:id" element={<ProjectDetail />} />
+            <Route path="/projects/:id/write" element={<Write />} />
+            <Route path="/ready" element={<Ready />} />
+            <Route path="/published" element={<Published />} />
+            <Route path="/archived" element={<Archived />} />
             <Route path="/review" element={<Stub />} />
-            <Route path="/tracks" element={<Stub />} />
-            <Route path="/playbook" element={<Stub />} />
-            <Route path="/settings" element={<Stub />} />
+            <Route path="/tracks" element={<Tracks />} />
+            <Route path="/playbook" element={<Playbook />} />
+            <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Stub />} />
           </Route>
         </Routes>

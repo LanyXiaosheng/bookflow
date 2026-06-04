@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Sparkles, TriangleAlert, Check, Wand2, X, Loader2 } from 'lucide-react'
-import { seedsApi, type AiScoreResponse, type Score, type Tier } from '../api/seeds'
+import { useNavigate } from 'react-router-dom'
+import { Sparkles, TriangleAlert, Check, Wand2, X, Loader2, Brain, ListPlus, Rocket, ArrowRight, History, ChevronDown, ChevronUp } from 'lucide-react'
+import { seedsApi, type AiScoreResponse, type AiSeedCandidate, type AiSeedDraft, type Score, type Tier } from '../api/seeds'
+import { projectsApi, type Project } from '../api/projects'
 
 const DIM_LABELS: Record<keyof Score, string> = {
   title: '标题张力',
@@ -15,6 +17,13 @@ const DIM_LABELS: Record<keyof Score, string> = {
 
 const DIM_KEYS = Object.keys(DIM_LABELS) as Array<keyof Score>
 const DEFAULT_SCORE: Score = { title: 5, opening: 5, slap: 5, emotion: 4, twist: 4, hook: 5, finish: 5 }
+
+const TRACKS = [
+  { value: '现言婚恋火葬场', tone: 'border-orange-200 bg-orange-50 text-orange-700' },
+  { value: '古言重生打脸', tone: 'border-green-200 bg-green-50 text-green-700' },
+  { value: '古言替嫁冲喜', tone: 'border-blue-200 bg-blue-50 text-blue-700' },
+  { value: '悬疑规则怪谈', tone: 'border-purple-200 bg-purple-50 text-purple-700' },
+] as const
 
 function tierOf(total: number): Tier {
   if (total >= 28) return 'greenlight'
@@ -31,19 +40,72 @@ const TIER_BG: Record<Tier, string> = {
 
 export default function Seeds() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const list = useQuery({ queryKey: ['seeds'], queryFn: seedsApi.list })
+  const projectsList = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.list() })
+  const projectBySeedId = useMemo(() => {
+    const m = new Map<string, Project>()
+    projectsList.data?.forEach((p) => m.set(p.seed_id, p))
+    return m
+  }, [projectsList.data])
+
   const create = useMutation({
     mutationFn: seedsApi.create,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['seeds'] }),
+  })
+  const projectize = useMutation({
+    mutationFn: (seed_id: string) => projectsApi.createFromSeed(seed_id),
+    onSuccess: (proj) => {
+      qc.invalidateQueries({ queryKey: ['projects'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
+      navigate(`/projects/${proj.id}/write`)
+    },
+  })
+  /** AI 候选「直接立项」：先 createSeed 再视情况自动 projectize */
+  const adoptAndCreate = useMutation({
+    mutationFn: async (c: AiSeedCandidate) => {
+      const seed = await seedsApi.create({ title: c.title, track, score: c.score })
+      return seed
+    },
+    onSuccess: (seed) => {
+      qc.invalidateQueries({ queryKey: ['seeds'] })
+      if (seed.tier === 'greenlight' || seed.tier === 'backlog') {
+        projectize.mutate(seed.id)
+      }
+    },
   })
 
   const [title, setTitle] = useState('')
   const [track, setTrack] = useState('现言婚恋火葬场')
   const [score, setScore] = useState<Score>(DEFAULT_SCORE)
   const [drawer, setDrawer] = useState(false)
+  const [aiPanelOpen, setAiPanelOpen] = useState(false)
 
   const aiScore = useMutation<AiScoreResponse, Error, { title: string; track: string }>({
     mutationFn: seedsApi.aiScore,
+  })
+
+  const aiGen = useMutation({
+    mutationFn: (t: string) => seedsApi.aiGenerate(t),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-drafts'] }),
+  })
+
+  /** 候选历史：跟随当前 track */
+  const drafts = useQuery({
+    queryKey: ['ai-drafts', track],
+    queryFn: () => seedsApi.aiDrafts(track, 30),
+  })
+
+  /** AI 一键立项：评分卡上的紫色主推按钮 */
+  const aiLaunch = useMutation({
+    mutationFn: (t: string) => seedsApi.aiLaunch(t),
+    onSuccess: (proj) => {
+      qc.invalidateQueries({ queryKey: ['seeds'] })
+      qc.invalidateQueries({ queryKey: ['projects'] })
+      qc.invalidateQueries({ queryKey: ['ai-drafts'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
+      navigate(`/projects/${proj.id}/write`)
+    },
   })
 
   const aiTotal = aiScore.data
@@ -67,31 +129,208 @@ export default function Seeds() {
   const tier = tierOf(total)
   const titleLen = useMemo(() => Array.from(title).length, [title])
   const titleErr = titleLen === 0 ? null : titleLen > 25 ? `标题超过 25 字（${titleLen}）` : null
-  const canSubmit = !!title.trim() && !titleErr && !create.isPending
+  const canSubmit = !!title.trim() && !titleErr && !create.isPending && !projectize.isPending
 
   function onSubmit() {
     if (!canSubmit) return
     create.mutate(
       { title: title.trim(), track, score },
       {
-        onSuccess: () => {
+        onSuccess: (seed) => {
           setTitle('')
           setScore(DEFAULT_SCORE)
+          // 绿灯（>=28）自动立项 + 跳转去写作
+          if (seed.tier === 'greenlight') {
+            projectize.mutate(seed.id)
+          }
         },
       },
     )
   }
 
+  function adoptCandidate(c: AiSeedCandidate) {
+    setTitle(c.title)
+    setScore(c.score)
+    aiScore.reset()
+    // 滚到评分卡
+    document.querySelector('[data-testid="seed-title"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
   return (
     <>
     <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <section className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-6">
+      {/* AI 批量生成选题（紧凑可折叠） */}
+      <section
+        className="mb-4 rounded-lg bg-white shadow-sm ring-1 ring-gray-200"
+        data-testid="ai-generate-panel"
+      >
+        <button
+          type="button"
+          onClick={() => setAiPanelOpen((v) => !v)}
+          className="flex w-full items-center gap-3 px-5 py-3 text-left"
+        >
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
+            <Brain className="h-4 w-4" />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-gray-900">AI 批量出选题</h2>
+              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] ${TRACKS.find((t) => t.value === track)?.tone ?? 'border-gray-200 bg-white text-gray-600'}`}>
+                {track}
+              </span>
+              {drafts.data && drafts.data.length > 0 && (
+                <span className="text-[11px] text-gray-400">历史 {drafts.data.length} 候选</span>
+              )}
+            </div>
+            <p className="mt-0.5 text-[11px] text-gray-400">
+              选赛道 → AI 一次出 5 个标题 + 7 维评分 → 一键立项
+            </p>
+          </div>
+          {aiPanelOpen ? (
+            <ChevronUp className="h-4 w-4 text-gray-400" />
+          ) : (
+            <ChevronDown className="h-4 w-4 text-gray-400" />
+          )}
+        </button>
+
+        {aiPanelOpen && (
+          <div className="border-t border-gray-100 px-5 py-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {TRACKS.map((t) => (
+              <button
+                key={t.value}
+                type="button"
+                onClick={() => setTrack(t.value)}
+                data-testid={`gen-track-${t.value}`}
+                className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                  track === t.value
+                    ? `${t.tone} ring-2 ring-offset-1 ring-current`
+                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                {t.value}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => aiGen.mutate(track)}
+              disabled={aiGen.isPending}
+              data-testid="ai-generate-btn"
+              className="ml-auto inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+            >
+              {aiGen.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Wand2 className="h-4 w-4" />
+              )}
+              {aiGen.isPending ? 'AI 生成中…' : `生成 5 个候选`}
+            </button>
+          </div>
+
+          {aiGen.isError && (
+            <div className="mt-4 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <div className="font-medium">生成失败</div>
+                <div className="mt-1 text-xs">{(aiGen.error as Error)?.message}</div>
+              </div>
+            </div>
+          )}
+
+          {aiGen.data && (
+            <div className="mt-5">
+              <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-violet-700">
+                <Wand2 className="h-3.5 w-3.5" /> 本次生成（{aiGen.data.candidates.length}）
+              </div>
+              <ul className="grid gap-3 lg:grid-cols-2">
+                {aiGen.data.candidates.map((c, i) => (
+                  <CandidateCard
+                    key={`fresh-${i}`}
+                    title={c.title}
+                    score={c.score}
+                    why_buy={c.why_buy}
+                    testIdPrefix={`gen`}
+                    index={i}
+                    onAdopt={() => adoptCandidate(c)}
+                    onLaunch={() => adoptAndCreate.mutate(c)}
+                    isLaunching={adoptAndCreate.isPending && adoptAndCreate.variables === c}
+                    disabled={adoptAndCreate.isPending || projectize.isPending}
+                  />
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* 历史候选：跨刷新都在，按 track 分组只看当前 */}
+          {drafts.data && drafts.data.length > 0 && (
+            <div className="mt-6 border-t border-gray-100 pt-5">
+              <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-gray-500">
+                <History className="h-3.5 w-3.5" /> 历史候选 · {track}（{drafts.data.length}）
+              </div>
+              <ul className="grid gap-3 lg:grid-cols-2" data-testid="drafts-list">
+                {drafts.data
+                  // 已经是「本次生成」批次的，避免重复
+                  .filter((d) => !aiGen.data?.candidates.some((c) => c.title === d.title))
+                  .map((d, i) => (
+                    <CandidateCard
+                      key={d.id}
+                      title={d.title}
+                      score={d.score}
+                      why_buy={d.why_buy}
+                      testIdPrefix="draft"
+                      index={i}
+                      muted
+                      onAdopt={() =>
+                        adoptCandidate({ title: d.title, score: d.score, why_buy: d.why_buy })
+                      }
+                      onLaunch={() =>
+                        adoptAndCreate.mutate({
+                          title: d.title,
+                          score: d.score,
+                          why_buy: d.why_buy,
+                        })
+                      }
+                      isLaunching={false}
+                      disabled={adoptAndCreate.isPending || projectize.isPending}
+                    />
+                  ))}
+              </ul>
+            </div>
+          )}
+          </div>
+        )}
+      </section>
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
+        <section className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-6 lg:sticky lg:top-20">
           <header className="flex items-center gap-2 mb-4">
             <Sparkles className="h-5 w-5 text-violet-600" />
             <h1 className="text-lg font-semibold">选题评分卡</h1>
-            <span className="ml-auto text-xs text-gray-400">7 维 · 每维 1-5 · 立项 ≥28 / 备选 ≥23</span>
+            <span className="ml-3 hidden text-xs text-gray-400 sm:inline">7 维 · 每维 1-5 · 立项 ≥28 / 备选 ≥23</span>
+            <button
+              type="button"
+              onClick={() => aiLaunch.mutate(track)}
+              disabled={aiLaunch.isPending}
+              data-testid="ai-launch-btn"
+              title={`基于赛道「${track}」让 AI 直接生成最高分选题并立项跳 Write`}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-60"
+            >
+              {aiLaunch.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Rocket className="h-3.5 w-3.5" />
+              )}
+              {aiLaunch.isPending ? 'AI 生成中…自动跳 Write' : 'AI 一键立项'}
+            </button>
           </header>
+          {aiLaunch.isError && (
+            <div className="mb-4 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">
+              <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <div>
+                AI 立项失败：{(aiLaunch.error as Error)?.message}
+              </div>
+            </div>
+          )}
 
           <label className="block">
             <span className="text-sm font-medium text-gray-700">脑洞标题</span>
@@ -172,7 +411,7 @@ export default function Seeds() {
               className="ml-auto inline-flex h-9 items-center rounded-md bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
               data-testid="submit-seed"
             >
-              {create.isPending ? '提交中…' : tier === 'greenlight' ? '立项 →' : tier === 'backlog' ? '入备选池' : '保存（不立项）'}
+              {create.isPending ? '提交中…' : projectize.isPending ? '立项中…' : tier === 'greenlight' ? '立项 →' : tier === 'backlog' ? '入备选池' : '保存（不立项）'}
             </button>
           </div>
 
@@ -190,30 +429,55 @@ export default function Seeds() {
           )}
         </section>
 
-        <aside className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-5">
-          <h2 className="text-sm font-semibold text-gray-700 mb-3">最近选题</h2>
+        <aside className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-5 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:sticky lg:top-20">
+          <h2 className="text-sm font-semibold text-gray-700 mb-3 sticky top-0 bg-white pb-2">最近选题</h2>
           {list.isLoading && <p className="text-sm text-gray-400">加载中…</p>}
           {list.isError && <p className="text-sm text-rose-600">读取失败</p>}
           {list.data && list.data.length === 0 && <p className="text-sm text-gray-400">还没有选题</p>}
           <ul className="space-y-2" data-testid="seeds-list">
-            {list.data?.map((s) => (
-              <li
-                key={s.id}
-                className="rounded-md border border-gray-200 p-2 text-xs"
-                data-testid="seed-item"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium text-gray-900 truncate">{s.title}</span>
-                  <span className={`shrink-0 inline-flex items-center rounded-full border px-1.5 text-[10px] font-semibold ${TIER_BG[s.tier]}`}>
-                    {TIER_LABEL[s.tier]}
-                  </span>
-                </div>
-                <div className="mt-1 flex items-center justify-between text-gray-500">
-                  <span>{s.track}</span>
-                  <span className="font-mono">{s.total_score}</span>
-                </div>
-              </li>
-            ))}
+            {list.data?.map((s) => {
+              const proj = projectBySeedId.get(s.id)
+              const canLaunch = !proj && s.tier !== 'reject'
+              const onClick = () => {
+                if (proj) navigate(`/projects/${proj.id}/write`)
+                else if (canLaunch) projectize.mutate(s.id)
+              }
+              const clickable = !!proj || canLaunch
+              return (
+                <li
+                  key={s.id}
+                  data-testid="seed-item"
+                  onClick={clickable ? onClick : undefined}
+                  className={`rounded-md border border-gray-200 p-2 text-xs transition ${
+                    clickable ? 'cursor-pointer hover:border-blue-300 hover:bg-blue-50/40' : 'opacity-70'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-gray-900 truncate">{s.title}</span>
+                    <span className={`shrink-0 inline-flex items-center rounded-full border px-1.5 text-[10px] font-semibold ${TIER_BG[s.tier]}`}>
+                      {TIER_LABEL[s.tier]}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-gray-500">
+                    <span className="truncate">{s.track}</span>
+                    <span className="font-mono">{s.total_score}</span>
+                  </div>
+                  <div className="mt-1.5 flex items-center justify-between">
+                    {proj ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] text-blue-600">
+                        <ArrowRight className="h-3 w-3" /> 进项目继续写
+                      </span>
+                    ) : canLaunch ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600">
+                        <Rocket className="h-3 w-3" /> 点这一行立项 + 去写
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-gray-400">评分不足，已归档</span>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
           </ul>
         </aside>
       </div>
@@ -337,5 +601,93 @@ export default function Seeds() {
       </div>
     )}
     </>
+  )
+}
+
+interface CandidateCardProps {
+  title: string
+  score: Score
+  why_buy: string
+  index: number
+  testIdPrefix: 'gen' | 'draft'
+  onAdopt: () => void
+  onLaunch: () => void
+  isLaunching: boolean
+  disabled: boolean
+  muted?: boolean
+}
+
+function CandidateCard({
+  title,
+  score,
+  why_buy,
+  index,
+  testIdPrefix,
+  onAdopt,
+  onLaunch,
+  isLaunching,
+  disabled,
+  muted,
+}: CandidateCardProps) {
+  const total = DIM_KEYS.reduce((a, k) => a + score[k], 0)
+  const t = tierOf(total)
+  return (
+    <li
+      data-testid={`${testIdPrefix}-candidate-${index}`}
+      className={`rounded-lg border border-gray-200 p-4 ${muted ? 'bg-white' : 'bg-gray-50/60'}`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="text-sm font-semibold text-gray-900 leading-6">{title}</h3>
+        <span
+          className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${TIER_BG[t]}`}
+        >
+          {TIER_LABEL[t]} · {total}
+        </span>
+      </div>
+      <p className="mt-1.5 text-xs text-gray-500 line-clamp-2">{why_buy}</p>
+      <div className="mt-3 flex flex-wrap gap-1">
+        {DIM_KEYS.map((k) => (
+          <span
+            key={k}
+            className="inline-flex items-center rounded bg-white px-1.5 py-0.5 text-[11px] text-gray-600 ring-1 ring-gray-200"
+            title={DIM_LABELS[k]}
+          >
+            {DIM_LABELS[k][0]}
+            {DIM_LABELS[k][1] ?? ''} {score[k]}
+          </span>
+        ))}
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onAdopt}
+          data-testid={`${testIdPrefix}-adopt-${index}`}
+          className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+        >
+          <ListPlus className="h-3.5 w-3.5" /> 填入评分卡
+        </button>
+        <button
+          type="button"
+          disabled={t === 'reject' || disabled}
+          onClick={onLaunch}
+          data-testid={`${testIdPrefix}-launch-${index}`}
+          title={t === 'reject' ? '评分不足 23 分，先用「填入评分卡」改一下' : ''}
+          className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-semibold shadow-sm ${
+            t === 'greenlight'
+              ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+              : t === 'backlog'
+                ? 'bg-amber-600 text-white hover:bg-amber-700'
+                : 'cursor-not-allowed bg-gray-200 text-gray-500'
+          } disabled:opacity-60`}
+        >
+          {isLaunching ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Rocket className="h-3.5 w-3.5" />
+          )}
+          {t === 'greenlight' ? '立项 + 去写' : t === 'backlog' ? '立项备选' : '不做'}
+        </button>
+      </div>
+    </li>
   )
 }

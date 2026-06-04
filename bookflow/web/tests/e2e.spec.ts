@@ -1,0 +1,69 @@
+import { test, expect } from '@playwright/test'
+
+// 端到端：选题（绿灯自动立项）→ Write 新建章节 + 手写正文 + 保存 → 定稿进入待发 → 待发列表能找到
+test('端到端：seed → project → 章节 → 定稿 → 待发列表', async ({ page }) => {
+  const title = `e2e-${Date.now()}-冲喜替嫁那夜他先掀红盖头`.slice(0, 25)
+
+  await page.goto('/seeds')
+  // 默认 33 分 = greenlight，提交后会自动 createFromSeed 并跳到 /projects/:id/write
+  await page.getByTestId('seed-title').fill(title)
+  await page.getByTestId('submit-seed').click()
+
+  // 跳到 Write 页（路由含 /projects/...write）
+  await page.waitForURL(/\/projects\/[\w-]+\/write/, { timeout: 15_000 })
+  await expect(page.getByText(title)).toBeVisible()
+
+  // 新建一章
+  await page.getByTestId('new-chapter-btn').click()
+  await page.getByTestId('chapter-title-input').fill('第1章 替嫁')
+
+  // 写正文（用唯一片段，后面验）
+  const body = `这是 e2e 测试正文 ${Date.now()}。她踩着高跟鞋走进新房，发现新郎掀盖头之前先看了眼手腕上的手表。`
+  await page.getByTestId('chapter-body-textarea').fill(body)
+
+  // 字数实时
+  await expect(page.getByTestId('chapter-wc')).toContainText(`${Array.from(body).length}`)
+
+  // 保存
+  await page.getByTestId('save-chapter-btn').click()
+  await expect(page.getByText(/已保存/)).toBeVisible({ timeout: 5_000 })
+
+  // 定稿（confirm dialog 自动 accept）
+  page.once('dialog', (d) => d.accept())
+  await page.getByTestId('finalize-btn').click()
+
+  // 跳到 /ready
+  await page.waitForURL(/\/ready$/, { timeout: 15_000 })
+  await expect(page.getByText(title)).toBeVisible()
+})
+
+test('待发 → 已发 → 归档 状态机推进', async ({ page, request }) => {
+  // 自建一个 seed 起 ready 项目，免得跟其他测试抢
+  const title = `e2e状态机-${Date.now()}-上市敲钟那天前夫发现首席法务官是我`.slice(0, 25)
+  const seed = await request
+    .post('/api/seeds', {
+      data: {
+        title,
+        track: '现言婚恋火葬场',
+        score: { title: 5, opening: 5, slap: 5, emotion: 4, twist: 4, hook: 5, finish: 5 },
+      },
+    })
+    .then((r) => r.json())
+  const proj = await request
+    .post('/api/projects', { data: { seed_id: seed.id } })
+    .then((r) => r.json())
+  await request.post(`/api/projects/${proj.id}/transition`, { data: { to: 'ready' } })
+
+  await page.goto('/ready')
+  const card = page.getByTestId('project-card').filter({ hasText: proj.title })
+  await expect(card).toBeVisible()
+
+  // 一路点下一阶段：ready → published → archived
+  await card.getByTestId('project-next-btn').click()
+  await page.goto('/published')
+  const card2 = page.getByTestId('project-card').filter({ hasText: proj.title })
+  await expect(card2).toBeVisible()
+  await card2.getByTestId('project-next-btn').click()
+  await page.goto('/archived')
+  await expect(page.getByTestId('project-card').filter({ hasText: proj.title })).toBeVisible()
+})

@@ -126,6 +126,98 @@ pub enum DomainError {
     EmptyTrack,
     #[error("score {dim} = {value} out of 1..=5")]
     ScoreOutOfRange { dim: String, value: i16 },
+    #[error("invalid status transition {from} → {to}")]
+    BadTransition { from: String, to: String },
+}
+
+/// 项目状态机：seed 立项 → writing → ready（待发）→ published → archived。
+/// 不支持回退、不支持跨级跳转。归档可从任何已发后状态回到 archived
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectStatus {
+    Writing,
+    Ready,
+    Published,
+    Archived,
+}
+
+impl ProjectStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProjectStatus::Writing => "writing",
+            ProjectStatus::Ready => "ready",
+            ProjectStatus::Published => "published",
+            ProjectStatus::Archived => "archived",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "writing" => ProjectStatus::Writing,
+            "ready" => ProjectStatus::Ready,
+            "published" => ProjectStatus::Published,
+            "archived" => ProjectStatus::Archived,
+            _ => return None,
+        })
+    }
+
+    /// 默认推进：写作→待发→已发→归档
+    pub fn next(&self) -> Option<Self> {
+        match self {
+            ProjectStatus::Writing => Some(ProjectStatus::Ready),
+            ProjectStatus::Ready => Some(ProjectStatus::Published),
+            ProjectStatus::Published => Some(ProjectStatus::Archived),
+            ProjectStatus::Archived => None,
+        }
+    }
+
+    pub fn validate_transition(from: Self, to: Self) -> Result<(), DomainError> {
+        if from.next() == Some(to) {
+            Ok(())
+        } else {
+            Err(DomainError::BadTransition {
+                from: from.as_str().into(),
+                to: to.as_str().into(),
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    pub id: Uuid,
+    pub seed_id: Uuid,
+    pub title: String,
+    pub track: String,
+    pub status: ProjectStatus,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// 章节段落 beat：AI 拆出来的小节点，由前端可重排
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Beat {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Chapter {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub idx: i16,
+    pub title: String,
+    pub beats: Vec<Beat>,
+    pub body: String,
+    pub word_count: i32,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// 字数计算：按 unicode char 数，跟前端 textarea 显示口径一致
+pub fn count_chars(s: &str) -> i32 {
+    s.chars().count() as i32
 }
 
 #[cfg(test)]
