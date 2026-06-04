@@ -103,6 +103,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/api/seeds", post(create_seed).get(list_seeds))
+        .route("/api/seeds/:id", axum::routing::delete(delete_seed))
         .route("/api/seeds/ai-score", post(ai_score_seed))
         .route("/api/seeds/ai-generate", post(ai_generate_seeds))
         .route("/api/seeds/ai-drafts", get(list_seed_drafts))
@@ -156,6 +157,25 @@ async fn create_seed(
     Json(payload): Json<NewSeed>,
 ) -> Result<(StatusCode, Json<Seed>), AppError> {
     payload.validate().map_err(AppError::Domain)?;
+    // 4 小时内同 (title, track) 视为重复
+    if let Some(existing) = s
+        .seeds
+        .find_by_title_track(&payload.title, &payload.track)
+        .await
+        .map_err(AppError::Storage)?
+    {
+        let age = chrono::Utc::now()
+            .signed_duration_since(existing.created_at)
+            .num_hours();
+        if age < 4 {
+            return Err(AppError::Storage(
+                bookflow_storage::StorageError::Conflict(format!(
+                    "已存在同标题种子（{}h 前），换一个标题或编辑那个",
+                    age
+                )),
+            ));
+        }
+    }
     let seed = s.seeds.insert(&payload).await.map_err(AppError::Storage)?;
     Ok((StatusCode::CREATED, Json(seed)))
 }
@@ -163,6 +183,14 @@ async fn create_seed(
 async fn list_seeds(State(s): State<AppState>) -> Result<Json<Vec<Seed>>, AppError> {
     let seeds = s.seeds.list().await.map_err(AppError::Storage)?;
     Ok(Json(seeds))
+}
+
+async fn delete_seed(
+    State(s): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    s.seeds.delete(id).await.map_err(AppError::Storage)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Deserialize)]
@@ -584,6 +612,13 @@ impl IntoResponse for AppError {
                     return (
                         StatusCode::NOT_FOUND,
                         Json(serde_json::json!({ "error": "not_found", "what": what })),
+                    )
+                        .into_response();
+                }
+                if let bookflow_storage::StorageError::Conflict(msg) = &e {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(serde_json::json!({ "error": "conflict", "detail": msg })),
                     )
                         .into_response();
                 }

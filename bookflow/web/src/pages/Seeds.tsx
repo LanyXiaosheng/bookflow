@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, TriangleAlert, Check, Wand2, X, Loader2, Brain, ListPlus, Rocket, ArrowRight, History, ChevronDown, ChevronUp } from 'lucide-react'
+import { Sparkles, TriangleAlert, Check, Wand2, X, Loader2, Brain, ListPlus, Rocket, ArrowRight, History, ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 import { seedsApi, type AiScoreResponse, type AiSeedCandidate, type AiSeedDraft, type Score, type Tier } from '../api/seeds'
 import { projectsApi, type Project } from '../api/projects'
+import { useConfirm } from '../components/ConfirmDialog'
 
 const DIM_LABELS: Record<keyof Score, string> = {
   title: '标题张力',
@@ -38,9 +39,27 @@ const TIER_BG: Record<Tier, string> = {
   reject: 'bg-rose-50 text-rose-700 border-rose-200',
 }
 
+/** 测试垃圾启发式：以「测试 / e2e / smoke / playwright / test」开头 */
+const TEST_PREFIX_RE = /^(测试|e2e|smoke|playwright|test)/i
+function looksLikeTestData(title: string): boolean {
+  return TEST_PREFIX_RE.test(title.trim())
+}
+
+/** 抽 axios 错误的人类信息：优先后端 detail，其次 message */
+function extractErrorMessage(err: unknown): string {
+  if (!err) return '未知错误'
+  // axios error
+  const anyErr = err as { response?: { data?: { detail?: string; error?: string } }; message?: string }
+  const data = anyErr.response?.data
+  if (data?.detail) return data.detail
+  if (data?.error) return data.error
+  return anyErr.message ?? String(err)
+}
+
 export default function Seeds() {
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const confirm = useConfirm()
   const list = useQuery({ queryKey: ['seeds'], queryFn: seedsApi.list })
   const projectsList = useQuery({ queryKey: ['projects'], queryFn: () => projectsApi.list() })
   const projectBySeedId = useMemo(() => {
@@ -52,6 +71,14 @@ export default function Seeds() {
   const create = useMutation({
     mutationFn: seedsApi.create,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['seeds'] }),
+  })
+  const removeSeed = useMutation({
+    mutationFn: (id: string) => seedsApi.remove(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['seeds'] })
+      qc.invalidateQueries({ queryKey: ['ai-drafts'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
+    },
   })
   const projectize = useMutation({
     mutationFn: (seed_id: string) => projectsApi.createFromSeed(seed_id),
@@ -80,6 +107,14 @@ export default function Seeds() {
   const [score, setScore] = useState<Score>(DEFAULT_SCORE)
   const [drawer, setDrawer] = useState(false)
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
+  const [hideTestData, setHideTestData] = useState(true)
+
+  /** 应用「隐藏测试」过滤后的种子列表 */
+  const visibleSeeds = useMemo(() => {
+    if (!list.data) return []
+    return hideTestData ? list.data.filter((s) => !looksLikeTestData(s.title)) : list.data
+  }, [list.data, hideTestData])
+  const hiddenCount = (list.data?.length ?? 0) - visibleSeeds.length
 
   const aiScore = useMutation<AiScoreResponse, Error, { title: string; track: string }>({
     mutationFn: seedsApi.aiScore,
@@ -418,7 +453,7 @@ export default function Seeds() {
           {create.isError && (
             <p className="mt-3 text-sm text-rose-600 flex items-center gap-1">
               <TriangleAlert className="h-4 w-4" />
-              提交失败：{(create.error as Error).message}
+              提交失败：{extractErrorMessage(create.error)}
             </p>
           )}
           {create.isSuccess && !create.isPending && (
@@ -430,12 +465,32 @@ export default function Seeds() {
         </section>
 
         <aside className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-5 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:sticky lg:top-20">
-          <h2 className="text-sm font-semibold text-gray-700 mb-3 sticky top-0 bg-white pb-2">最近选题</h2>
+          <header className="sticky top-0 bg-white pb-2 mb-3 flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-gray-700">最近选题</h2>
+            <span className="text-[10px] text-gray-400">
+              {visibleSeeds.length}
+              {hiddenCount > 0 && ` · 隐藏 ${hiddenCount}`}
+            </span>
+            <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hideTestData}
+                onChange={(e) => setHideTestData(e.target.checked)}
+                className="h-3 w-3"
+                data-testid="hide-test-data-toggle"
+              />
+              隐藏测试
+            </label>
+          </header>
           {list.isLoading && <p className="text-sm text-gray-400">加载中…</p>}
           {list.isError && <p className="text-sm text-rose-600">读取失败</p>}
-          {list.data && list.data.length === 0 && <p className="text-sm text-gray-400">还没有选题</p>}
+          {visibleSeeds.length === 0 && !list.isLoading && (
+            <p className="text-sm text-gray-400">
+              {hiddenCount > 0 ? '已全部被「隐藏测试」过滤' : '还没有选题'}
+            </p>
+          )}
           <ul className="space-y-2" data-testid="seeds-list">
-            {list.data?.map((s) => {
+            {visibleSeeds.map((s) => {
               const proj = projectBySeedId.get(s.id)
               const canLaunch = !proj && s.tier !== 'reject'
               const onClick = () => {
@@ -447,20 +502,24 @@ export default function Seeds() {
                 <li
                   key={s.id}
                   data-testid="seed-item"
-                  onClick={clickable ? onClick : undefined}
-                  className={`rounded-md border border-gray-200 p-2 text-xs transition ${
-                    clickable ? 'cursor-pointer hover:border-blue-300 hover:bg-blue-50/40' : 'opacity-70'
+                  className={`group rounded-md border border-gray-200 p-2 text-xs transition ${
+                    clickable ? 'hover:border-blue-300 hover:bg-blue-50/40' : 'opacity-70'
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-gray-900 truncate">{s.title}</span>
-                    <span className={`shrink-0 inline-flex items-center rounded-full border px-1.5 text-[10px] font-semibold ${TIER_BG[s.tier]}`}>
-                      {TIER_LABEL[s.tier]}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between text-gray-500">
-                    <span className="truncate">{s.track}</span>
-                    <span className="font-mono">{s.total_score}</span>
+                  <div
+                    onClick={clickable ? onClick : undefined}
+                    className={clickable ? 'cursor-pointer' : ''}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-gray-900 truncate">{s.title}</span>
+                      <span className={`shrink-0 inline-flex items-center rounded-full border px-1.5 text-[10px] font-semibold ${TIER_BG[s.tier]}`}>
+                        {TIER_LABEL[s.tier]}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-gray-500">
+                      <span className="truncate">{s.track}</span>
+                      <span className="font-mono">{s.total_score}</span>
+                    </div>
                   </div>
                   <div className="mt-1.5 flex items-center justify-between">
                     {proj ? (
@@ -474,6 +533,41 @@ export default function Seeds() {
                     ) : (
                       <span className="text-[11px] text-gray-400">评分不足，已归档</span>
                     )}
+                    <button
+                      type="button"
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        const ok = await confirm({
+                          title: `删除「${s.title}」？`,
+                          description: proj ? (
+                            <>
+                              这条种子已被项目「{proj.title}」立项，
+                              <span className="font-semibold text-rose-600">无法直接删</span>。
+                              先删项目再删种子。
+                            </>
+                          ) : (
+                            <>
+                              评分卡和 AI 历史候选不会删，
+                              仅删除这条种子记录。<span className="text-gray-500">不可恢复</span>。
+                            </>
+                          ),
+                          confirmText: proj ? '我知道了' : '删除',
+                          tone: 'danger',
+                        })
+                        if (ok && !proj) removeSeed.mutate(s.id)
+                      }}
+                      disabled={removeSeed.isPending && removeSeed.variables === s.id}
+                      className="opacity-0 group-hover:opacity-100 inline-flex items-center justify-center rounded p-1 text-rose-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50 transition"
+                      title={proj ? '已被立项不可直接删' : '删除种子'}
+                      data-testid="seed-delete-btn"
+                      aria-label="删除种子"
+                    >
+                      {removeSeed.isPending && removeSeed.variables === s.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-3 w-3" />
+                      )}
+                    </button>
                   </div>
                 </li>
               )

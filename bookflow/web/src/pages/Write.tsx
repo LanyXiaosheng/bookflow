@@ -16,12 +16,14 @@ import { projectsApi } from '../api/projects'
 import { chaptersApi, type Beat, type Chapter } from '../api/chapters'
 import { useSSE } from '../hooks/useSSE'
 import { useFullBook } from '../hooks/useFullBook'
+import { useConfirm } from '../components/ConfirmDialog'
 
 export default function Write() {
   const { id } = useParams<{ id: string }>()
   const projectId = id!
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const confirm = useConfirm()
 
   const project = useQuery({
     queryKey: ['project', projectId],
@@ -141,8 +143,13 @@ export default function Write() {
           {project.data?.status === 'writing' && (
             <button
               type="button"
-              onClick={() => {
-                if (confirm('定稿后不可继续编辑，确认进入「待发」？')) finalize.mutate()
+              onClick={async () => {
+                const ok = await confirm({
+                  title: '定稿进入「待发」？',
+                  description: '定稿后该项目不可再编辑章节，仅能继续生成发布稿/配套。',
+                  confirmText: '定稿',
+                })
+                if (ok) finalize.mutate()
               }}
               disabled={finalize.isPending || !chapters.data || chapters.data.length === 0}
               className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"

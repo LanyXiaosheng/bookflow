@@ -11,6 +11,8 @@ pub enum StorageError {
     Sqlx(#[from] sqlx::Error),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
@@ -162,6 +164,67 @@ impl SeedRepo {
                 created_at: r.created_at,
             })
             .collect())
+    }
+
+    /// 同 (title,track) 已存在 → Some(seed)；否则 None
+    pub async fn find_by_title_track(&self, title: &str, track: &str) -> Result<Option<Seed>> {
+        let row = sqlx::query!(
+            r#"
+            SELECT id, title, track,
+                   score_title, score_opening, score_slap,
+                   score_emotion, score_twist, score_hook, score_finish,
+                   total_score AS "total_score!: i32",
+                   tier, created_at
+            FROM seeds
+            WHERE title = $1 AND track = $2
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+            title,
+            track,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| Seed {
+            id: r.id,
+            title: r.title,
+            track: r.track,
+            score: Score {
+                title: r.score_title,
+                opening: r.score_opening,
+                slap: r.score_slap,
+                emotion: r.score_emotion,
+                twist: r.score_twist,
+                hook: r.score_hook,
+                finish: r.score_finish,
+            },
+            total_score: r.total_score,
+            tier: parse_tier(&r.tier),
+            created_at: r.created_at,
+        }))
+    }
+
+    /// 删除 seed；若已被 project 立项则返回 Conflict 由调用层处理
+    pub async fn delete(&self, id: Uuid) -> Result<()> {
+        let project_count = sqlx::query_scalar!(
+            r#"SELECT COUNT(*) AS "n!: i64" FROM projects WHERE seed_id = $1"#,
+            id
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        if project_count > 0 {
+            return Err(StorageError::Conflict(format!(
+                "seed {id} 已被 {project_count} 个项目立项，先删项目再删种子"
+            )));
+        }
+        let n = sqlx::query!("DELETE FROM seeds WHERE id = $1", id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        if n == 0 {
+            return Err(StorageError::NotFound(format!("seed {id}")));
+        }
+        Ok(())
     }
 }
 

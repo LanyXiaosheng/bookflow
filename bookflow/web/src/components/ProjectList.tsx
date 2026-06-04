@@ -1,9 +1,13 @@
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { ArrowRight, FileText, Loader2, Sparkles, Trash2, TriangleAlert } from 'lucide-react'
 import { projectsApi, type Project, type ProjectStatus } from '../api/projects'
 import { chaptersApi } from '../api/chapters'
 import { useAllAiJobs } from '../hooks/useAiJobStore'
+import { useConfirm } from './ConfirmDialog'
+
+type FilterStatus = ProjectStatus | 'all'
 
 const STATUS_LABEL: Record<ProjectStatus, string> = {
   writing: '写作中',
@@ -26,8 +30,15 @@ const NEXT_LABEL: Record<ProjectStatus, string | null> = {
   archived: null,
 }
 
+/** 跟 Seeds 同款启发式：「测试 / e2e / smoke / playwright / test」前缀 */
+const TEST_PREFIX_RE = /^(测试|e2e|smoke|playwright|test)/i
+function looksLikeTestData(title: string): boolean {
+  return TEST_PREFIX_RE.test(title.trim())
+}
+
 interface ProjectListProps {
-  status: ProjectStatus
+  /** 'all' = 显示所有状态，并展示状态 tab 切换 */
+  status: FilterStatus
   title: string
   emptyHint?: string
 }
@@ -38,14 +49,28 @@ interface ProjectCardData {
   total_words: number
 }
 
-export default function ProjectList({ status, title, emptyHint }: ProjectListProps) {
+const STATUS_TABS: Array<{ key: FilterStatus; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'writing', label: '写作中' },
+  { key: 'ready', label: '待发' },
+  { key: 'published', label: '已发' },
+  { key: 'archived', label: '归档' },
+]
+
+export default function ProjectList({ status: initialStatus, title, emptyHint }: ProjectListProps) {
   const qc = useQueryClient()
   const aiJobs = useAllAiJobs()
+  const confirm = useConfirm()
+  const [status, setStatus] = useState<FilterStatus>(initialStatus)
+  const [hideTestData, setHideTestData] = useState(true)
 
   const list = useQuery({
     queryKey: ['projects', status],
     queryFn: async () => {
-      const projects = await projectsApi.list(status)
+      const projects =
+        status === 'all'
+          ? await projectsApi.list()
+          : await projectsApi.list(status)
       const enriched = await Promise.all(
         projects.map(async (p) => {
           const chapters = await chaptersApi.listByProject(p.id)
@@ -56,6 +81,14 @@ export default function ProjectList({ status, title, emptyHint }: ProjectListPro
       return enriched
     },
   })
+
+  const visible = useMemo(() => {
+    if (!list.data) return []
+    return hideTestData
+      ? list.data.filter((row) => !looksLikeTestData(row.project.title))
+      : list.data
+  }, [list.data, hideTestData])
+  const hiddenCount = (list.data?.length ?? 0) - visible.length
 
   const transition = useMutation({
     mutationFn: async (vars: { id: string; to: ProjectStatus }) =>
@@ -77,13 +110,60 @@ export default function ProjectList({ status, title, emptyHint }: ProjectListPro
 
   return (
     <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-      <header className="flex items-center gap-3 mb-4">
+      <header className="flex items-center gap-3 mb-3">
         <FileText className="h-5 w-5 text-blue-600" />
         <h1 className="text-lg font-semibold">{title}</h1>
         <span className="ml-auto text-xs text-gray-400">
-          {list.data ? `${list.data.length} 个项目` : ''}
+          {list.data
+            ? `${visible.length}${hiddenCount > 0 ? ` · 隐藏 ${hiddenCount}` : ''} 个项目`
+            : ''}
         </span>
       </header>
+
+      {/* 状态 tab：仅在 initialStatus='all' 时显示，避免 /ready /published 多余切换 */}
+      {initialStatus === 'all' && (
+        <nav className="mb-4 flex flex-wrap items-center gap-2" data-testid="status-tabs">
+          {STATUS_TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setStatus(t.key)}
+              data-testid={`status-tab-${t.key}`}
+              className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition ${
+                status === t.key
+                  ? 'border-blue-300 bg-blue-50 text-blue-700'
+                  : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+          <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={hideTestData}
+              onChange={(e) => setHideTestData(e.target.checked)}
+              className="h-3 w-3"
+              data-testid="hide-test-data-toggle"
+            />
+            隐藏测试
+          </label>
+        </nav>
+      )}
+      {initialStatus !== 'all' && (
+        <div className="mb-4 flex items-center gap-2">
+          <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={hideTestData}
+              onChange={(e) => setHideTestData(e.target.checked)}
+              className="h-3 w-3"
+              data-testid="hide-test-data-toggle"
+            />
+            隐藏测试
+          </label>
+        </div>
+      )}
 
       {list.isLoading && <p className="text-sm text-gray-500">加载中…</p>}
       {list.isError && (
@@ -91,14 +171,16 @@ export default function ProjectList({ status, title, emptyHint }: ProjectListPro
           <TriangleAlert className="h-4 w-4" /> 加载失败
         </p>
       )}
-      {list.data && list.data.length === 0 && (
+      {visible.length === 0 && !list.isLoading && (
         <div className="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center text-sm text-gray-500">
-          {emptyHint ?? '这里还没有项目'}
+          {hiddenCount > 0
+            ? '当前 tab 全部被「隐藏测试」过滤'
+            : (emptyHint ?? '这里还没有项目')}
         </div>
       )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3" data-testid="project-list">
-        {list.data?.map(({ project, chapter_count, total_words }) => {
+        {visible.map(({ project, chapter_count, total_words }) => {
           const next = nextStatus(project.status)
           const job = aiJobs[project.id]
           return (
@@ -162,14 +244,19 @@ export default function ProjectList({ status, title, emptyHint }: ProjectListPro
                 )}
                 <button
                   type="button"
-                  onClick={() => {
-                    if (
-                      confirm(
-                        `确定删除「${project.title}」？\n章节 / AI 产物 / 草稿都会一起删除，不可恢复。`,
-                      )
-                    ) {
-                      remove.mutate(project.id)
-                    }
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: `删除「${project.title}」？`,
+                      description: (
+                        <>
+                          章节、AI 产物（README/大纲/发布稿/配套）、草稿都会一起删除，
+                          <span className="font-semibold text-rose-600">不可恢复</span>。
+                        </>
+                      ),
+                      confirmText: '删除',
+                      tone: 'danger',
+                    })
+                    if (ok) remove.mutate(project.id)
                   }}
                   disabled={remove.isPending && remove.variables === project.id}
                   className="inline-flex items-center justify-center rounded-md border border-rose-200 bg-white p-1.5 text-rose-500 hover:bg-rose-50 disabled:opacity-50"

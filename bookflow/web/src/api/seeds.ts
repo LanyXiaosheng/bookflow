@@ -65,6 +65,9 @@ export const seedsApi = {
     const { data } = await api.post<Seed>('/seeds', payload)
     return data
   },
+  async remove(id: string): Promise<void> {
+    await api.delete(`/seeds/${id}`)
+  },
   async aiScore(payload: { title: string; track: string }): Promise<AiScoreResponse> {
     const { data } = await api.post<AiScoreResponse>('/seeds/ai-score', payload, {
       timeout: 90_000,
