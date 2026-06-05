@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Sparkles, TriangleAlert, Check, Wand2, X, Loader2, Brain, ListPlus, Rocket, ArrowRight, History, ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
-import { seedsApi, type AiScoreResponse, type AiSeedCandidate, type AiSeedDraft, type Score, type Tier } from '../api/seeds'
+import { seedsApi, type AiScoreResponse, type AiSeedCandidate, type Score, type Tier } from '../api/seeds'
 import { projectsApi, type Project } from '../api/projects'
 import { useConfirm } from '../components/ConfirmDialog'
 

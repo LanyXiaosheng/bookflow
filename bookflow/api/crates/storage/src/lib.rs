@@ -659,6 +659,8 @@ pub enum ArtifactKind {
     Outline,
     PublishPost,
     SideDishes,
+    BookSummary,
+    BookPolished,
 }
 
 impl ArtifactKind {
@@ -668,6 +670,8 @@ impl ArtifactKind {
             ArtifactKind::Outline => "outline",
             ArtifactKind::PublishPost => "publish_post",
             ArtifactKind::SideDishes => "side_dishes",
+            ArtifactKind::BookSummary => "book_summary",
+            ArtifactKind::BookPolished => "book_polished",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -676,6 +680,8 @@ impl ArtifactKind {
             "outline" => Some(Self::Outline),
             "publish_post" => Some(Self::PublishPost),
             "side_dishes" => Some(Self::SideDishes),
+            "book_summary" => Some(Self::BookSummary),
+            "book_polished" => Some(Self::BookPolished),
             _ => None,
         }
     }
@@ -758,5 +764,24 @@ impl ArtifactRepo {
             content: r.content,
             created_at: r.created_at,
         }).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ArtifactKind;
+
+    #[test]
+    fn artifact_kind_parses_summary_and_polish() {
+        assert_eq!(
+            ArtifactKind::parse("book_summary"),
+            Some(ArtifactKind::BookSummary)
+        );
+        assert_eq!(
+            ArtifactKind::parse("book_polished"),
+            Some(ArtifactKind::BookPolished)
+        );
+        assert_eq!(ArtifactKind::BookSummary.as_str(), "book_summary");
+        assert_eq!(ArtifactKind::BookPolished.as_str(), "book_polished");
     }
 }

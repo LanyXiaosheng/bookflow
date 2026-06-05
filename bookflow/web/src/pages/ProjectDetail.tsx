@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { projectsApi, type ArtifactKind, type ProjectArtifact } from '../api/projects'
 import { chaptersApi, type Chapter } from '../api/chapters'
+import { useAiJob, type AiJob } from '../hooks/useAiJobStore'
 import { useSSE } from '../hooks/useSSE'
 import { useFullBook } from '../hooks/useFullBook'
 import { usePipeline } from '../hooks/usePipeline'
@@ -59,6 +60,16 @@ export default function ProjectDetail() {
     () => pickLatest(artifacts.data, 'side_dishes'),
     [artifacts.data],
   )
+  const bookSummary = useMemo(
+    () => pickLatest(artifacts.data, 'book_summary'),
+    [artifacts.data],
+  )
+  const bookPolished = useMemo(
+    () => pickLatest(artifacts.data, 'book_polished'),
+    [artifacts.data],
+  )
+  const aiJob = useAiJob(projectId)
+  const bodyChars = useMemo(() => countBodyChars(chapters.data), [chapters.data])
 
   const refreshArtifacts = () =>
     qc.invalidateQueries({ queryKey: ['project-artifacts', projectId] })
@@ -174,6 +185,33 @@ export default function ProjectDetail() {
             chapters={chapters.data}
             hasOutline={!!outline}
             isWriting={project.data?.status === 'writing'}
+            globalJob={aiJob}
+          />
+          <ArtifactStreamCard
+            projectId={projectId}
+            kind="book_summary"
+            title="全书汇总"
+            artifact={bookSummary}
+            endpoint={`/api/projects/${projectId}/ai-book-summary/stream`}
+            disabled={bodyChars === 0 || aiJob?.kind === 'full_book'}
+            disabledHint={
+              bodyChars === 0 ? '先生成至少一章正文，再汇总。' : '正文生成中，暂不能汇总。'
+            }
+            emptyHint="AI 会基于全章节正文整合出一版连贯完整正文。"
+            onDone={refreshArtifacts}
+            copyable
+          />
+          <ArtifactStreamCard
+            projectId={projectId}
+            kind="book_polished"
+            title="优化升华"
+            artifact={bookPolished}
+            endpoint={`/api/projects/${projectId}/ai-book-polish/stream`}
+            disabled={!bookSummary}
+            disabledHint="先生成全书汇总，再做优化升华。"
+            emptyHint="基于全书汇总继续去 AI 味、增强代入感和爽点节奏。"
+            onDone={refreshArtifacts}
+            copyable
           />
           <ArtifactStreamCard
             projectId={projectId}
@@ -332,6 +370,32 @@ function pipelineLabel(key: 'readme' | 'outline' | 'body' | null): string {
   return key ? PIPELINE_LABELS[key] : ''
 }
 
+function countBodyChars(chapters?: Chapter[]): number {
+  return chapters?.reduce((sum, c) => sum + Array.from(c.body ?? '').length, 0) ?? 0
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.setAttribute('readonly', '')
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      const ok = document.execCommand('copy')
+      document.body.removeChild(ta)
+      return ok
+    } catch {
+      return false
+    }
+  }
+}
+
 interface ArtifactStreamCardProps {
   projectId: string
   kind: ArtifactKind
@@ -342,6 +406,7 @@ interface ArtifactStreamCardProps {
   disabledHint: string
   emptyHint: string
   onDone: () => void
+  copyable?: boolean
 }
 
 function ArtifactStreamCard({
@@ -353,8 +418,10 @@ function ArtifactStreamCard({
   disabledHint,
   emptyHint,
   onDone,
+  copyable = false,
 }: ArtifactStreamCardProps) {
   const sse = useSSE({ onDone })
+  const [copyState, setCopyState] = useState<'idle' | 'done' | 'error'>('idle')
   const streaming = sse.status === 'streaming'
   const display = sse.text || artifact?.content || ''
 
@@ -369,12 +436,26 @@ function ArtifactStreamCard({
         {artifact && !streaming && (
           <span className="text-[10px] text-gray-400">v{artifact.version}</span>
         )}
+        {display && copyable && (
+          <button
+            type="button"
+            onClick={async () => {
+              const ok = await copyText(display)
+              setCopyState(ok ? 'done' : 'error')
+              window.setTimeout(() => setCopyState('idle'), 1500)
+            }}
+            className="ml-auto inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+            data-testid={`copy-${kind}-btn`}
+          >
+            {copyState === 'done' ? '已复制' : copyState === 'error' ? '复制失败' : '复制'}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => sse.start(endpoint)}
           disabled={streaming || disabled}
           title={disabled ? disabledHint : ''}
-          className="ml-auto inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+          className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
           data-testid={`ai-${kind}-btn`}
         >
           {streaming ? (
@@ -549,6 +630,7 @@ interface BodyGenCardProps {
   chapters?: Chapter[]
   hasOutline: boolean
   isWriting: boolean
+  globalJob?: AiJob
 }
 
 /**
@@ -556,11 +638,31 @@ interface BodyGenCardProps {
  *   补章 → ai-beats → 逐 beat ai-write → update chapter
  * 所有编排在 useFullBook hook 里，这里只负责 UI + 目标章节数选择。
  */
-function BodyGenCard({ projectId, chapters, hasOutline, isWriting }: BodyGenCardProps) {
+function BodyGenCard({
+  projectId,
+  chapters,
+  hasOutline,
+  isWriting,
+  globalJob,
+}: BodyGenCardProps) {
   const { progress, run, abort } = useFullBook()
   const [target, setTarget] = useState(6)
   const chapterCount = chapters?.length ?? 0
   const totalWords = chapters?.reduce((a, c) => a + c.word_count, 0) ?? 0
+  const remoteRunning = globalJob?.kind === 'full_book'
+  const activeProgress = progress.running
+    ? progress
+    : remoteRunning
+      ? {
+          running: true,
+          chapter: globalJob.chapter,
+          totalChapters: globalJob.totalChapters,
+          beat: globalJob.beat,
+          totalBeats: globalJob.totalBeats,
+          chars: globalJob.chars,
+          liveBody: globalJob.liveBody,
+        }
+      : progress
   const blocked = !isWriting || !hasOutline
   const blockedHint = !isWriting
     ? '项目已定稿，正文不可再生成。'
@@ -576,7 +678,7 @@ function BodyGenCard({ projectId, chapters, hasOutline, isWriting }: BodyGenCard
       <header className="flex items-center gap-2 mb-3">
         <Sparkles className="h-4 w-4 text-violet-600" />
         <h2 className="text-sm font-semibold">正文</h2>
-        {chapterCount > 0 && !progress.running && (
+        {chapterCount > 0 && !activeProgress.running && (
           <span className="text-[10px] text-gray-400">
             {chapterCount} 章 · {totalWords} 字
           </span>
@@ -593,7 +695,7 @@ function BodyGenCard({ projectId, chapters, hasOutline, isWriting }: BodyGenCard
                 const v = parseInt(e.target.value, 10)
                 if (Number.isFinite(v)) setTarget(v)
               }}
-              disabled={progress.running || blocked}
+              disabled={activeProgress.running || blocked}
               className="w-14 rounded border border-gray-200 bg-white px-2 py-1 text-xs disabled:bg-gray-50"
               data-testid="body-target-input"
             />
@@ -602,18 +704,18 @@ function BodyGenCard({ projectId, chapters, hasOutline, isWriting }: BodyGenCard
           <button
             type="button"
             onClick={() => run({ projectId, target })}
-            disabled={progress.running || blocked}
+            disabled={activeProgress.running || blocked}
             title={blocked ? blockedHint : '基于章节标题：补齐到 N 章 → 每章 AI 拆段 + 写满'}
             className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
             data-testid="ai-body-btn"
           >
-            {progress.running ? (
+            {activeProgress.running ? (
               <Loader2 className="h-3 w-3 animate-spin" />
             ) : (
               <Rocket className="h-3 w-3" />
             )}
-            {progress.running
-              ? `第 ${progress.chapter}/${progress.totalChapters} 章 · 段 ${progress.beat}/${progress.totalBeats} · ${progress.chars}字`
+            {activeProgress.running
+              ? `第 ${activeProgress.chapter}/${activeProgress.totalChapters} 章 · 段 ${activeProgress.beat}/${activeProgress.totalBeats} · ${activeProgress.chars}字`
               : chapterCount > 0
                 ? '续写正文'
                 : 'AI 一键全篇'}
@@ -637,6 +739,29 @@ function BodyGenCard({ projectId, chapters, hasOutline, isWriting }: BodyGenCard
         <p className="text-xs text-rose-600 inline-flex items-center gap-1 mb-2">
           <TriangleAlert className="h-3 w-3" /> 生成失败：{progress.error}
         </p>
+      )}
+      {activeProgress.running && (
+        <div
+          className="mb-3 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700"
+          data-testid="body-live-status"
+        >
+          AI 生成中 · 第 {activeProgress.chapter}/{activeProgress.totalChapters} 章 · 段{' '}
+          {activeProgress.beat}/{activeProgress.totalBeats}
+          {activeProgress.chars > 0 ? ` · ${activeProgress.chars}字` : ''}
+        </div>
+      )}
+      {activeProgress.liveBody?.text && (
+        <div
+          className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 p-3"
+          data-testid="body-live-preview"
+        >
+          <div className="mb-1 text-xs font-semibold text-emerald-700">
+            正在生成章节预览
+          </div>
+          <div className="whitespace-pre-wrap text-[12px] leading-6 text-gray-800">
+            {activeProgress.liveBody.text}
+          </div>
+        </div>
       )}
 
       {chapterCount > 0 ? (

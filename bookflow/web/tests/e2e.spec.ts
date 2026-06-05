@@ -67,3 +67,45 @@ test('待发 → 已发 → 归档 状态机推进', async ({ page, request }) =
   await page.goto('/archived')
   await expect(page.getByTestId('project-card').filter({ hasText: proj.title })).toBeVisible()
 })
+
+test('全书汇总：详情页可生成汇总和优化版', async ({ page, request }) => {
+  const title = `e2e汇总-${Date.now()}-她签下离婚协议那天`.slice(0, 25)
+  const seed = await request
+    .post('/api/seeds', {
+      data: {
+        title,
+        track: '现言婚恋火葬场',
+        score: { title: 5, opening: 5, slap: 5, emotion: 4, twist: 4, hook: 5, finish: 5 },
+      },
+    })
+    .then((r) => r.json())
+  const proj = await request
+    .post('/api/projects', { data: { seed_id: seed.id } })
+    .then((r) => r.json())
+
+  const c1 = await request
+    .post(`/api/projects/${proj.id}/chapters`, { data: { title: '第一章' } })
+    .then((r) => r.json())
+  const c2 = await request
+    .post(`/api/projects/${proj.id}/chapters`, { data: { title: '第二章' } })
+    .then((r) => r.json())
+  await request.put(`/api/chapters/${c1.id}`, {
+    data: { title: '第一章', body: '第一章正文。她在签字前先把婚戒摘了下来。' },
+  })
+  await request.put(`/api/chapters/${c2.id}`, {
+    data: { title: '第二章', body: '第二章正文。他追到民政局门口时她已经上车。' },
+  })
+
+  await page.goto(`/projects/${proj.id}`)
+  await page.getByTestId('ai-book_summary-btn').click()
+  await expect(page.getByTestId('book_summary-content')).not.toHaveText('', {
+    timeout: 120_000,
+  })
+  await expect(page.getByTestId('copy-book_summary-btn')).toBeVisible()
+
+  await page.getByTestId('ai-book_polished-btn').click()
+  await expect(page.getByTestId('book_polished-content')).not.toHaveText('', {
+    timeout: 120_000,
+  })
+  await expect(page.getByTestId('copy-book_polished-btn')).toBeVisible()
+})

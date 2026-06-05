@@ -12,7 +12,13 @@ export interface Project {
   updated_at: string
 }
 
-export type ArtifactKind = 'readme' | 'outline' | 'publish_post' | 'side_dishes'
+export type ArtifactKind =
+  | 'readme'
+  | 'outline'
+  | 'publish_post'
+  | 'side_dishes'
+  | 'book_summary'
+  | 'book_polished'
 
 export interface ProjectArtifact {
   id: string

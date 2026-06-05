@@ -32,9 +32,10 @@ mod ai;
 mod docs;
 mod settings;
 use ai::{
-    beats_for_chapter, generate_seeds, score_seed, stream_outline, stream_publish_post,
-    stream_readme, stream_side_dishes, stream_write_paragraph, write_paragraph, AiClient,
-    AiConfig, AiScoreRequest, AiScoreResponse, AiSeedGenerated, StreamEvent,
+    beats_for_chapter, generate_seeds, score_seed, stream_book_polish, stream_book_summary,
+    stream_outline, stream_publish_post, stream_readme, stream_side_dishes, stream_write_paragraph,
+    write_paragraph, AiClient, AiConfig, AiScoreRequest, AiScoreResponse, AiSeedGenerated,
+    StreamEvent,
 };
 use docs::DocRoot;
 use settings::{Settings, SettingsPatch, SettingsRepo};
@@ -116,6 +117,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects/:id/ai-outline/stream", post(ai_outline_stream))
         .route("/api/projects/:id/ai-publish/stream", post(ai_publish_stream))
         .route("/api/projects/:id/ai-side-dishes/stream", post(ai_side_dishes_stream))
+        .route("/api/projects/:id/ai-book-summary/stream", post(ai_book_summary_stream))
+        .route("/api/projects/:id/ai-book-polish/stream", post(ai_book_polish_stream))
         .route("/api/projects/:id/chapters", get(list_chapters).post(create_chapter))
         .route("/api/chapters/:id", put(update_chapter))
         .route("/api/chapters/:id/ai-beats", post(ai_chapter_beats))
@@ -1026,6 +1029,157 @@ async fn ai_side_dishes_stream(
     }))
 }
 
+async fn ai_book_summary_stream(
+    State(s): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
+    const BOOK_SUMMARY_SOURCE_MAX_CHARS: usize = 12_000;
+
+    s.projects.get(project_id).await.map_err(AppError::Storage)?;
+    let chapters = s
+        .chapters
+        .list_by_project(project_id)
+        .await
+        .map_err(AppError::Storage)?;
+    let full_book_source = build_full_book_source(chapters)
+        .ok_or_else(|| {
+            AppError::Storage(bookflow_storage::StorageError::Conflict(
+                "先生成至少一章正文，再汇总".into(),
+            ))
+        })?;
+    let full_book_source = take_chars(&full_book_source, BOOK_SUMMARY_SOURCE_MAX_CHARS);
+    let rx = stream_book_summary(&s.ai, &full_book_source).await;
+    let artifacts = s.artifacts.clone();
+    Ok(sse_from_stream(rx, move |full| async move {
+        artifacts
+            .save(project_id, ArtifactKind::BookSummary, &full)
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("{e:#}"))
+    }))
+}
+
+async fn ai_book_polish_stream(
+    State(s): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
+    s.projects.get(project_id).await.map_err(AppError::Storage)?;
+    let artifacts = s
+        .artifacts
+        .latest_all(project_id)
+        .await
+        .map_err(AppError::Storage)?;
+    let summary = artifacts
+        .iter()
+        .find(|a| a.kind == ArtifactKind::BookSummary)
+        .map(|a| a.content.clone())
+        .unwrap_or_default();
+    if summary.trim().is_empty() {
+        return Err(AppError::Storage(bookflow_storage::StorageError::Conflict(
+            "先生成全书汇总，再做优化升华".into(),
+        )));
+    }
+    let rx = stream_book_polish(&s.ai, &summary).await;
+    let artifact_repo = s.artifacts.clone();
+    Ok(sse_from_stream(rx, move |full| async move {
+        artifact_repo
+            .save(project_id, ArtifactKind::BookPolished, &full)
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("{e:#}"))
+    }))
+}
+
 fn take_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
+}
+
+fn build_full_book_source(mut chapters: Vec<Chapter>) -> Option<String> {
+    chapters.sort_by_key(|chapter| chapter.idx);
+    let parts = chapters
+        .into_iter()
+        .filter_map(|chapter| {
+            let body = chapter.body.trim().to_string();
+            if body.is_empty() {
+                None
+            } else {
+                let title = chapter.title.trim();
+                let heading = if title.is_empty() {
+                    format!("# 第{}章", chapter.idx)
+                } else {
+                    format!("# 第{}章 {}", chapter.idx, title)
+                };
+                Some(format!("{heading}\n\n{body}"))
+            }
+        })
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_full_book_source;
+    use bookflow_domain::Chapter;
+    use uuid::Uuid;
+
+    #[test]
+    fn build_full_book_source_sorts_and_skips_empty_bodies() {
+        let project_id = Uuid::new_v4();
+        let chapters = vec![
+            Chapter {
+                id: Uuid::new_v4(),
+                project_id,
+                idx: 2,
+                title: "第二章".into(),
+                beats: vec![],
+                body: "第二章正文".into(),
+                word_count: 5,
+                updated_at: chrono::Utc::now(),
+            },
+            Chapter {
+                id: Uuid::new_v4(),
+                project_id,
+                idx: 1,
+                title: "  ".into(),
+                beats: vec![],
+                body: "第一章正文".into(),
+                word_count: 5,
+                updated_at: chrono::Utc::now(),
+            },
+            Chapter {
+                id: Uuid::new_v4(),
+                project_id,
+                idx: 3,
+                title: "第三章".into(),
+                beats: vec![],
+                body: "   ".into(),
+                word_count: 0,
+                updated_at: chrono::Utc::now(),
+            },
+            Chapter {
+                id: Uuid::new_v4(),
+                project_id,
+                idx: 0,
+                title: "序章".into(),
+                beats: vec![],
+                body: "序章正文".into(),
+                word_count: 4,
+                updated_at: chrono::Utc::now(),
+            },
+        ];
+
+        let full = build_full_book_source(chapters);
+
+        assert_eq!(
+            full,
+            Some(
+                "# 第0章 序章\n\n序章正文\n\n# 第1章\n\n第一章正文\n\n# 第2章 第二章\n\n第二章正文"
+                    .into()
+            )
+        );
+    }
 }

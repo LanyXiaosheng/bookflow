@@ -41,9 +41,8 @@ impl Provider {
 
 impl AiConfig {
     pub fn from_env() -> Result<Self> {
-        let provider = Provider::parse(
-            &std::env::var("AI_PROVIDER").unwrap_or_else(|_| "anthropic".into()),
-        );
+        let provider =
+            Provider::parse(&std::env::var("AI_PROVIDER").unwrap_or_else(|_| "anthropic".into()));
         let base_url = std::env::var("AI_BASE_URL").context("AI_BASE_URL 未设置")?;
         let api_key = std::env::var("AI_API_KEY").context("AI_API_KEY 未设置")?;
         let model = std::env::var("AI_MODEL").context("AI_MODEL 未设置")?;
@@ -53,7 +52,13 @@ impl AiConfig {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(60),
         );
-        Ok(Self { provider, base_url, api_key, model, timeout })
+        Ok(Self {
+            provider,
+            base_url,
+            api_key,
+            model,
+            timeout,
+        })
     }
 }
 
@@ -69,7 +74,10 @@ impl AiClient {
             .timeout(cfg.timeout)
             .build()
             .context("构建 reqwest client 失败")?;
-        Ok(Self { cfg: Arc::new(RwLock::new(cfg)), http })
+        Ok(Self {
+            cfg: Arc::new(RwLock::new(cfg)),
+            http,
+        })
     }
 
     /// 热替换配置（Settings PUT 后调用）。注意：timeout 改了不会重建 http client，下次重启生效。
@@ -128,10 +136,7 @@ impl AiClient {
     }
 
     async fn complete_openai(&self, cfg: &AiConfig, system: &str, user: &str) -> Result<String> {
-        let url = format!(
-            "{}/v1/chat/completions",
-            cfg.base_url.trim_end_matches('/')
-        );
+        let url = format!("{}/v1/chat/completions", cfg.base_url.trim_end_matches('/'));
         let body = json!({
             "model": cfg.model,
             "temperature": 0.4,
@@ -154,8 +159,8 @@ impl AiClient {
         if !status.is_success() {
             return Err(anyhow!("openai {} : {}", status, text));
         }
-        let parsed: OpenAiResp = serde_json::from_str(&text)
-            .with_context(|| format!("解析 openai 响应失败: {text}"))?;
+        let parsed: OpenAiResp =
+            serde_json::from_str(&text).with_context(|| format!("解析 openai 响应失败: {text}"))?;
         let out = parsed
             .choices
             .into_iter()
@@ -250,14 +255,11 @@ async fn stream_anthropic(
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
                         match v.get("type").and_then(|t| t.as_str()) {
                             Some("content_block_delta") => {
-                                if let Some(text) = v
-                                    .pointer("/delta/text")
-                                    .and_then(|t| t.as_str())
+                                if let Some(text) =
+                                    v.pointer("/delta/text").and_then(|t| t.as_str())
                                 {
                                     if !text.is_empty() {
-                                        tx.send(StreamEvent::Delta(text.to_string()))
-                                            .await
-                                            .ok();
+                                        tx.send(StreamEvent::Delta(text.to_string())).await.ok();
                                     }
                                 }
                             }
@@ -287,10 +289,7 @@ async fn stream_openai(
     max_tokens: u32,
     tx: mpsc::Sender<StreamEvent>,
 ) -> Result<()> {
-    let url = format!(
-        "{}/v1/chat/completions",
-        cfg.base_url.trim_end_matches('/')
-    );
+    let url = format!("{}/v1/chat/completions", cfg.base_url.trim_end_matches('/'));
     let body = json!({
         "model": cfg.model,
         "temperature": 0.4,
@@ -352,7 +351,9 @@ struct AnthropicResp {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AnthropicBlock {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -389,24 +390,25 @@ pub struct AiScoreResponse {
 
 const SCORE_SYSTEM: &str = include_str!("ai_prompts/seed_scorer.system.md");
 
-pub async fn score_seed(
-    client: &AiClient,
-    req: &AiScoreRequest<'_>,
-) -> Result<AiScoreResponse> {
+pub async fn score_seed(client: &AiClient, req: &AiScoreRequest<'_>) -> Result<AiScoreResponse> {
     let user = format!(
         "标题：{}\n赛道：{}\n\n请按 schema 严格只回 JSON。",
         req.title, req.track
     );
     let raw = client.complete_json(SCORE_SYSTEM, &user).await?;
-    let json_str = extract_json(&raw)
-        .with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
-    let parsed: AiScoreResponse = serde_json::from_str(json_str)
-        .with_context(|| format!("AI JSON 解析失败：{json_str}"))?;
+    let json_str = extract_json(&raw).with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
+    let parsed: AiScoreResponse =
+        serde_json::from_str(json_str).with_context(|| format!("AI JSON 解析失败：{json_str}"))?;
     // 兜底：让分数落在 1..=5
     let s = &parsed.score;
     for (name, v) in [
-        ("title", s.title), ("opening", s.opening), ("slap", s.slap),
-        ("emotion", s.emotion), ("twist", s.twist), ("hook", s.hook), ("finish", s.finish),
+        ("title", s.title),
+        ("opening", s.opening),
+        ("slap", s.slap),
+        ("emotion", s.emotion),
+        ("twist", s.twist),
+        ("hook", s.hook),
+        ("finish", s.finish),
     ] {
         if !(1..=5).contains(&v) {
             return Err(anyhow!("AI 给出 {} = {} 越界", name, v));
@@ -433,6 +435,8 @@ const README_SYSTEM: &str = include_str!("ai_prompts/project_readme.system.md");
 const OUTLINE_SYSTEM: &str = include_str!("ai_prompts/project_outline.system.md");
 const PUBLISH_SYSTEM: &str = include_str!("ai_prompts/project_publish.system.md");
 const SIDE_DISHES_SYSTEM: &str = include_str!("ai_prompts/project_side_dishes.system.md");
+const BOOK_SUMMARY_SYSTEM: &str = include_str!("ai_prompts/project_book_summary.system.md");
+const BOOK_POLISH_SYSTEM: &str = include_str!("ai_prompts/project_book_polish.system.md");
 
 pub async fn stream_readme(
     client: &AiClient,
@@ -444,17 +448,18 @@ pub async fn stream_readme(
     let user = format!(
         "标题：{title}\n赛道：{track}\n评分总分：{score_total}\n今天：{today}\n\n请按 README 模板输出。"
     );
-    client.stream_text(README_SYSTEM.to_string(), user, 2000).await
+    client
+        .stream_text(README_SYSTEM.to_string(), user, 2000)
+        .await
 }
 
-pub async fn stream_outline(
-    client: &AiClient,
-    readme_md: &str,
-) -> mpsc::Receiver<StreamEvent> {
+pub async fn stream_outline(client: &AiClient, readme_md: &str) -> mpsc::Receiver<StreamEvent> {
     let user = format!(
         "项目 README：\n\n{readme_md}\n\n请按大纲模板输出（故事主线 + 10 章细纲 + 爆点节奏表）。"
     );
-    client.stream_text(OUTLINE_SYSTEM.to_string(), user, 4000).await
+    client
+        .stream_text(OUTLINE_SYSTEM.to_string(), user, 4000)
+        .await
 }
 
 pub async fn stream_publish_post(
@@ -466,7 +471,9 @@ pub async fn stream_publish_post(
     let user = format!(
         "README:\n{readme_md}\n\n大纲:\n{outline_md}\n\n正文节选（仅供风格参考）:\n{body_excerpt}\n\n请输出发布稿。"
     );
-    client.stream_text(PUBLISH_SYSTEM.to_string(), user, 8000).await
+    client
+        .stream_text(PUBLISH_SYSTEM.to_string(), user, 8000)
+        .await
 }
 
 pub async fn stream_side_dishes(
@@ -478,7 +485,31 @@ pub async fn stream_side_dishes(
     let user = format!(
         "README:\n{readme_md}\n\n大纲:\n{outline_md}\n\n正文节选（用于挑选段引流）:\n{body_excerpt}\n\n请输出配套.md。"
     );
-    client.stream_text(SIDE_DISHES_SYSTEM.to_string(), user, 2000).await
+    client
+        .stream_text(SIDE_DISHES_SYSTEM.to_string(), user, 2000)
+        .await
+}
+
+pub async fn stream_book_summary(
+    client: &AiClient,
+    full_book_source: &str,
+) -> mpsc::Receiver<StreamEvent> {
+    let user =
+        format!("下面是按章节整理的全书原稿：\n\n{full_book_source}\n\n请整合成一版连贯完整正文。");
+    client
+        .stream_text(BOOK_SUMMARY_SYSTEM.to_string(), user, 12000)
+        .await
+}
+
+pub async fn stream_book_polish(
+    client: &AiClient,
+    summary_body: &str,
+) -> mpsc::Receiver<StreamEvent> {
+    let user =
+        format!("下面是一版完整正文：\n\n{summary_body}\n\n请在不改变剧情事实的前提下做优化升华。");
+    client
+        .stream_text(BOOK_POLISH_SYSTEM.to_string(), user, 12000)
+        .await
 }
 
 // === 章节 AI 拆 beats ===
@@ -500,8 +531,7 @@ pub async fn beats_for_chapter(
         "项目：{project_title}\n赛道：{track}\n章节标题：{chapter_title}\n\n请按 schema 严格只回 JSON。"
     );
     let raw = client.complete_json(BEATS_SYSTEM, &user).await?;
-    let json_str = extract_json(&raw)
-        .with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
+    let json_str = extract_json(&raw).with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
     let parsed: BeatsResp = match serde_json::from_str(json_str) {
         Ok(p) => p,
         Err(first_err) => {
@@ -564,7 +594,9 @@ pub async fn stream_write_paragraph(
         "项目：{project_title}\n赛道：{track}\n章节：{chapter_title}\n\n本段 beat：{} — {}\n\n{prev}\n\n直接写正文段落。",
         beat.label, beat.note,
     );
-    client.stream_text(WRITE_SYSTEM.to_string(), user, 1600).await
+    client
+        .stream_text(WRITE_SYSTEM.to_string(), user, 1600)
+        .await
 }
 
 // === 选题批量生成 ===
@@ -587,8 +619,7 @@ pub struct AiSeedGenerated {
 pub async fn generate_seeds(client: &AiClient, track: &str) -> Result<AiSeedGenerated> {
     let user = format!("赛道：{track}\n\n请按 schema 严格只回 JSON。");
     let raw = client.complete_json(GENERATOR_SYSTEM, &user).await?;
-    let json_str = extract_json(&raw)
-        .with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
+    let json_str = extract_json(&raw).with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
     let parsed: AiSeedGenerated = match serde_json::from_str(json_str) {
         Ok(p) => p,
         Err(first_err) => {
@@ -610,8 +641,13 @@ pub async fn generate_seeds(client: &AiClient, track: &str) -> Result<AiSeedGene
     for c in &parsed.candidates {
         let s = &c.score;
         for (name, v) in [
-            ("title", s.title), ("opening", s.opening), ("slap", s.slap),
-            ("emotion", s.emotion), ("twist", s.twist), ("hook", s.hook), ("finish", s.finish),
+            ("title", s.title),
+            ("opening", s.opening),
+            ("slap", s.slap),
+            ("emotion", s.emotion),
+            ("twist", s.twist),
+            ("hook", s.hook),
+            ("finish", s.finish),
         ] {
             if !(1..=5).contains(&v) {
                 return Err(anyhow!("AI 给出 {} = {} 越界 (标题: {})", name, v, c.title));
@@ -631,5 +667,19 @@ mod tests {
         let j = extract_json(raw).unwrap();
         let r: AiScoreResponse = serde_json::from_str(j).unwrap();
         assert_eq!(r.score.title, 5);
+    }
+
+    #[test]
+    fn summary_prompt_mentions_full_book_rewrite() {
+        let system = BOOK_SUMMARY_SYSTEM;
+        assert!(system.contains("连贯"));
+        assert!(system.contains("完整正文"));
+    }
+
+    #[test]
+    fn polish_prompt_mentions_de_ai_and_immersion() {
+        let system = BOOK_POLISH_SYSTEM;
+        assert!(system.contains("去 AI 味"));
+        assert!(system.contains("代入感"));
     }
 }

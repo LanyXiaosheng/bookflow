@@ -147,6 +147,7 @@ export function useFullBook() {
             beat: p.beat,
             totalBeats: p.totalBeats,
             chars: p.chars,
+            liveBody: p.liveBody,
             startedAt,
           })
         }

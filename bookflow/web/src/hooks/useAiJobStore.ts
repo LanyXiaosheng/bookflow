@@ -1,11 +1,12 @@
 /**
  * AI 任务全局状态 store
  *
- * 用 localStorage + window event 做跨页面同步：
- * - useFullBook 跑全篇时写入 ai_jobs[projectId]
- * - ProjectList / Dashboard / 项目详情页订阅 → 显示「⚡ AI 生成中」徽章
+ * 轻量进度用 localStorage + window event 做跨页面同步：
+ * - 持久化 chapter/beat/chars 等轻量字段，供跨 tab / 跨页面读取
+ * - liveBody 只保存在当前 tab 的内存里，避免每个流式 delta 都写 localStorage
+ * - 读取时合并持久化进度和内存态 richer payload；同 tab 优先返回内存态
  *
- * 不打 schema、不靠后端，纯前端 ephemeral 信号。停电就丢，无所谓。
+ * 不打 schema、不靠后端，纯前端 ephemeral 信号。刷新后 liveBody 会丢，轻量进度照旧。
  */
 import { useEffect, useState } from 'react'
 
@@ -23,22 +24,50 @@ export interface AiJob {
   totalBeats: number
   /** 累积字数（流式） */
   chars: number
+  liveBody?: { chapterId: string; text: string }
   startedAt: number
 }
 
 type AiJobs = Record<string, AiJob>
+type PersistedAiJob = Omit<AiJob, 'liveBody'>
+type PersistedAiJobs = Record<string, PersistedAiJob>
 
-function read(): AiJobs {
+const memoryJobs: AiJobs = {}
+
+function readPersisted(): PersistedAiJobs {
   try {
     const raw = localStorage.getItem(KEY)
     if (!raw) return {}
-    return JSON.parse(raw) as AiJobs
+    return JSON.parse(raw) as PersistedAiJobs
   } catch {
     return {}
   }
 }
 
-function write(jobs: AiJobs) {
+function mergeJobs(persisted: PersistedAiJobs): AiJobs {
+  const merged: AiJobs = {}
+  for (const [projectId, job] of Object.entries(persisted)) {
+    merged[projectId] = {
+      ...job,
+      ...memoryJobs[projectId],
+    }
+  }
+  for (const [projectId, job] of Object.entries(memoryJobs)) {
+    if (!(projectId in merged)) merged[projectId] = job
+  }
+  return merged
+}
+
+function read(): AiJobs {
+  return mergeJobs(readPersisted())
+}
+
+function stripLiveBody(job: AiJob): PersistedAiJob {
+  const { liveBody: _liveBody, ...persisted } = job
+  return persisted
+}
+
+function write(jobs: PersistedAiJobs) {
   try {
     localStorage.setItem(KEY, JSON.stringify(jobs))
   } catch {
@@ -48,16 +77,20 @@ function write(jobs: AiJobs) {
 }
 
 export function setAiJob(job: AiJob) {
-  const jobs = read()
-  jobs[job.projectId] = job
+  memoryJobs[job.projectId] = job
+  const jobs = readPersisted()
+  jobs[job.projectId] = stripLiveBody(job)
   write(jobs)
 }
 
 export function clearAiJob(projectId: string) {
-  const jobs = read()
+  delete memoryJobs[projectId]
+  const jobs = readPersisted()
   if (projectId in jobs) {
     delete jobs[projectId]
     write(jobs)
+  } else {
+    window.dispatchEvent(new CustomEvent(EVENT))
   }
 }
 
