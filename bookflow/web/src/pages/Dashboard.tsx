@@ -34,7 +34,7 @@ import {
 import { dashboardApi, type PipelineStage } from '../api/dashboard'
 import type { Seed } from '../api/seeds'
 import type { Project } from '../api/projects'
-import { useAllAiJobs } from '../hooks/useAiJobStore'
+import { aiJobKindLabel, useAllAiJobs, type AiJob } from '../hooks/useAiJobStore'
 
 const TRACK_TAGS = [
   { name: '现言婚恋火葬场', cls: 'border-orange-100 bg-orange-50 text-orange-700 hover:bg-orange-100' },
@@ -42,6 +42,13 @@ const TRACK_TAGS = [
   { name: '古言替嫁冲喜', cls: 'border-blue-100 bg-blue-50 text-blue-700 hover:bg-blue-100' },
   { name: '悬疑规则怪谈', cls: 'border-purple-100 bg-purple-50 text-purple-700 hover:bg-purple-100' },
 ]
+
+function renderAiJobText(job: AiJob): string {
+  if (job.kind === 'full_book' && job.chapter && job.totalChapters) {
+    return `AI 第 ${job.chapter}/${job.totalChapters} 章`
+  }
+  return `AI ${job.title || aiJobKindLabel(job.kind)}`
+}
 
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -657,7 +664,7 @@ function RecentOutput({
                   {job && (
                     <span className="inline-flex items-center gap-1 rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">
                       <Sparkles className="h-2.5 w-2.5 animate-pulse" />
-                      AI 第 {job.chapter}/{job.totalChapters} 章
+                      {renderAiJobText(job)}
                     </span>
                   )}
                 </span>

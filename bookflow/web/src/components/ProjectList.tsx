@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import { ArrowRight, FileText, Loader2, Sparkles, Trash2, TriangleAlert } from 'lucide-react'
 import { projectsApi, type Project, type ProjectStatus } from '../api/projects'
 import { chaptersApi } from '../api/chapters'
-import { useAllAiJobs } from '../hooks/useAiJobStore'
+import { aiJobKindLabel, useAllAiJobs, type AiJob } from '../hooks/useAiJobStore'
 import { useConfirm } from './ConfirmDialog'
 
 type FilterStatus = ProjectStatus | 'all'
@@ -56,6 +56,13 @@ const STATUS_TABS: Array<{ key: FilterStatus; label: string }> = [
   { key: 'published', label: '已发' },
   { key: 'archived', label: '归档' },
 ]
+
+function renderAiJobText(job: AiJob): string {
+  if (job.kind === 'full_book' && job.chapter && job.totalChapters) {
+    return `AI 生成中 · 第 ${job.chapter}/${job.totalChapters} 章 · 段 ${job.beat ?? 0}/${job.totalBeats ?? 0}`
+  }
+  return `AI 生成中 · ${job.title || aiJobKindLabel(job.kind)}`
+}
 
 export default function ProjectList({ status: initialStatus, title, emptyHint }: ProjectListProps) {
   const qc = useQueryClient()
@@ -206,7 +213,7 @@ export default function ProjectList({ status: initialStatus, title, emptyHint }:
                   data-testid="ai-job-badge"
                 >
                   <Sparkles className="h-3 w-3 animate-pulse" />
-                  AI 生成中 · 第 {job.chapter}/{job.totalChapters} 章 · 段 {job.beat}/{job.totalBeats}
+                  {renderAiJobText(job)}
                   {job.chars > 0 && <span className="text-violet-500">· {job.chars} 字</span>}
                 </div>
               )}

@@ -9,8 +9,11 @@ export interface SSEState {
 }
 
 export interface UseSSEOptions {
+  onStart?: () => void
+  onDelta?: (full: string) => void
   onDone?: (full: string) => void
   onError?: (message: string) => void
+  preserveOnUnmount?: boolean
 }
 
 interface ParsedEvent {
@@ -58,6 +61,7 @@ export function useSSE(opts: UseSSEOptions = {}) {
     error: null,
   })
   const abortRef = useRef<AbortController | null>(null)
+  const mountedRef = useRef(true)
   const optsRef = useRef(opts)
   optsRef.current = opts
 
@@ -65,7 +69,10 @@ export function useSSE(opts: UseSSEOptions = {}) {
     abortRef.current?.abort()
     const ac = new AbortController()
     abortRef.current = ac
-    setState({ status: 'streaming', text: '', error: null })
+    if (mountedRef.current) {
+      setState({ status: 'streaming', text: '', error: null })
+    }
+    optsRef.current.onStart?.()
 
     try {
       const resp = await fetch(url, {
@@ -79,7 +86,9 @@ export function useSSE(opts: UseSSEOptions = {}) {
       })
       if (!resp.ok || !resp.body) {
         const msg = `HTTP ${resp.status}`
-        setState({ status: 'error', text: '', error: msg })
+        if (mountedRef.current) {
+          setState({ status: 'error', text: '', error: msg })
+        }
         optsRef.current.onError?.(msg)
         return
       }
@@ -101,7 +110,10 @@ export function useSSE(opts: UseSSEOptions = {}) {
             try {
               const { text } = JSON.parse(ev.data) as { text: string }
               acc += text
-              setState((s) => ({ ...s, text: acc }))
+              optsRef.current.onDelta?.(acc)
+              if (mountedRef.current) {
+                setState((s) => ({ ...s, text: acc }))
+              }
             } catch {
               // 忽略坏帧
             }
@@ -119,19 +131,27 @@ export function useSSE(opts: UseSSEOptions = {}) {
       }
 
       if (errored) {
-        setState({ status: 'error', text: acc, error: errored })
+        if (mountedRef.current) {
+          setState({ status: 'error', text: acc, error: errored })
+        }
         optsRef.current.onError?.(errored)
       } else {
-        setState({ status: 'done', text: acc, error: null })
+        if (mountedRef.current) {
+          setState({ status: 'done', text: acc, error: null })
+        }
         optsRef.current.onDone?.(acc)
       }
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
-        setState({ status: 'idle', text: '', error: null })
+        if (mountedRef.current) {
+          setState({ status: 'idle', text: '', error: null })
+        }
         return
       }
       const msg = (e as Error).message || 'network error'
-      setState((s) => ({ ...s, status: 'error', error: msg }))
+      if (mountedRef.current) {
+        setState((s) => ({ ...s, status: 'error', error: msg }))
+      }
       optsRef.current.onError?.(msg)
     }
   }, [])
@@ -145,7 +165,15 @@ export function useSSE(opts: UseSSEOptions = {}) {
     setState({ status: 'idle', text: '', error: null })
   }, [])
 
-  useEffect(() => () => abortRef.current?.abort(), [])
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (!optsRef.current.preserveOnUnmount) {
+        abortRef.current?.abort()
+      }
+    }
+  }, [])
 
   return { ...state, start, abort, reset }
 }

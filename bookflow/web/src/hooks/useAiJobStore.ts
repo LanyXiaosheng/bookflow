@@ -3,33 +3,59 @@
  *
  * 轻量进度用 localStorage + window event 做跨页面同步：
  * - 持久化 chapter/beat/chars 等轻量字段，供跨 tab / 跨页面读取
- * - liveBody 只保存在当前 tab 的内存里，避免每个流式 delta 都写 localStorage
+ * - liveBody / previewText 只保存在当前 tab 的内存里，避免每个流式 delta 都写 localStorage
  * - 读取时合并持久化进度和内存态 richer payload；同 tab 优先返回内存态
  *
- * 不打 schema、不靠后端，纯前端 ephemeral 信号。刷新后 liveBody 会丢，轻量进度照旧。
+ * 不打 schema、不靠后端，纯前端 ephemeral 信号。刷新后 liveBody / previewText 会丢，轻量进度照旧。
  */
 import { useEffect, useState } from 'react'
+import type { ArtifactKind } from '../api/projects'
 
 const KEY = 'bookflow.ai_jobs.v1'
 const EVENT = 'bookflow:ai-jobs-changed'
 
+export type AiJobKind = 'full_book' | 'full_chapter' | ArtifactKind
+
+export function aiJobKindLabel(kind: AiJobKind): string {
+  switch (kind) {
+    case 'full_book':
+      return '正文'
+    case 'full_chapter':
+      return '全章'
+    case 'readme':
+      return 'README'
+    case 'outline':
+      return '大纲'
+    case 'publish_post':
+      return '发布稿'
+    case 'side_dishes':
+      return '配套素材'
+    case 'book_summary':
+      return '全书汇总'
+    case 'book_polished':
+      return '优化升华'
+  }
+}
+
 export interface AiJob {
   projectId: string
   /** 哪个动作 */
-  kind: 'full_book' | 'full_chapter'
+  kind: AiJobKind
+  title?: string
   /** 0..total */
-  chapter: number
-  totalChapters: number
-  beat: number
-  totalBeats: number
+  chapter?: number
+  totalChapters?: number
+  beat?: number
+  totalBeats?: number
   /** 累积字数（流式） */
   chars: number
   liveBody?: { chapterId: string; text: string }
+  previewText?: string
   startedAt: number
 }
 
 type AiJobs = Record<string, AiJob>
-type PersistedAiJob = Omit<AiJob, 'liveBody'>
+type PersistedAiJob = Omit<AiJob, 'liveBody' | 'previewText'>
 type PersistedAiJobs = Record<string, PersistedAiJob>
 
 const memoryJobs: AiJobs = {}
@@ -63,7 +89,7 @@ function read(): AiJobs {
 }
 
 function stripLiveBody(job: AiJob): PersistedAiJob {
-  const { liveBody: _liveBody, ...persisted } = job
+  const { liveBody: _liveBody, previewText: _previewText, ...persisted } = job
   return persisted
 }
 

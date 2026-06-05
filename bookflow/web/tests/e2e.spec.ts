@@ -69,6 +69,8 @@ test('待发 → 已发 → 归档 状态机推进', async ({ page, request }) =
 })
 
 test('全书汇总：详情页可生成汇总和优化版', async ({ page, request }) => {
+  test.setTimeout(180_000)
+
   const title = `e2e汇总-${Date.now()}-她签下离婚协议那天`.slice(0, 25)
   const seed = await request
     .post('/api/seeds', {

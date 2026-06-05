@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
@@ -16,7 +16,12 @@ import {
 } from 'lucide-react'
 import { projectsApi, type ArtifactKind, type ProjectArtifact } from '../api/projects'
 import { chaptersApi, type Chapter } from '../api/chapters'
-import { useAiJob, type AiJob } from '../hooks/useAiJobStore'
+import {
+  clearAiJob,
+  setAiJob,
+  useAiJob,
+  type AiJob,
+} from '../hooks/useAiJobStore'
 import { useSSE } from '../hooks/useSSE'
 import { useFullBook } from '../hooks/useFullBook'
 import { usePipeline } from '../hooks/usePipeline'
@@ -173,12 +178,14 @@ export default function ProjectDetail() {
             projectId={projectId}
             readme={readme}
             onDone={refreshArtifacts}
+            globalJob={aiJob}
           />
           <OutlineCard
             projectId={projectId}
             outline={outline}
             hasReadme={!!readme}
             onDone={refreshArtifacts}
+            globalJob={aiJob}
           />
           <BodyGenCard
             projectId={projectId}
@@ -200,6 +207,7 @@ export default function ProjectDetail() {
             emptyHint="AI 会基于全章节正文整合出一版连贯完整正文。"
             onDone={refreshArtifacts}
             copyable
+            globalJob={aiJob}
           />
           <ArtifactStreamCard
             projectId={projectId}
@@ -212,6 +220,7 @@ export default function ProjectDetail() {
             emptyHint="基于全书汇总继续去 AI 味、增强代入感和爽点节奏。"
             onDone={refreshArtifacts}
             copyable
+            globalJob={aiJob}
           />
           <ArtifactStreamCard
             projectId={projectId}
@@ -223,6 +232,7 @@ export default function ProjectDetail() {
             disabledHint="先生成 README 和大纲，再生成发布稿。"
             emptyHint="生成面向平台发布的标题、简介、卖点和正文引流文案。"
             onDone={refreshArtifacts}
+            globalJob={aiJob}
           />
           <ArtifactStreamCard
             projectId={projectId}
@@ -234,6 +244,7 @@ export default function ProjectDetail() {
             disabledHint="先生成 README 和大纲，再生成配套素材。"
             emptyHint="生成配套.md：标题变体、短视频钩子、评论区话术、封面关键词等。"
             onDone={refreshArtifacts}
+            globalJob={aiJob}
           />
         </div>
 
@@ -407,9 +418,11 @@ interface ArtifactStreamCardProps {
   emptyHint: string
   onDone: () => void
   copyable?: boolean
+  globalJob?: AiJob
 }
 
 function ArtifactStreamCard({
+  projectId,
   kind,
   title,
   artifact,
@@ -419,11 +432,46 @@ function ArtifactStreamCard({
   emptyHint,
   onDone,
   copyable = false,
+  globalJob,
 }: ArtifactStreamCardProps) {
-  const sse = useSSE({ onDone })
+  const activeJob = globalJob?.kind === kind ? globalJob : undefined
+  const startedAtRef = useRef(0)
+  const sse = useSSE({
+    preserveOnUnmount: true,
+    onStart: () => {
+      startedAtRef.current = Date.now()
+      setAiJob({
+        projectId,
+        kind,
+        title,
+        chars: 0,
+        previewText: '',
+        startedAt: startedAtRef.current,
+      })
+    },
+    onDelta: (full) => {
+      setAiJob({
+        projectId,
+        kind,
+        title,
+        chars: Array.from(full).length,
+        previewText: full,
+        startedAt: startedAtRef.current || Date.now(),
+      })
+    },
+    onDone: () => {
+      clearAiJob(projectId)
+      onDone()
+    },
+    onError: () => {
+      clearAiJob(projectId)
+    },
+  })
   const [copyState, setCopyState] = useState<'idle' | 'done' | 'error'>('idle')
-  const streaming = sse.status === 'streaming'
-  const display = sse.text || artifact?.content || ''
+  const streaming = sse.status === 'streaming' || !!activeJob
+  const display = sse.text || activeJob?.previewText || artifact?.content || ''
+  const statusTitle = activeJob?.title || title
+  const statusChars = activeJob?.chars ?? Array.from(sse.text).length
 
   return (
     <section
@@ -468,6 +516,16 @@ function ArtifactStreamCard({
       </header>
 
       {disabled && <p className="text-xs text-gray-400 mb-2">{disabledHint}</p>}
+      {streaming && (
+        <p
+          className="mb-2 inline-flex items-center gap-1 text-xs text-violet-700"
+          data-testid={`${kind}-live-status`}
+        >
+          <Sparkles className="h-3 w-3 animate-pulse" />
+          AI 生成中 · {statusTitle}
+          {statusChars > 0 ? ` · ${statusChars}字` : ''}
+        </p>
+      )}
       {sse.status === 'error' && (
         <p className="text-xs text-rose-600 inline-flex items-center gap-1 mb-2">
           <TriangleAlert className="h-3 w-3" /> 生成失败：{sse.error}
@@ -489,56 +547,23 @@ interface ReadmeCardProps {
   projectId: string
   readme?: ProjectArtifact
   onDone: () => void
+  globalJob?: AiJob
 }
 
-function ReadmeCard({ projectId, readme, onDone }: ReadmeCardProps) {
-  const sse = useSSE({ onDone })
-  const streaming = sse.status === 'streaming'
-  const display = sse.text || readme?.content || ''
-
+function ReadmeCard({ projectId, readme, onDone, globalJob }: ReadmeCardProps) {
   return (
-    <section
-      className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4"
-      data-testid="readme-card"
-    >
-      <header className="flex items-center gap-2 mb-3">
-        <Sparkles className="h-4 w-4 text-violet-600" />
-        <h2 className="text-sm font-semibold">项目 README</h2>
-        {readme && !streaming && (
-          <span className="text-[10px] text-gray-400">v{readme.version}</span>
-        )}
-        <button
-          type="button"
-          onClick={() => sse.start(`/api/projects/${projectId}/ai-readme/stream`)}
-          disabled={streaming}
-          className="ml-auto inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
-          data-testid="ai-readme-btn"
-        >
-          {streaming ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <Wand2 className="h-3 w-3" />
-          )}
-          {readme ? '重新生成' : 'AI 生成 README'}
-        </button>
-      </header>
-
-      {sse.status === 'error' && (
-        <p className="text-xs text-rose-600 inline-flex items-center gap-1 mb-2">
-          <TriangleAlert className="h-3 w-3" /> 生成失败：{sse.error}
-        </p>
-      )}
-
-      {display ? (
-        <MarkdownPreview content={display} maxHeightClass="max-h-[480px]" testId="readme-content">
-          {streaming && <span className="inline-block w-2 h-4 bg-violet-400 align-text-bottom animate-pulse ml-0.5" />}
-        </MarkdownPreview>
-      ) : (
-        <p className="text-xs text-gray-400">
-          点上面的按钮，让 AI 基于选题生成项目 README（包含赛道、目标、节奏、文风提醒）。
-        </p>
-      )}
-    </section>
+    <ArtifactStreamCard
+      projectId={projectId}
+      kind="readme"
+      title="项目 README"
+      artifact={readme}
+      endpoint={`/api/projects/${projectId}/ai-readme/stream`}
+      disabled={false}
+      disabledHint=""
+      emptyHint="点上面的按钮，让 AI 基于选题生成项目 README（包含赛道、目标、节奏、文风提醒）。"
+      onDone={onDone}
+      globalJob={globalJob}
+    />
   )
 }
 
@@ -547,60 +572,23 @@ interface OutlineCardProps {
   outline?: ProjectArtifact
   hasReadme: boolean
   onDone: () => void
+  globalJob?: AiJob
 }
 
-function OutlineCard({ projectId, outline, hasReadme, onDone }: OutlineCardProps) {
-  const sse = useSSE({ onDone })
-  const streaming = sse.status === 'streaming'
-  const display = sse.text || outline?.content || ''
-
+function OutlineCard({ projectId, outline, hasReadme, onDone, globalJob }: OutlineCardProps) {
   return (
-    <section
-      className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4"
-      data-testid="outline-card"
-    >
-      <header className="flex items-center gap-2 mb-3">
-        <Sparkles className="h-4 w-4 text-violet-600" />
-        <h2 className="text-sm font-semibold">章节大纲</h2>
-        {outline && !streaming && (
-          <span className="text-[10px] text-gray-400">v{outline.version}</span>
-        )}
-        <button
-          type="button"
-          onClick={() => sse.start(`/api/projects/${projectId}/ai-outline/stream`)}
-          disabled={streaming || !hasReadme}
-          title={!hasReadme ? '先生成 README，再生成大纲' : ''}
-          className="ml-auto inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
-          data-testid="ai-outline-btn"
-        >
-          {streaming ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <Wand2 className="h-3 w-3" />
-          )}
-          {outline ? '重新生成' : 'AI 生成大纲'}
-        </button>
-      </header>
-
-      {!hasReadme && (
-        <p className="text-xs text-gray-400 mb-2">先生成 README，再生成大纲。</p>
-      )}
-      {sse.status === 'error' && (
-        <p className="text-xs text-rose-600 inline-flex items-center gap-1 mb-2">
-          <TriangleAlert className="h-3 w-3" /> 生成失败：{sse.error}
-        </p>
-      )}
-
-      {display ? (
-        <MarkdownPreview content={display} maxHeightClass="max-h-[600px]" testId="outline-content">
-          {streaming && <span className="inline-block w-2 h-4 bg-violet-400 align-text-bottom animate-pulse ml-0.5" />}
-        </MarkdownPreview>
-      ) : (
-        <p className="text-xs text-gray-400">
-          基于 README 生成 6 章左右的章节大纲，每章一段（标题 + 主要冲突 + 钩子）。
-        </p>
-      )}
-    </section>
+    <ArtifactStreamCard
+      projectId={projectId}
+      kind="outline"
+      title="章节大纲"
+      artifact={outline}
+      endpoint={`/api/projects/${projectId}/ai-outline/stream`}
+      disabled={!hasReadme}
+      disabledHint="先生成 README，再生成大纲。"
+      emptyHint="基于 README 生成 6 章左右的章节大纲，每章一段（标题 + 主要冲突 + 钩子）。"
+      onDone={onDone}
+      globalJob={globalJob}
+    />
   )
 }
 
