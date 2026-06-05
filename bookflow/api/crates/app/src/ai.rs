@@ -500,8 +500,9 @@ pub async fn stream_book_summary(
     client: &AiClient,
     full_book_source: &str,
 ) -> mpsc::Receiver<StreamEvent> {
-    let user =
-        format!("下面是按章节整理的全书原稿：\n\n{full_book_source}\n\n请整合成一版连贯完整正文。");
+    let user = format!(
+        "下面是按章节整理的全书原稿，章节标题已经写在正文里：\n\n{full_book_source}\n\n请保留「第N章 标题」这种显式分章结构输出全书汇总稿。总字数至少 6000 字，目标 8000 - 10000 字；如果原稿细节不足，可以在不改变剧情事实的前提下补足场景、动作、情绪、对话和转场细节，把内容充实到目标区间。"
+    );
     client
         .stream_text(BOOK_SUMMARY_SYSTEM.to_string(), user, 12000)
         .await
@@ -679,7 +680,9 @@ mod tests {
     fn summary_prompt_mentions_full_book_rewrite() {
         let system = BOOK_SUMMARY_SYSTEM;
         assert!(system.contains("连贯"));
-        assert!(system.contains("完整正文"));
+        assert!(system.contains("第N章 标题"));
+        assert!(system.contains("至少 6000 字"));
+        assert!(system.contains("8000 - 10000 字"));
     }
 
     #[test]
