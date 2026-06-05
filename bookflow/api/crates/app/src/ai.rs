@@ -207,6 +207,10 @@ pub enum StreamEvent {
     Error(String),
 }
 
+fn stream_timeout(cfg: &AiConfig) -> Duration {
+    cfg.timeout.max(Duration::from_secs(600))
+}
+
 async fn stream_anthropic(
     http: &reqwest::Client,
     cfg: &AiConfig,
@@ -228,6 +232,7 @@ async fn stream_anthropic(
         .header("x-api-key", &cfg.api_key)
         .header("anthropic-version", "2023-06-01")
         .header("accept", "text/event-stream")
+        .timeout(stream_timeout(cfg))
         .json(&body)
         .send()
         .await
@@ -304,6 +309,7 @@ async fn stream_openai(
         .post(&url)
         .bearer_auth(&cfg.api_key)
         .header("accept", "text/event-stream")
+        .timeout(stream_timeout(cfg))
         .json(&body)
         .send()
         .await
@@ -681,5 +687,29 @@ mod tests {
         let system = BOOK_POLISH_SYSTEM;
         assert!(system.contains("去 AI 味"));
         assert!(system.contains("代入感"));
+    }
+
+    #[test]
+    fn stream_timeout_has_ten_minute_floor() {
+        let cfg = AiConfig {
+            provider: Provider::Openai,
+            base_url: String::new(),
+            api_key: String::new(),
+            model: String::new(),
+            timeout: Duration::from_secs(60),
+        };
+        assert_eq!(stream_timeout(&cfg), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn stream_timeout_respects_higher_config() {
+        let cfg = AiConfig {
+            provider: Provider::Anthropic,
+            base_url: String::new(),
+            api_key: String::new(),
+            model: String::new(),
+            timeout: Duration::from_secs(900),
+        };
+        assert_eq!(stream_timeout(&cfg), Duration::from_secs(900));
     }
 }
