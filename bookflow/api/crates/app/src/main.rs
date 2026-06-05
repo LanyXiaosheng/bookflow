@@ -1094,6 +1094,13 @@ fn take_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
+fn looks_like_chapter_heading(title: &str) -> bool {
+    if !title.starts_with('第') {
+        return false;
+    }
+    matches!(title.find('章'), Some(pos) if pos > 0 && pos <= 8)
+}
+
 fn build_full_book_source(mut chapters: Vec<Chapter>) -> Option<String> {
     chapters.sort_by_key(|chapter| chapter.idx);
     let parts = chapters
@@ -1106,6 +1113,8 @@ fn build_full_book_source(mut chapters: Vec<Chapter>) -> Option<String> {
                 let title = chapter.title.trim();
                 let heading = if title.is_empty() {
                     format!("# 第{}章", chapter.idx)
+                } else if looks_like_chapter_heading(title) {
+                    format!("# {}", title)
                 } else {
                     format!("# 第{}章 {}", chapter.idx, title)
                 };
@@ -1122,9 +1131,17 @@ fn build_full_book_source(mut chapters: Vec<Chapter>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_full_book_source;
+    use super::{build_full_book_source, looks_like_chapter_heading};
     use bookflow_domain::Chapter;
     use uuid::Uuid;
+
+    #[test]
+    fn chapter_heading_detection_accepts_prefixed_titles() {
+        assert!(looks_like_chapter_heading("第1章 替嫁"));
+        assert!(looks_like_chapter_heading("第12章"));
+        assert!(looks_like_chapter_heading("第十章 暗涌"));
+        assert!(!looks_like_chapter_heading("替嫁之夜"));
+    }
 
     #[test]
     fn build_full_book_source_sorts_and_skips_empty_bodies() {
@@ -1134,7 +1151,7 @@ mod tests {
                 id: Uuid::new_v4(),
                 project_id,
                 idx: 2,
-                title: "第二章".into(),
+                title: "第2章 第二章".into(),
                 beats: vec![],
                 body: "第二章正文".into(),
                 word_count: 5,
