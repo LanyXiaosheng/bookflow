@@ -28,3 +28,4 @@ reqwest = { workspace = true }
 tokio-stream = { workspace = true }
 futures-util = { workspace = true }
 async-stream = { workspace = true }
+argon2 = { workspace = true }

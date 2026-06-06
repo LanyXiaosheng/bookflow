@@ -24,12 +24,16 @@ export function aiJobKindLabel(kind: AiJobKind): string {
       return '全章'
     case 'readme':
       return 'README'
+    case 'character_setup':
+      return '角色设定'
     case 'outline':
       return '大纲'
     case 'publish_post':
       return '发布稿'
     case 'side_dishes':
       return '配套素材'
+    case 'story_image':
+      return '小说配图'
     case 'book_summary':
       return '全书汇总'
     case 'book_polished':

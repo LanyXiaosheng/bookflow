@@ -4,7 +4,8 @@ export default function Published() {
   return (
     <ProjectList
       status="published"
-      title="已发布"
+      includeStatuses={['published', 'archived']}
+      title="已发"
       emptyHint="暂无已发布作品。"
     />
   )

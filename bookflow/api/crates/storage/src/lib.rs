@@ -1,8 +1,12 @@
 use bookflow_domain::{
     count_chars, Beat, Chapter, NewSeed, PendingProjectReview, Project, ProjectReview,
-    ProjectStatus, ReviewResult, ReviewStage, Score, Seed, Tier,
+    ProjectStatus, ReviewResult, ReviewStage, Score, Seed, Tier, User,
 };
-use sqlx::{postgres::{PgPoolOptions, PgRow}, types::Json, PgPool, Row};
+use sqlx::{
+    postgres::{PgPoolOptions, PgRow},
+    types::Json,
+    PgPool, Row,
+};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -45,9 +49,142 @@ pub async fn pool(database_url: &str) -> Result<PgPool> {
 }
 
 pub async fn migrate(pool: &PgPool) -> Result<()> {
-    sqlx::migrate!("../../migrations").run(pool).await
+    sqlx::migrate!("../../migrations")
+        .run(pool)
+        .await
         .map_err(|e| StorageError::Sqlx(sqlx::Error::Migrate(Box::new(e))))?;
     Ok(())
+}
+
+#[derive(Clone)]
+pub struct UserRepo {
+    pool: PgPool,
+}
+
+impl UserRepo {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn create(
+        &self,
+        email: &str,
+        display_name: &str,
+        password_hash: &str,
+    ) -> Result<User> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO users (email, display_name, password_hash)
+            VALUES ($1, $2, $3)
+            RETURNING id, email, display_name, created_at
+            "#,
+        )
+        .bind(email)
+        .bind(display_name)
+        .bind(password_hash)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(User {
+            id: row.get("id"),
+            email: row.get("email"),
+            display_name: row.get("display_name"),
+            created_at: row.get("created_at"),
+        })
+    }
+
+    pub async fn find_with_password_by_email(&self, email: &str) -> Result<Option<(User, String)>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, email, display_name, password_hash, created_at
+            FROM users
+            WHERE email = $1
+            "#,
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| {
+            (
+                User {
+                    id: r.get("id"),
+                    email: r.get("email"),
+                    display_name: r.get("display_name"),
+                    created_at: r.get("created_at"),
+                },
+                r.get("password_hash"),
+            )
+        }))
+    }
+
+    pub async fn create_session(
+        &self,
+        user_id: Uuid,
+        token: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO user_sessions (token, user_id, expires_at)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(token)
+        .bind(user_id)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_display_name(&self, user_id: Uuid, display_name: &str) -> Result<User> {
+        let row = sqlx::query(
+            r#"
+            UPDATE users
+            SET display_name = $2
+            WHERE id = $1
+            RETURNING id, email, display_name, created_at
+            "#,
+        )
+        .bind(user_id)
+        .bind(display_name)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(User {
+            id: row.get("id"),
+            email: row.get("email"),
+            display_name: row.get("display_name"),
+            created_at: row.get("created_at"),
+        })
+    }
+
+    pub async fn delete_session(&self, token: &str) -> Result<()> {
+        sqlx::query("DELETE FROM user_sessions WHERE token = $1")
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn find_user_by_session(&self, token: &str) -> Result<Option<User>> {
+        let row = sqlx::query(
+            r#"
+            SELECT u.id, u.email, u.display_name, u.created_at
+            FROM user_sessions s
+            JOIN users u ON u.id = s.user_id
+            WHERE s.token = $1
+              AND s.expires_at > NOW()
+            "#,
+        )
+        .bind(token)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| User {
+            id: r.get("id"),
+            email: r.get("email"),
+            display_name: r.get("display_name"),
+            created_at: r.get("created_at"),
+        }))
+    }
 }
 
 #[derive(Clone)]
@@ -60,7 +197,7 @@ impl SeedRepo {
         Self { pool }
     }
 
-    pub async fn insert(&self, ns: &NewSeed) -> Result<Seed> {
+    pub async fn insert(&self, user_id: Uuid, ns: &NewSeed) -> Result<Seed> {
         let id = Uuid::new_v4();
         let total = ns.score.total();
         let tier = match Tier::from_total(total) {
@@ -68,167 +205,178 @@ impl SeedRepo {
             Tier::Backlog => "backlog",
             Tier::Reject => "reject",
         };
-        let row = sqlx::query!(
+        let row = sqlx::query(
             r#"
             INSERT INTO seeds
-              (id, title, track, score_title, score_opening, score_slap,
+              (id, user_id, title, track, score_title, score_opening, score_slap,
                score_emotion, score_twist, score_hook, score_finish, tier)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             RETURNING id, title, track,
                       score_title, score_opening, score_slap,
                       score_emotion, score_twist, score_hook, score_finish,
-                      total_score AS "total_score!: i32",
+                      total_score,
                       tier, created_at
             "#,
-            id,
-            ns.title,
-            ns.track,
-            ns.score.title,
-            ns.score.opening,
-            ns.score.slap,
-            ns.score.emotion,
-            ns.score.twist,
-            ns.score.hook,
-            ns.score.finish,
-            tier,
         )
+        .bind(id)
+        .bind(user_id)
+        .bind(&ns.title)
+        .bind(&ns.track)
+        .bind(ns.score.title)
+        .bind(ns.score.opening)
+        .bind(ns.score.slap)
+        .bind(ns.score.emotion)
+        .bind(ns.score.twist)
+        .bind(ns.score.hook)
+        .bind(ns.score.finish)
+        .bind(tier)
         .fetch_one(&self.pool)
         .await?;
 
         Ok(Seed {
-            id: row.id,
-            title: row.title,
-            track: row.track,
+            id: row.get("id"),
+            title: row.get("title"),
+            track: row.get("track"),
             score: Score {
-                title: row.score_title,
-                opening: row.score_opening,
-                slap: row.score_slap,
-                emotion: row.score_emotion,
-                twist: row.score_twist,
-                hook: row.score_hook,
-                finish: row.score_finish,
+                title: row.get("score_title"),
+                opening: row.get("score_opening"),
+                slap: row.get("score_slap"),
+                emotion: row.get("score_emotion"),
+                twist: row.get("score_twist"),
+                hook: row.get("score_hook"),
+                finish: row.get("score_finish"),
             },
-            total_score: row.total_score,
-            tier: parse_tier(&row.tier),
-            created_at: row.created_at,
+            total_score: row.get("total_score"),
+            tier: parse_tier(row.get::<&str, _>("tier")),
+            created_at: row.get("created_at"),
         })
     }
 
-    pub async fn get(&self, id: Uuid) -> Result<Seed> {
-        let row = sqlx::query!(
+    pub async fn get(&self, user_id: Uuid, id: Uuid) -> Result<Seed> {
+        let row = sqlx::query(
             r#"
             SELECT id, title, track,
                    score_title, score_opening, score_slap,
                    score_emotion, score_twist, score_hook, score_finish,
-                   total_score AS "total_score!: i32",
+                   total_score,
                    tier, created_at
             FROM seeds
-            WHERE id = $1
+            WHERE id = $1 AND user_id = $2
             "#,
-            id,
         )
+        .bind(id)
+        .bind(user_id)
         .fetch_one(&self.pool)
         .await?;
         Ok(Seed {
-            id: row.id,
-            title: row.title,
-            track: row.track,
+            id: row.get("id"),
+            title: row.get("title"),
+            track: row.get("track"),
             score: Score {
-                title: row.score_title,
-                opening: row.score_opening,
-                slap: row.score_slap,
-                emotion: row.score_emotion,
-                twist: row.score_twist,
-                hook: row.score_hook,
-                finish: row.score_finish,
+                title: row.get("score_title"),
+                opening: row.get("score_opening"),
+                slap: row.get("score_slap"),
+                emotion: row.get("score_emotion"),
+                twist: row.get("score_twist"),
+                hook: row.get("score_hook"),
+                finish: row.get("score_finish"),
             },
-            total_score: row.total_score,
-            tier: parse_tier(&row.tier),
-            created_at: row.created_at,
+            total_score: row.get("total_score"),
+            tier: parse_tier(row.get::<&str, _>("tier")),
+            created_at: row.get("created_at"),
         })
     }
 
-    pub async fn list(&self) -> Result<Vec<Seed>> {
-        let rows = sqlx::query!(
+    pub async fn list(&self, user_id: Uuid) -> Result<Vec<Seed>> {
+        let rows = sqlx::query(
             r#"
             SELECT id, title, track,
                    score_title, score_opening, score_slap,
                    score_emotion, score_twist, score_hook, score_finish,
-                   total_score AS "total_score!: i32",
+                   total_score,
                    tier, created_at
             FROM seeds
+            WHERE user_id = $1
             ORDER BY created_at DESC
-            "#
+            "#,
         )
+        .bind(user_id)
         .fetch_all(&self.pool)
         .await?;
 
         Ok(rows
             .into_iter()
             .map(|r| Seed {
-                id: r.id,
-                title: r.title,
-                track: r.track,
+                id: r.get("id"),
+                title: r.get("title"),
+                track: r.get("track"),
                 score: Score {
-                    title: r.score_title,
-                    opening: r.score_opening,
-                    slap: r.score_slap,
-                    emotion: r.score_emotion,
-                    twist: r.score_twist,
-                    hook: r.score_hook,
-                    finish: r.score_finish,
+                    title: r.get("score_title"),
+                    opening: r.get("score_opening"),
+                    slap: r.get("score_slap"),
+                    emotion: r.get("score_emotion"),
+                    twist: r.get("score_twist"),
+                    hook: r.get("score_hook"),
+                    finish: r.get("score_finish"),
                 },
-                total_score: r.total_score,
-                tier: parse_tier(&r.tier),
-                created_at: r.created_at,
+                total_score: r.get("total_score"),
+                tier: parse_tier(r.get::<&str, _>("tier")),
+                created_at: r.get("created_at"),
             })
             .collect())
     }
 
     /// 同 (title,track) 已存在 → Some(seed)；否则 None
-    pub async fn find_by_title_track(&self, title: &str, track: &str) -> Result<Option<Seed>> {
-        let row = sqlx::query!(
+    pub async fn find_by_title_track(
+        &self,
+        user_id: Uuid,
+        title: &str,
+        track: &str,
+    ) -> Result<Option<Seed>> {
+        let row = sqlx::query(
             r#"
             SELECT id, title, track,
                    score_title, score_opening, score_slap,
                    score_emotion, score_twist, score_hook, score_finish,
-                   total_score AS "total_score!: i32",
+                   total_score,
                    tier, created_at
             FROM seeds
-            WHERE title = $1 AND track = $2
+            WHERE user_id = $1 AND title = $2 AND track = $3
             ORDER BY created_at DESC
             LIMIT 1
             "#,
-            title,
-            track,
         )
+        .bind(user_id)
+        .bind(title)
+        .bind(track)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|r| Seed {
-            id: r.id,
-            title: r.title,
-            track: r.track,
+            id: r.get("id"),
+            title: r.get("title"),
+            track: r.get("track"),
             score: Score {
-                title: r.score_title,
-                opening: r.score_opening,
-                slap: r.score_slap,
-                emotion: r.score_emotion,
-                twist: r.score_twist,
-                hook: r.score_hook,
-                finish: r.score_finish,
+                title: r.get("score_title"),
+                opening: r.get("score_opening"),
+                slap: r.get("score_slap"),
+                emotion: r.get("score_emotion"),
+                twist: r.get("score_twist"),
+                hook: r.get("score_hook"),
+                finish: r.get("score_finish"),
             },
-            total_score: r.total_score,
-            tier: parse_tier(&r.tier),
-            created_at: r.created_at,
+            total_score: r.get("total_score"),
+            tier: parse_tier(r.get::<&str, _>("tier")),
+            created_at: r.get("created_at"),
         }))
     }
 
     /// 删除 seed；若已被 project 立项则返回 Conflict 由调用层处理
-    pub async fn delete(&self, id: Uuid) -> Result<()> {
-        let project_count = sqlx::query_scalar!(
-            r#"SELECT COUNT(*) AS "n!: i64" FROM projects WHERE seed_id = $1"#,
-            id
+    pub async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<()> {
+        let project_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM projects WHERE seed_id = $1 AND user_id = $2 AND deleted_at IS NULL",
         )
+        .bind(id)
+        .bind(user_id)
         .fetch_one(&self.pool)
         .await?;
         if project_count > 0 {
@@ -236,7 +384,9 @@ impl SeedRepo {
                 "seed {id} 已被 {project_count} 个项目立项，先删项目再删种子"
             )));
         }
-        let n = sqlx::query!("DELETE FROM seeds WHERE id = $1", id)
+        let n = sqlx::query("DELETE FROM seeds WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(user_id)
             .execute(&self.pool)
             .await?
             .rows_affected();
@@ -270,110 +420,153 @@ impl ProjectRepo {
     }
 
     /// 从 seed 立项创建 project，title/track 从 seed 拷贝（前端可改但 v0.3 先这么定）
-    pub async fn create_from_seed(&self, seed_id: Uuid) -> Result<Project> {
-        let row = sqlx::query!(
+    pub async fn create_from_seed(&self, user_id: Uuid, seed_id: Uuid) -> Result<Project> {
+        let duplicate_count: i64 = sqlx::query_scalar(
             r#"
-            INSERT INTO projects (seed_id, title, track)
-            SELECT id, title, track FROM seeds WHERE id = $1
+            SELECT COUNT(*)
+            FROM projects p
+            JOIN seeds s ON s.title = p.title
+            WHERE s.id = $1
+              AND s.user_id = $2
+              AND p.user_id = $2
+              AND p.deleted_at IS NULL
+            "#,
+        )
+        .bind(seed_id)
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+        if duplicate_count > 0 {
+            return Err(StorageError::Conflict("项目名称已存在".into()));
+        }
+
+        let row = sqlx::query(
+            r#"
+            INSERT INTO projects (user_id, seed_id, title, track)
+            SELECT user_id, id, title, track FROM seeds WHERE id = $1 AND user_id = $2
             RETURNING id, seed_id, title, track, status, created_at, updated_at
             "#,
-            seed_id
         )
+        .bind(seed_id)
+        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| StorageError::NotFound(format!("seed {seed_id}")))?;
 
         Ok(Project {
-            id: row.id,
-            seed_id: row.seed_id,
-            title: row.title,
-            track: row.track,
-            status: parse_status(&row.status),
-            created_at: row.created_at,
-            updated_at: row.updated_at,
+            id: row.get("id"),
+            seed_id: row.get("seed_id"),
+            title: row.get("title"),
+            track: row.get("track"),
+            status: parse_status(row.get::<&str, _>("status")),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
         })
     }
 
-    pub async fn list(&self, status: Option<ProjectStatus>) -> Result<Vec<Project>> {
-        let rows = sqlx::query!(
+    pub async fn list(&self, user_id: Uuid, status: Option<ProjectStatus>) -> Result<Vec<Project>> {
+        let rows = sqlx::query(
             r#"
             SELECT id, seed_id, title, track, status, created_at, updated_at
             FROM projects
-            WHERE $1::text IS NULL OR status = $1
+            WHERE user_id = $1
+              AND deleted_at IS NULL
+              AND ($2::text IS NULL OR status = $2)
             ORDER BY updated_at DESC
             "#,
-            status.map(|s| s.as_str().to_string()),
         )
+        .bind(user_id)
+        .bind(status.map(|s| s.as_str().to_string()))
         .fetch_all(&self.pool)
         .await?;
 
         Ok(rows
             .into_iter()
             .map(|r| Project {
-                id: r.id,
-                seed_id: r.seed_id,
-                title: r.title,
-                track: r.track,
-                status: parse_status(&r.status),
-                created_at: r.created_at,
-                updated_at: r.updated_at,
+                id: r.get("id"),
+                seed_id: r.get("seed_id"),
+                title: r.get("title"),
+                track: r.get("track"),
+                status: parse_status(r.get::<&str, _>("status")),
+                created_at: r.get("created_at"),
+                updated_at: r.get("updated_at"),
             })
             .collect())
     }
 
-    pub async fn get(&self, id: Uuid) -> Result<Project> {
-        let row = sqlx::query!(
+    pub async fn get(&self, user_id: Uuid, id: Uuid) -> Result<Project> {
+        let row = sqlx::query(
             r#"
             SELECT id, seed_id, title, track, status, created_at, updated_at
-            FROM projects WHERE id = $1
+            FROM projects WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
             "#,
-            id
         )
+        .bind(id)
+        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| StorageError::NotFound(format!("project {id}")))?;
 
         Ok(Project {
-            id: row.id,
-            seed_id: row.seed_id,
-            title: row.title,
-            track: row.track,
-            status: parse_status(&row.status),
-            created_at: row.created_at,
-            updated_at: row.updated_at,
+            id: row.get("id"),
+            seed_id: row.get("seed_id"),
+            title: row.get("title"),
+            track: row.get("track"),
+            status: parse_status(row.get::<&str, _>("status")),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
         })
     }
 
-    pub async fn update_status(&self, id: Uuid, to: ProjectStatus) -> Result<Project> {
-        let row = sqlx::query!(
+    pub async fn update_status(
+        &self,
+        user_id: Uuid,
+        id: Uuid,
+        to: ProjectStatus,
+    ) -> Result<Project> {
+        let row = sqlx::query(
             r#"
-            UPDATE projects SET status = $2 WHERE id = $1
+            UPDATE projects
+            SET status = $2,
+                published_at = CASE
+                    WHEN $2 = 'published' AND published_at IS NULL THEN NOW()
+                    ELSE published_at
+                END
+            WHERE id = $1 AND user_id = $3 AND deleted_at IS NULL
             RETURNING id, seed_id, title, track, status, created_at, updated_at
             "#,
-            id,
-            to.as_str(),
         )
+        .bind(id)
+        .bind(to.as_str())
+        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?
         .ok_or_else(|| StorageError::NotFound(format!("project {id}")))?;
 
         Ok(Project {
-            id: row.id,
-            seed_id: row.seed_id,
-            title: row.title,
-            track: row.track,
-            status: parse_status(&row.status),
-            created_at: row.created_at,
-            updated_at: row.updated_at,
+            id: row.get("id"),
+            seed_id: row.get("seed_id"),
+            title: row.get("title"),
+            track: row.get("track"),
+            status: parse_status(row.get::<&str, _>("status")),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
         })
     }
 
-    /// 硬删项目；chapters / project_artifacts / project_reviews 走 ON DELETE CASCADE
-    pub async fn delete(&self, id: Uuid) -> Result<()> {
-        let n = sqlx::query!("DELETE FROM projects WHERE id = $1", id)
-            .execute(&self.pool)
-            .await?
-            .rows_affected();
+    pub async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<()> {
+        let n = sqlx::query(
+            r#"
+            UPDATE projects
+            SET deleted_at = NOW()
+            WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+            "#,
+        )
+        .bind(id)
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
         if n == 0 {
             return Err(StorageError::NotFound(format!("project {id}")));
         }
@@ -381,16 +574,22 @@ impl ProjectRepo {
     }
 
     /// 项目状态分桶计数，给 dashboard 用
-    pub async fn counts_by_status(&self) -> Result<Vec<(String, i64)>> {
-        let rows = sqlx::query!(
+    pub async fn counts_by_status(&self, user_id: Uuid) -> Result<Vec<(String, i64)>> {
+        let rows = sqlx::query(
             r#"
-            SELECT status, COUNT(*) AS "n!: i64"
-            FROM projects GROUP BY status
-            "#
+            SELECT status, COUNT(*) AS n
+            FROM projects
+            WHERE user_id = $1 AND deleted_at IS NULL
+            GROUP BY status
+            "#,
         )
+        .bind(user_id)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(|r| (r.status, r.n)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("status"), r.get::<i64, _>("n")))
+            .collect())
     }
 }
 
@@ -601,7 +800,11 @@ impl SeedDraftRepo {
         Self { pool }
     }
 
-    pub async fn insert_batch(&self, drafts: &[NewSeedDraft]) -> Result<Vec<SeedDraft>> {
+    pub async fn insert_batch(
+        &self,
+        user_id: Uuid,
+        drafts: &[NewSeedDraft],
+    ) -> Result<Vec<SeedDraft>> {
         if drafts.is_empty() {
             return Ok(Vec::new());
         }
@@ -610,30 +813,32 @@ impl SeedDraftRepo {
         let mut out = Vec::with_capacity(drafts.len());
         for d in drafts {
             let total = d.score.total();
-            let row = sqlx::query!(
+            let score_json = serde_json::to_value(&d.score).unwrap();
+            let row = sqlx::query(
                 r#"
-                INSERT INTO ai_seed_drafts (track, title, score, total_score, why_buy, batch_id)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING id, track, title, score AS "score: Json<Score>", total_score, why_buy, batch_id, created_at
+                INSERT INTO ai_seed_drafts (user_id, track, title, score, total_score, why_buy, batch_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id, track, title, score, total_score, why_buy, batch_id, created_at
                 "#,
-                d.track,
-                d.title,
-                serde_json::to_value(&d.score).unwrap(),
-                total,
-                d.why_buy,
-                batch_id,
             )
+            .bind(user_id)
+            .bind(&d.track)
+            .bind(&d.title)
+            .bind(Json(score_json))
+            .bind(total)
+            .bind(&d.why_buy)
+            .bind(batch_id)
             .fetch_one(&mut *tx)
             .await?;
             out.push(SeedDraft {
-                id: row.id,
-                track: row.track,
-                title: row.title,
-                score: row.score.0,
-                total_score: row.total_score,
-                why_buy: row.why_buy,
-                batch_id: row.batch_id,
-                created_at: row.created_at,
+                id: row.get("id"),
+                track: row.get("track"),
+                title: row.get("title"),
+                score: row.get::<Json<Score>, _>("score").0,
+                total_score: row.get("total_score"),
+                why_buy: row.get("why_buy"),
+                batch_id: row.get("batch_id"),
+                created_at: row.get("created_at"),
             });
         }
         tx.commit().await?;
@@ -641,31 +846,41 @@ impl SeedDraftRepo {
     }
 
     /// 按 track 拉历史草稿；不传 track 拉全部
-    pub async fn list(&self, track: Option<&str>, limit: i64) -> Result<Vec<SeedDraft>> {
-        let rows = sqlx::query!(
+    pub async fn list(
+        &self,
+        user_id: Uuid,
+        track: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<SeedDraft>> {
+        let rows = sqlx::query(
             r#"
-            SELECT id, track, title, score AS "score: Json<Score>", total_score, why_buy, batch_id, created_at
+            SELECT id, track, title, score, total_score, why_buy, batch_id, created_at
             FROM ai_seed_drafts
-            WHERE $1::text IS NULL OR track = $1
+            WHERE user_id = $1
+              AND ($2::text IS NULL OR track = $2)
             ORDER BY created_at DESC
-            LIMIT $2
+            LIMIT $3
             "#,
-            track,
-            limit,
         )
+        .bind(user_id)
+        .bind(track)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().map(|r| SeedDraft {
-            id: r.id,
-            track: r.track,
-            title: r.title,
-            score: r.score.0,
-            total_score: r.total_score,
-            why_buy: r.why_buy,
-            batch_id: r.batch_id,
-            created_at: r.created_at,
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| SeedDraft {
+                id: r.get("id"),
+                track: r.get("track"),
+                title: r.get("title"),
+                score: r.get::<Json<Score>, _>("score").0,
+                total_score: r.get("total_score"),
+                why_buy: r.get("why_buy"),
+                batch_id: r.get("batch_id"),
+                created_at: r.get("created_at"),
+            })
+            .collect())
     }
 }
 
@@ -678,6 +893,7 @@ pub enum ArtifactKind {
     Outline,
     PublishPost,
     SideDishes,
+    StoryImage,
     BookSummary,
     BookPolished,
     CharacterSetup,
@@ -690,6 +906,7 @@ impl ArtifactKind {
             ArtifactKind::Outline => "outline",
             ArtifactKind::PublishPost => "publish_post",
             ArtifactKind::SideDishes => "side_dishes",
+            ArtifactKind::StoryImage => "story_image",
             ArtifactKind::BookSummary => "book_summary",
             ArtifactKind::BookPolished => "book_polished",
             ArtifactKind::CharacterSetup => "character_setup",
@@ -701,6 +918,7 @@ impl ArtifactKind {
             "outline" => Some(Self::Outline),
             "publish_post" => Some(Self::PublishPost),
             "side_dishes" => Some(Self::SideDishes),
+            "story_image" => Some(Self::StoryImage),
             "book_summary" => Some(Self::BookSummary),
             "book_polished" => Some(Self::BookPolished),
             "character_setup" => Some(Self::CharacterSetup),
@@ -836,7 +1054,7 @@ impl ProjectReviewRepo {
         map_project_review(row)
     }
 
-    pub async fn pending_list(&self) -> Result<Vec<PendingProjectReview>> {
+    pub async fn pending_list(&self, user_id: Uuid) -> Result<Vec<PendingProjectReview>> {
         let rows = sqlx::query(&format!(
             r#"
             WITH stage_targets AS (
@@ -844,7 +1062,7 @@ impl ProjectReviewRepo {
                        p.title,
                        p.status,
                        p.track,
-                       p.published_at,
+                       COALESCE(p.published_at, p.updated_at) AS published_at,
                        stage.stage
                 FROM projects p
                 JOIN (
@@ -852,9 +1070,10 @@ impl ProjectReviewRepo {
                            ('24h', INTERVAL '24 hours'),
                            ('7d', INTERVAL '7 days')
                 ) AS stage(stage, due_after)
-                  ON p.published_at IS NOT NULL
-                 AND p.published_at + stage.due_after <= NOW()
-                WHERE p.status = 'published'
+                  ON COALESCE(p.published_at, p.updated_at) + stage.due_after <= NOW()
+                WHERE p.user_id = $1
+                  AND p.deleted_at IS NULL
+                  AND p.status IN ('published', 'archived')
             ),
             latest_results AS (
                 SELECT DISTINCT ON (project_id)
@@ -890,8 +1109,10 @@ impl ProjectReviewRepo {
                 {REVIEW_STAGE_PENDING_ORDER_SQL_ST},
                 st.published_at ASC
             "#,
-            REVIEW_STAGE_PENDING_ORDER_SQL_ST = REVIEW_STAGE_PENDING_ORDER_SQL.replace("stage", "st.stage"),
+            REVIEW_STAGE_PENDING_ORDER_SQL_ST =
+                REVIEW_STAGE_PENDING_ORDER_SQL.replace("stage", "st.stage"),
         ))
+        .bind(user_id)
         .fetch_all(&self.pool)
         .await?;
 
@@ -907,7 +1128,8 @@ impl ProjectReviewRepo {
                     total_words: row.get("total_words"),
                     data_recorded: row.get("data_recorded"),
                     last_review_result: parse_review_result(
-                        row.get::<Option<String>, _>("last_review_result").as_deref(),
+                        row.get::<Option<String>, _>("last_review_result")
+                            .as_deref(),
                     )?,
                 })
             })
@@ -942,9 +1164,8 @@ fn map_project_review(row: PgRow) -> Result<ProjectReview> {
 }
 
 fn parse_review_stage(stage: &str) -> Result<ReviewStage> {
-    ReviewStage::parse(stage).ok_or_else(|| {
-        StorageError::Conflict(format!("invalid persisted review stage: {stage}"))
-    })
+    ReviewStage::parse(stage)
+        .ok_or_else(|| StorageError::Conflict(format!("invalid persisted review stage: {stage}")))
 }
 
 fn parse_review_result(result: Option<&str>) -> Result<Option<ReviewResult>> {
@@ -1026,14 +1247,17 @@ impl ArtifactRepo {
         )
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows.into_iter().map(|r| ProjectArtifact {
-            id: r.id,
-            project_id: r.project_id,
-            kind: ArtifactKind::parse(&r.kind).unwrap_or(ArtifactKind::Readme),
-            version: r.version,
-            content: r.content,
-            created_at: r.created_at,
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| ProjectArtifact {
+                id: r.id,
+                project_id: r.project_id,
+                kind: ArtifactKind::parse(&r.kind).unwrap_or(ArtifactKind::Readme),
+                version: r.version,
+                content: r.content,
+                created_at: r.created_at,
+            })
+            .collect())
     }
 }
 
@@ -1058,9 +1282,14 @@ mod tests {
             ArtifactKind::parse("character_setup"),
             Some(ArtifactKind::CharacterSetup)
         );
+        assert_eq!(
+            ArtifactKind::parse("story_image"),
+            Some(ArtifactKind::StoryImage)
+        );
         assert_eq!(ArtifactKind::BookSummary.as_str(), "book_summary");
         assert_eq!(ArtifactKind::BookPolished.as_str(), "book_polished");
         assert_eq!(ArtifactKind::CharacterSetup.as_str(), "character_setup");
+        assert_eq!(ArtifactKind::StoryImage.as_str(), "story_image");
     }
 
     #[test]

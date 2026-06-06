@@ -78,7 +78,7 @@ export default function Write() {
 
   async function generateFullBook() {
     if (fullBook.progress.running) return
-    const targetRaw = window.prompt('目标章节数（短篇推荐 6 章）', '6')
+    const targetRaw = window.prompt('目标章节数（短篇推荐 10 章）', '10')
     if (!targetRaw) return
     const target = parseInt(targetRaw, 10)
     if (!Number.isFinite(target) || target < 1 || target > 20) {

@@ -17,7 +17,9 @@ import Stub from './pages/Stub'
 import Settings from './pages/Settings'
 import Tracks from './pages/Tracks'
 import Playbook from './pages/Playbook'
+import Auth from './pages/Auth'
 import { ConfirmProvider } from './components/ConfirmDialog'
+import RequireAuth from './components/RequireAuth'
 
 const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 5_000, refetchOnWindowFocus: false } },
@@ -31,17 +33,18 @@ createRoot(document.getElementById('root')!).render(
           <Routes>
             <Route element={<Shell />}>
               <Route index element={<Dashboard />} />
-              <Route path="/seeds" element={<Seeds />} />
-              <Route path="/projects" element={<Projects />} />
-              <Route path="/projects/:id" element={<ProjectDetail />} />
-              <Route path="/projects/:id/write" element={<Write />} />
-              <Route path="/ready" element={<Ready />} />
-              <Route path="/published" element={<Published />} />
-              <Route path="/archived" element={<Archived />} />
-              <Route path="/review" element={<Review />} />
+              <Route path="/seeds" element={<RequireAuth><Seeds /></RequireAuth>} />
+              <Route path="/projects" element={<RequireAuth><Projects /></RequireAuth>} />
+              <Route path="/projects/:id" element={<RequireAuth><ProjectDetail /></RequireAuth>} />
+              <Route path="/projects/:id/write" element={<RequireAuth><Write /></RequireAuth>} />
+              <Route path="/ready" element={<RequireAuth><Ready /></RequireAuth>} />
+              <Route path="/published" element={<RequireAuth><Published /></RequireAuth>} />
+              <Route path="/archived" element={<RequireAuth><Archived /></RequireAuth>} />
+              <Route path="/review" element={<RequireAuth><Review /></RequireAuth>} />
               <Route path="/tracks" element={<Tracks />} />
               <Route path="/playbook" element={<Playbook />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/auth" element={<Auth />} />
               <Route path="*" element={<Stub />} />
             </Route>
           </Routes>

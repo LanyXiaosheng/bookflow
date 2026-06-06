@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub id: Uuid,
+    pub email: String,
+    pub display_name: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// 评分维度，对齐 bookflow-prototype/seed-scorecard.html 的 7 个 slider
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

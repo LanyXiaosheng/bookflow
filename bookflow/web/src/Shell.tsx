@@ -1,5 +1,8 @@
+import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
-import { Bell, ChevronDown, Languages, User } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Bell, ChevronDown, Languages, LogOut, Pencil, User } from 'lucide-react'
+import { authApi } from './api/auth'
 
 const NAV: Array<{ to: string; label: string }> = [
   { to: '/', label: '看板' },
@@ -13,6 +16,42 @@ const NAV: Array<{ to: string; label: string }> = [
 ]
 
 export default function Shell() {
+  const qc = useQueryClient()
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+  const userMenuRef = useRef<HTMLDivElement | null>(null)
+  const auth = useQuery({
+    queryKey: ['auth', 'me'],
+    queryFn: () => authApi.me(),
+    retry: false,
+  })
+
+  useEffect(() => {
+    if (!userMenuOpen) return
+    const close = (event: MouseEvent) => {
+      if (!userMenuRef.current?.contains(event.target as Node)) {
+        setUserMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [userMenuOpen])
+
+  const renameUser = async () => {
+    if (!auth.data) return
+    const next = window.prompt('修改昵称', auth.data.user.display_name)
+    if (!next || next.trim() === auth.data.user.display_name) return
+    await authApi.updateProfile({ display_name: next.trim() })
+    await qc.invalidateQueries({ queryKey: ['auth', 'me'] })
+    setUserMenuOpen(false)
+  }
+
+  const logout = async () => {
+    await authApi.logout()
+    await qc.cancelQueries({ queryKey: ['auth', 'me'] })
+    qc.setQueryData(['auth', 'me'], null)
+    setUserMenuOpen(false)
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
       <nav className="fixed inset-x-0 top-0 z-30 border-b border-gray-200 bg-white">
@@ -57,15 +96,66 @@ export default function Shell() {
                 <option value="ja">日本語</option>
               </select>
             </div>
-            <button
-              type="button"
-              className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"
-            >
-              <span className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                <User className="w-4 h-4 text-blue-600" />
-              </span>
-              <ChevronDown className="hidden h-4 w-4 sm:block" />
-            </button>
+            {auth.data ? (
+              <div className="relative" ref={userMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setUserMenuOpen((open) => !open)}
+                  className="flex items-center gap-2 rounded-lg px-1.5 py-1 text-sm text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                  aria-expanded={userMenuOpen}
+                  aria-haspopup="menu"
+                  data-testid="user-menu-trigger"
+                >
+                  <span className="flex h-8 min-w-8 items-center justify-center rounded-full bg-blue-100 px-2 text-xs font-semibold text-blue-700">
+                    {auth.data.user.display_name.slice(0, 2)}
+                  </span>
+                  <span className="hidden sm:inline">{auth.data.user.display_name}</span>
+                  <ChevronDown className={`hidden h-4 w-4 transition sm:block ${userMenuOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {userMenuOpen && (
+                  <div
+                    className="absolute right-0 mt-2 w-56 overflow-hidden rounded-xl border border-gray-200 bg-white py-1 text-sm shadow-lg"
+                    role="menu"
+                    data-testid="user-menu"
+                  >
+                    <div className="border-b border-gray-100 px-3 py-2">
+                      <div className="font-medium text-gray-900">{auth.data.user.display_name}</div>
+                      <div className="truncate text-xs text-gray-400">{auth.data.user.email}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={renameUser}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                      role="menuitem"
+                      data-testid="user-menu-rename"
+                    >
+                      <Pencil className="h-4 w-4" />
+                      修改昵称
+                    </button>
+                    <button
+                      type="button"
+                      onClick={logout}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-rose-600 hover:bg-rose-50"
+                      role="menuitem"
+                      data-testid="user-menu-logout"
+                    >
+                      <LogOut className="h-4 w-4" />
+                      退出登录
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Link
+                to="/auth"
+                className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"
+              >
+                <span className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+                  <User className="w-4 h-4 text-blue-600" />
+                </span>
+                <span className="hidden sm:inline">登录 / 注册</span>
+              </Link>
+            )}
           </div>
         </div>
       </nav>

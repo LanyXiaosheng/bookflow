@@ -39,7 +39,9 @@ impl DocRoot {
                 break;
             }
         }
-        Self { root: PathBuf::from(candidate) }
+        Self {
+            root: PathBuf::from(candidate),
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -69,7 +71,12 @@ impl DocRoot {
             let title = extract_title(&body).unwrap_or_else(|| slug.clone());
             let summary = extract_summary(&body);
             let bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            items.push(DocItem { slug, title, summary, bytes });
+            items.push(DocItem {
+                slug,
+                title,
+                summary,
+                bytes,
+            });
         }
         items.sort_by(|a, b| a.slug.cmp(&b.slug));
         Ok(items)
@@ -87,7 +94,11 @@ impl DocRoot {
         let body = std::fs::read_to_string(&path)
             .with_context(|| format!("读文件失败：{}", path.display()))?;
         let title = extract_title(&body).unwrap_or_else(|| slug.to_string());
-        Ok(DocFull { slug: slug.to_string(), title, body })
+        Ok(DocFull {
+            slug: slug.to_string(),
+            title,
+            body,
+        })
     }
 }
 

@@ -1,5 +1,20 @@
 import { test, expect } from '@playwright/test'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      json: {
+        user: {
+          id: 'test-user',
+          email: 'writer@example.com',
+          display_name: '守单客',
+          created_at: '2026-06-06T10:00:00Z',
+        },
+      },
+    })
+  })
+})
+
 const dashboardMainProject = {
   id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   seed_id: 'seed-main-0000-4000-8000-000000000000',
@@ -278,7 +293,68 @@ test('本周目标：目标项可跳既有入口', async ({ page }) => {
   await page.waitForURL('/projects', { timeout: 15_000 })
 })
 
-test('Dashboard 复盘入口：通过催复盘卡进入真实 /review 页面并可保存复盘', async ({ page, request }) => {
+test('小说配图：封面导出可选择 jpeg 并生成对应文件名', async ({ page }) => {
+  const projectId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+  const projectTitle = '她签下离婚协议那天全网等他追妻'
+  const storyImagePayload = {
+    model: 'stub-image-model',
+    prompt: '高情绪短篇封面，都市夜景，强对比光影',
+    mime_type: 'image/png',
+    data_url:
+      'data:image/svg+xml;base64,' +
+      Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1536"><rect width="100%" height="100%" fill="#0f172a"/></svg>',
+      ).toString('base64'),
+    title_text: projectTitle,
+    cover_size: '1024x1536',
+    author_name: '守单客',
+    show_author: true,
+  }
+
+  await page.route(`**/api/projects/${projectId}`, async (route) => {
+    await route.fulfill({
+      json: {
+        id: projectId,
+        seed_id: 'seed-story-image-0000-4000-8000-000000000000',
+        title: projectTitle,
+        track: '现言婚恋火葬场',
+        status: 'writing',
+        created_at: '2026-06-01T10:00:00Z',
+        updated_at: '2026-06-05T10:00:00Z',
+      },
+    })
+  })
+  await page.route(`**/api/projects/${projectId}/chapters`, async (route) => {
+    await route.fulfill({ json: [] })
+  })
+  await page.route(`**/api/projects/${projectId}/artifacts`, async (route) => {
+    await route.fulfill({
+      json: [
+        {
+          id: 'artifact-story-image',
+          project_id: projectId,
+          kind: 'story_image',
+          version: 1,
+          content: JSON.stringify(storyImagePayload),
+          created_at: '2026-06-05T10:00:00Z',
+        },
+      ],
+    })
+  })
+
+  await page.goto(`/projects/${projectId}`)
+  await expect(page.getByTestId('story_image-card')).toBeVisible()
+  await expect(page.getByTestId('cover-export-format')).toHaveValue('png')
+  await page.getByTestId('cover-export-format').selectOption('jpeg')
+  await expect(page.getByTestId('cover-export-quality')).toBeVisible()
+
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByTestId('download-story-image-btn').click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe(`story-image-${projectId}.jpeg`)
+})
+
+test('Dashboard 复盘入口：通过催复盘卡进入真实 /review 页面并可保存复盘', async ({ page }) => {
   const projectId = dashboardPendingReview.project_id
   const savedReview = {
     id: '22222222-2222-4222-8222-222222222222',

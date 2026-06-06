@@ -6,6 +6,7 @@ export interface SettingsView {
   api_key_masked: string
   has_api_key: boolean
   model: string
+  image_model: string
   timeout_secs: number
 }
 
@@ -14,6 +15,7 @@ export interface SettingsPatch {
   base_url?: string
   api_key?: string
   model?: string
+  image_model?: string
   timeout_secs?: number
 }
 

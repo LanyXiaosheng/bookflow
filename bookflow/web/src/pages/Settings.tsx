@@ -22,6 +22,11 @@ const MODEL_HINTS: Record<string, string[]> = {
   openai: ['gpt-5.5', 'gpt-5.4', 'gpt-4o-mini', 'gpt-4.1', 'o4-mini'],
 }
 
+const IMAGE_MODEL_HINTS: Record<string, string[]> = {
+  anthropic: ['当前 provider 不支持生图'],
+  openai: ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1-mini'],
+}
+
 export default function Settings() {
   const qc = useQueryClient()
   const settings = useQuery({ queryKey: ['settings'], queryFn: () => settingsApi.get() })
@@ -101,6 +106,7 @@ function SettingsForm({
   const [provider, setProvider] = useState(initial.provider)
   const [baseUrl, setBaseUrl] = useState(initial.base_url)
   const [model, setModel] = useState(initial.model)
+  const [imageModel, setImageModel] = useState(initial.image_model)
   const [timeoutSecs, setTimeoutSecs] = useState(initial.timeout_secs)
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
@@ -124,16 +130,18 @@ function SettingsForm({
     if (provider !== initial.provider) return true
     if (baseUrl !== initial.base_url) return true
     if (model !== initial.model) return true
+    if (imageModel !== initial.image_model) return true
     if (timeoutSecs !== initial.timeout_secs) return true
     if (apiKey.length > 0) return true
     return false
-  }, [provider, baseUrl, model, timeoutSecs, apiKey, initial])
+  }, [provider, baseUrl, model, imageModel, timeoutSecs, apiKey, initial])
 
   const handleSave = () => {
     const patch: SettingsPatch = {
       provider: provider !== initial.provider ? provider : undefined,
       base_url: baseUrl !== initial.base_url ? baseUrl : undefined,
       model: model !== initial.model ? model : undefined,
+      image_model: imageModel !== initial.image_model ? imageModel : undefined,
       timeout_secs: timeoutSecs !== initial.timeout_secs ? timeoutSecs : undefined,
       api_key: apiKey || undefined,
     }
@@ -228,6 +236,26 @@ function SettingsForm({
             <option key={m} value={m} />
           ))}
         </datalist>
+      </Field>
+
+      <Field label="图片模型" htmlFor="image_model">
+        <input
+          id="image_model"
+          type="text"
+          required
+          list="image-model-hints"
+          value={imageModel}
+          onChange={(e) => setImageModel(e.target.value)}
+          className="block min-w-0 w-full max-w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+        <datalist id="image-model-hints">
+          {(IMAGE_MODEL_HINTS[provider] ?? []).map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+        <p className="mt-1 text-xs text-gray-500">
+          小说配图使用的模型。推荐 `gpt-image-2` 作为主模型；若更重成本控制可用 `gpt-image-1-mini`。当前实现仅在 OpenAI provider 下生效。
+        </p>
       </Field>
 
       <Field label="超时（秒）" htmlFor="timeout_secs">
