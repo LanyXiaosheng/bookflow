@@ -15,12 +15,12 @@ const NAV: Array<{ to: string; label: string }> = [
 export default function Shell() {
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
-      <nav className="sticky top-0 z-30 bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center gap-4">
-          <Link to="/" className="text-base font-semibold tracking-tight shrink-0">
+      <nav className="fixed inset-x-0 top-0 z-30 border-b border-gray-200 bg-white">
+        <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-3 sm:gap-4 sm:px-6 lg:px-8">
+          <Link to="/" className="shrink-0 text-sm font-semibold tracking-tight sm:text-base">
             BookFlow
           </Link>
-          <div className="flex-1 min-w-0 flex items-center gap-4 overflow-x-auto">
+          <div className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:gap-4">
             {NAV.map((n) => (
               <NavLink
                 key={n.to}
@@ -28,7 +28,7 @@ export default function Shell() {
                 end={n.to === '/'}
                 className={({ isActive }) =>
                   [
-                    'whitespace-nowrap text-[15px] transition-colors shrink-0',
+                    'shrink-0 whitespace-nowrap text-sm transition-colors sm:text-[15px]',
                     isActive ? 'text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700',
                   ].join(' ')
                 }
@@ -37,10 +37,10 @@ export default function Shell() {
               </NavLink>
             ))}
           </div>
-          <div className="flex items-center gap-2 lg:gap-3 shrink-0">
+          <div className="flex shrink-0 items-center gap-1 sm:gap-2 lg:gap-3">
             <button
               type="button"
-              className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100"
+              className="relative hidden h-9 w-9 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 sm:inline-flex"
               aria-label="通知"
             >
               <Bell className="h-5 w-5" />
@@ -59,17 +59,19 @@ export default function Shell() {
             </div>
             <button
               type="button"
-              className="flex items-center space-x-1 text-sm text-gray-600 hover:text-gray-900"
+              className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-900"
             >
               <span className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
                 <User className="w-4 h-4 text-blue-600" />
               </span>
-              <ChevronDown className="w-4 h-4" />
+              <ChevronDown className="hidden h-4 w-4 sm:block" />
             </button>
           </div>
         </div>
       </nav>
-      <Outlet />
+      <div className="pt-14">
+        <Outlet />
+      </div>
     </div>
   )
 }

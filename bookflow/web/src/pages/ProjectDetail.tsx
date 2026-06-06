@@ -177,53 +177,60 @@ export default function ProjectDetail() {
   return (
     <div className="bg-gray-50">
       <header className="sticky top-14 z-20 bg-white border-b border-gray-200">
-        <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 h-12 flex items-center gap-3 text-sm">
+        <div className="mx-auto flex min-h-12 max-w-[1200px] flex-wrap items-center gap-2 px-4 py-3 text-sm sm:gap-3 sm:px-6 lg:px-8">
           <Link
             to="/projects"
-            className="text-gray-500 hover:text-gray-800 inline-flex items-center gap-1"
+            className="inline-flex shrink-0 items-center gap-1 text-gray-500 hover:text-gray-800"
           >
             <ChevronLeft className="h-4 w-4" /> 返回项目列表
           </Link>
-          <span className="text-gray-300">/</span>
-          <span className="font-semibold text-gray-900 truncate">
-            {project.data?.title ?? '…'}
-          </span>
-          <span className="text-xs text-gray-400 truncate">
+          <span className="hidden text-gray-300 sm:inline">/</span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-semibold text-gray-900">
+              {project.data?.title ?? '…'}
+            </div>
+            <div className="truncate text-xs text-gray-400 sm:hidden">
+              {project.data?.track}
+            </div>
+          </div>
+          <span className="hidden truncate text-xs text-gray-400 sm:inline">
             {project.data?.track}
           </span>
-          <button
-            type="button"
-            onClick={runProjectizeFlow}
-            disabled={pipeline.progress.running}
-            title="串行重新生成 README → 角色设定，确认后再生成大纲"
-            className="ml-auto inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
-            data-testid="projectize-flow-btn"
-          >
-            {pipeline.progress.running ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
-            ) : (
-              <Zap className="h-3 w-3" />
-            )}
-            {pipeline.progress.running
-              ? `${pipelineLabel(pipeline.progress.currentKey)} · ${pipeline.progress.chars}字`
-              : '重新生成前期方案'}
-          </button>
-          {pipeline.progress.running && (
+          <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:justify-end">
             <button
               type="button"
-              onClick={pipeline.abort}
-              className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
-              data-testid="projectize-flow-abort-btn"
+              onClick={runProjectizeFlow}
+              disabled={pipeline.progress.running}
+              title="串行重新生成 README → 角色设定，确认后再生成大纲"
+              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50 sm:flex-none"
+              data-testid="projectize-flow-btn"
             >
-              中断
+              {pipeline.progress.running ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Zap className="h-3 w-3" />
+              )}
+              {pipeline.progress.running
+                ? `${pipelineLabel(pipeline.progress.currentKey)} · ${pipeline.progress.chars}字`
+                : '重新生成前期方案'}
             </button>
-          )}
-          <Link
-            to={`/projects/${projectId}/write`}
-            className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
-          >
-            <Pencil className="h-3 w-3" /> 进入写作
-          </Link>
+            {pipeline.progress.running && (
+              <button
+                type="button"
+                onClick={pipeline.abort}
+                className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 sm:flex-none"
+                data-testid="projectize-flow-abort-btn"
+              >
+                中断
+              </button>
+            )}
+            <Link
+              to={`/projects/${projectId}/write`}
+              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 sm:flex-none"
+            >
+              <Pencil className="h-3 w-3" /> 进入写作
+            </Link>
+          </div>
         </div>
         {pipeline.progress.error && (
           <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-600 inline-flex items-center gap-1">
@@ -684,7 +691,7 @@ function ArtifactStreamCard({
       ) : (
         <p className="text-xs text-gray-400">{emptyHint}</p>
       )}
-      {footer}
+      {footer && <div className="min-w-0">{footer}</div>}
     </section>
   )
 }
@@ -940,7 +947,7 @@ function BodyGenCard({
             {chapterCount} 章 · {totalWords} 字
           </span>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:justify-end">
           <label className="inline-flex items-center gap-1 text-xs text-gray-500">
             目标
             <input
@@ -953,7 +960,7 @@ function BodyGenCard({
                 if (Number.isFinite(v)) setTarget(v)
               }}
               disabled={activeProgress.running || blocked}
-              className="w-14 rounded border border-gray-200 bg-white px-2 py-1 text-xs disabled:bg-gray-50"
+              className="w-16 rounded border border-gray-200 bg-white px-2 py-1 text-xs disabled:bg-gray-50"
               data-testid="body-target-input"
             />
             章
@@ -963,7 +970,7 @@ function BodyGenCard({
             onClick={() => run({ projectId, target })}
             disabled={activeProgress.running || blocked}
             title={blocked ? blockedHint : '基于章节标题：补齐到 N 章 → 每章 AI 拆段 + 写满'}
-            className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+            className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50 sm:flex-none"
             data-testid="ai-body-btn"
           >
             {activeProgress.running ? (
@@ -981,7 +988,7 @@ function BodyGenCard({
             <button
               type="button"
               onClick={abort}
-              className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 sm:flex-none"
               data-testid="ai-body-abort-btn"
               title="中断后已写入的段不会回滚"
             >
