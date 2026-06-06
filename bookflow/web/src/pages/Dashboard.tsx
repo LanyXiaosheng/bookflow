@@ -32,6 +32,7 @@ import {
   TriangleAlert,
 } from 'lucide-react'
 import { dashboardApi, type PipelineStage } from '../api/dashboard'
+import { reviewsApi, type PendingReview } from '../api/reviews'
 import type { Seed } from '../api/seeds'
 import type { Project } from '../api/projects'
 import { aiJobKindLabel, useAllAiJobs, type AiJob } from '../hooks/useAiJobStore'
@@ -55,6 +56,10 @@ export default function Dashboard() {
   const summary = useQuery({
     queryKey: ['dashboard'],
     queryFn: () => dashboardApi.summary(),
+  })
+  const pendingReviews = useQuery({
+    queryKey: ['reviews', 'pending'],
+    queryFn: () => reviewsApi.listPending(),
   })
 
   const data = summary.data
@@ -101,7 +106,12 @@ export default function Dashboard() {
       />
 
       {/* ③ 生产流水线 + 右侧 3 卡 */}
-      <Pipeline stages={data?.pipeline} />
+      <Pipeline
+        stages={data?.pipeline}
+        recentProjects={data?.recent_projects ?? []}
+        pendingReviewCount={data?.health.pending_review ?? 0}
+        pendingReviews={pendingReviews.data ?? []}
+      />
 
       {/* ④ 健康指标 4 联 */}
       <HealthTiles
@@ -279,7 +289,17 @@ const STAGE_ROUTE: Record<PipelineStage['key'], string> = {
   archive: '/archived',
 }
 
-function Pipeline({ stages }: { stages?: PipelineStage[] }) {
+function Pipeline({
+  stages,
+  recentProjects = [],
+  pendingReviewCount = 0,
+  pendingReviews = [],
+}: {
+  stages?: PipelineStage[]
+  recentProjects?: Project[]
+  pendingReviewCount?: number
+  pendingReviews?: PendingReview[]
+}) {
   const inProg = stages?.find((s) => s.key === 'write')?.count ?? 0
   const watch = stages?.find((s) => s.key === 'ready')?.count ?? 0
 
@@ -340,8 +360,8 @@ function Pipeline({ stages }: { stages?: PipelineStage[] }) {
 
         {/* 右侧 360 三件套 */}
         <aside className="space-y-4 2xl:max-w-[360px]">
-          <NextPublishCard />
-          <ReviewReminderCard />
+          <NextPublishCard recentProjects={recentProjects} />
+          <ReviewReminderCard pendingReviewCount={pendingReviewCount} pendingReviews={pendingReviews} />
           <WeekGoalCard />
         </aside>
       </div>
@@ -386,31 +406,68 @@ function PipelineNode({ stage }: { stage: PipelineStage }) {
 }
 
 // 右侧三件套（v0.3 静态文案，v0.4 接 next-publish 算法）
-function NextPublishCard() {
+function projectDetailRoute(projectId?: string, query?: string): string {
+  if (!projectId) return '/projects'
+  return query ? `/projects/${projectId}?${query}` : `/projects/${projectId}`
+}
+
+function reviewRoute(item?: Pick<PendingReview, 'project_id' | 'stage'>): string {
+  if (!item) return '/review'
+  return `/review?project_id=${item.project_id}&stage=${item.stage}`
+}
+
+function reviewStageMeta(stage: PendingReview['stage']): string {
+  switch (stage) {
+    case '24h':
+      return '24h'
+    case '72h':
+      return '72h'
+    case '7d':
+      return '7d'
+  }
+}
+
+function NextPublishCard({ recentProjects }: { recentProjects: Project[] }) {
+  const mainRecommendation = recentProjects[0]
+  const backupRecommendation = recentProjects[1] ?? recentProjects[0]
+
   return (
-    <div className="rounded-lg border border-blue-100 bg-blue-50 p-5">
+    <div className="rounded-lg border border-blue-100 bg-blue-50 p-5" data-testid="dashboard-next-publish-card">
       <div className="flex items-center gap-2">
         <Sparkles className="h-4 w-4 text-blue-600" />
         <h3 className="text-sm font-semibold text-blue-900">下一篇发什么</h3>
       </div>
       <p className="mt-2 text-sm leading-6 text-blue-800/80">基于 next-publish 算法 · 今晚 21:00 档</p>
-      <div className="mt-4 rounded-lg bg-white/70 p-3 ring-1 ring-blue-100">
+      <Link
+        to={projectDetailRoute(mainRecommendation?.id)}
+        data-testid="dashboard-next-publish-main"
+        className="mt-4 block rounded-lg bg-white/70 p-3 ring-1 ring-blue-100 transition hover:bg-white"
+      >
         <div className="text-sm font-semibold text-gray-900 line-clamp-2">
-          闺蜜订婚宴上她未婚夫把我当小三我先公开了合伙协议
+          {mainRecommendation?.title ?? '闺蜜订婚宴上她未婚夫把我当小三我先公开了合伙协议'}
         </div>
         <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
-          <span className="rounded bg-orange-50 px-1.5 py-0.5 text-orange-700">现言火葬场</span>
+          <span className="rounded bg-orange-50 px-1.5 py-0.5 text-orange-700">
+            {mainRecommendation?.track ?? '现言火葬场'}
+          </span>
           <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700">10,456 字</span>
           <span className="rounded bg-blue-50 px-1.5 py-0.5 text-blue-700">评分 33</span>
         </div>
         <p className="mt-2 text-xs text-gray-500 leading-5">现言适合晚间沉浸阅读 · 与上一篇题材不重复</p>
-      </div>
-      <div className="mt-3 rounded-lg bg-white/70 p-3 ring-1 ring-blue-100">
-        <div className="text-xs text-gray-500 mb-1">备选 #2 · 12:00 午休档</div>
-        <div className="text-sm text-gray-900 line-clamp-1">公司上市敲钟那天前夫发现首席法务官是我</div>
-      </div>
+      </Link>
       <Link
-        to="/ready"
+        to={projectDetailRoute(backupRecommendation?.id)}
+        data-testid="dashboard-next-publish-backup"
+        className="mt-3 block rounded-lg bg-white/70 p-3 ring-1 ring-blue-100 transition hover:bg-white"
+      >
+        <div className="text-xs text-gray-500 mb-1">备选 #2 · 12:00 午休档</div>
+        <div className="text-sm text-gray-900 line-clamp-1">
+          {backupRecommendation?.title ?? '公司上市敲钟那天前夫发现首席法务官是我'}
+        </div>
+      </Link>
+      <Link
+        to={projectDetailRoute(mainRecommendation?.id, 'from=dashboard-next-publish')}
+        data-testid="dashboard-next-publish-reason"
         className="mt-4 inline-flex items-center text-sm font-medium text-blue-700 hover:text-blue-800"
       >
         查看推荐理由 <ArrowRight className="ml-1 h-4 w-4" />
@@ -419,25 +476,67 @@ function NextPublishCard() {
   )
 }
 
-function ReviewReminderCard() {
+function ReviewReminderCard({
+  pendingReviewCount,
+  pendingReviews,
+}: {
+  pendingReviewCount: number
+  pendingReviews: PendingReview[]
+}) {
+  const fallbackItems: PendingReview[] = [
+    {
+      project_id: 'demo-review-1',
+      title: '陪他创业八年公司上市敲钟名单里没有我的名字',
+      stage: '72h',
+      status: 'published',
+      published_at: '2026-06-01T00:00:00Z',
+      track: '现言婚恋火葬场',
+      total_words: 0,
+      data_recorded: false,
+      last_review_result: null,
+    },
+    {
+      project_id: 'demo-review-2',
+      title: '银行流水那天他十年工资全进了陌生女人账户',
+      stage: '72h',
+      status: 'published',
+      published_at: '2026-06-01T00:00:00Z',
+      track: '现言婚恋火葬场',
+      total_words: 0,
+      data_recorded: false,
+      last_review_result: null,
+    },
+  ]
+  const items = pendingReviews.length > 0 ? pendingReviews.slice(0, 2) : fallbackItems
+
   return (
-    <div className="rounded-lg border border-amber-200 bg-amber-50 p-5">
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-5" data-testid="dashboard-review-card">
       <div className="flex items-center gap-2">
         <AlarmClock className="h-4 w-4 text-amber-700" />
         <h3 className="text-sm font-semibold text-amber-900">催复盘</h3>
-        <span className="ml-auto inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
-          2
-        </span>
+        <Link
+          to="/review"
+          data-testid="dashboard-review-count-link"
+          className="ml-auto inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800 hover:bg-amber-200"
+        >
+          {pendingReviewCount}
+        </Link>
       </div>
       <ul className="mt-3 space-y-2 text-sm">
-        <li className="rounded-md bg-white/70 p-2.5 ring-1 ring-amber-100">
-          <div className="text-gray-900 line-clamp-1">陪他创业八年公司上市敲钟名单里没有我的名字</div>
-          <div className="mt-1 text-xs text-amber-700">已发 78h · 数据未录入</div>
-        </li>
-        <li className="rounded-md bg-white/70 p-2.5 ring-1 ring-amber-100">
-          <div className="text-gray-900 line-clamp-1">银行流水那天他十年工资全进了陌生女人账户</div>
-          <div className="mt-1 text-xs text-amber-700">已发 75h · 数据未录入</div>
-        </li>
+        {items.map((item, index) => (
+          <li key={`${item.project_id}-${item.stage}`}>
+            <Link
+              to={reviewRoute(item)}
+              data-testid={`dashboard-review-item-${index}`}
+              className="block rounded-md bg-white/70 p-2.5 ring-1 ring-amber-100 transition hover:bg-white"
+            >
+              <div className="text-gray-900 line-clamp-1">{item.title}</div>
+              <div className="mt-1 text-xs text-amber-700">
+                已发 {reviewStageMeta(item.stage)} · {item.data_recorded ? '已录数据' : '数据未录入'}
+              </div>
+            </Link>
+          </li>
+        ))}
       </ul>
     </div>
   )
@@ -445,19 +544,31 @@ function ReviewReminderCard() {
 
 function WeekGoalCard() {
   return (
-    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-5">
+    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-5" data-testid="dashboard-week-goal-card">
       <div className="flex items-center gap-2">
         <Flag className="h-4 w-4 text-emerald-700" />
         <h3 className="text-sm font-semibold text-emerald-900">本周目标</h3>
       </div>
       <ul className="mt-3 space-y-2 text-sm text-emerald-900/90">
-        <li className="flex items-start gap-2">
-          <Square className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
-          <span>新号选题：现言婚恋火葬场方向批量出题</span>
+        <li>
+          <Link
+            to="/seeds"
+            data-testid="dashboard-week-goal-seeds"
+            className="flex items-start gap-2 rounded-md px-1 py-1 transition hover:bg-emerald-100/70"
+          >
+            <Square className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
+            <span>新号选题：现言婚恋火葬场方向批量出题</span>
+          </Link>
         </li>
-        <li className="flex items-start gap-2">
-          <Square className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
-          <span>新号立项：完成第一批大纲</span>
+        <li>
+          <Link
+            to="/projects"
+            data-testid="dashboard-week-goal-projects"
+            className="flex items-start gap-2 rounded-md px-1 py-1 transition hover:bg-emerald-100/70"
+          >
+            <Square className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
+            <span>新号立项：完成第一批大纲</span>
+          </Link>
         </li>
       </ul>
       <div className="mt-3 h-1.5 w-full rounded-full bg-emerald-100">
@@ -645,7 +756,7 @@ function RecentOutput({
           return (
             <Link
               key={r.id}
-              to={r.id.startsWith('p:') ? `/projects/${r.id.slice(2)}/write` : '/seeds'}
+              to={r.id.startsWith('p:') ? `/projects/${r.id.slice(2)}` : '/seeds'}
               className="grid grid-cols-[26px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3 transition hover:border-blue-100 hover:bg-blue-50"
             >
               <span

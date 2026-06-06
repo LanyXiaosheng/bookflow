@@ -12,6 +12,7 @@ import Published from './pages/Published'
 import Archived from './pages/Archived'
 import Write from './pages/Write'
 import ProjectDetail from './pages/ProjectDetail'
+import Review from './pages/Review'
 import Stub from './pages/Stub'
 import Settings from './pages/Settings'
 import Tracks from './pages/Tracks'
@@ -37,7 +38,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/ready" element={<Ready />} />
               <Route path="/published" element={<Published />} />
               <Route path="/archived" element={<Archived />} />
-              <Route path="/review" element={<Stub />} />
+              <Route path="/review" element={<Review />} />
               <Route path="/tracks" element={<Tracks />} />
               <Route path="/playbook" element={<Playbook />} />
               <Route path="/settings" element={<Settings />} />

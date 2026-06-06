@@ -1,7 +1,8 @@
 use bookflow_domain::{
-    count_chars, Beat, Chapter, NewSeed, Project, ProjectStatus, Score, Seed, Tier,
+    count_chars, Beat, Chapter, NewSeed, PendingProjectReview, Project, ProjectReview,
+    ProjectStatus, ReviewResult, ReviewStage, Score, Seed, Tier,
 };
-use sqlx::{postgres::PgPoolOptions, types::Json, PgPool};
+use sqlx::{postgres::{PgPoolOptions, PgRow}, types::Json, PgPool, Row};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -16,6 +17,24 @@ pub enum StorageError {
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
+
+const REVIEW_STAGE_PENDING_ORDER_SQL: &str = r#"
+    CASE stage
+        WHEN '72h' THEN 0
+        WHEN '24h' THEN 1
+        WHEN '7d' THEN 2
+        ELSE 9
+    END
+"#;
+
+const REVIEW_STAGE_RECENCY_ORDER_SQL: &str = r#"
+    CASE stage
+        WHEN '7d' THEN 0
+        WHEN '72h' THEN 1
+        WHEN '24h' THEN 2
+        ELSE 9
+    END
+"#;
 
 pub async fn pool(database_url: &str) -> Result<PgPool> {
     let pool = PgPoolOptions::new()
@@ -701,6 +720,254 @@ pub struct ProjectArtifact {
 }
 
 #[derive(Clone)]
+pub struct ProjectReviewRepo {
+    pool: PgPool,
+}
+
+impl ProjectReviewRepo {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
+    pub async fn list_by_project(&self, project_id: Uuid) -> Result<Vec<ProjectReview>> {
+        let rows = sqlx::query(&format!(
+            r#"
+            SELECT id, project_id, stage, published_at, data_recorded,
+                   read_count, completion_rate, engagement_count,
+                   overall_result, title_result, hook_result, emotion_result,
+                   success_reason, failure_reason, continue_track,
+                   reusable_conclusion, next_action, created_at, updated_at
+            FROM project_reviews
+            WHERE project_id = $1
+            ORDER BY
+                {REVIEW_STAGE_PENDING_ORDER_SQL},
+                published_at ASC
+            "#,
+        ))
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(map_project_review).collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert(
+        &self,
+        project_id: Uuid,
+        stage: ReviewStage,
+        published_at: chrono::DateTime<chrono::Utc>,
+        data_recorded: bool,
+        read_count: Option<i64>,
+        completion_rate: Option<f64>,
+        engagement_count: Option<i64>,
+        overall_result: Option<&str>,
+        title_result: Option<&str>,
+        hook_result: Option<&str>,
+        emotion_result: Option<&str>,
+        success_reason: Option<&str>,
+        failure_reason: Option<&str>,
+        continue_track: Option<&str>,
+        reusable_conclusion: Option<&str>,
+        next_action: Option<&str>,
+    ) -> Result<ProjectReview> {
+        let row = sqlx::query(
+            r#"
+            INSERT INTO project_reviews (
+                project_id, stage, published_at, data_recorded,
+                read_count, completion_rate, engagement_count,
+                overall_result, title_result, hook_result, emotion_result,
+                success_reason, failure_reason, continue_track,
+                reusable_conclusion, next_action
+            )
+            VALUES (
+                $1, $2, $3, $4,
+                $5, $6, $7,
+                $8, $9, $10, $11,
+                $12, $13, $14,
+                $15, $16
+            )
+            ON CONFLICT (project_id, stage) DO UPDATE SET
+                published_at = EXCLUDED.published_at,
+                data_recorded = EXCLUDED.data_recorded,
+                read_count = EXCLUDED.read_count,
+                completion_rate = EXCLUDED.completion_rate,
+                engagement_count = EXCLUDED.engagement_count,
+                overall_result = EXCLUDED.overall_result,
+                title_result = EXCLUDED.title_result,
+                hook_result = EXCLUDED.hook_result,
+                emotion_result = EXCLUDED.emotion_result,
+                success_reason = EXCLUDED.success_reason,
+                failure_reason = EXCLUDED.failure_reason,
+                continue_track = EXCLUDED.continue_track,
+                reusable_conclusion = EXCLUDED.reusable_conclusion,
+                next_action = EXCLUDED.next_action,
+                updated_at = NOW()
+            RETURNING id, project_id, stage, published_at, data_recorded,
+                      read_count, completion_rate, engagement_count,
+                      overall_result, title_result, hook_result, emotion_result,
+                      success_reason, failure_reason, continue_track,
+                      reusable_conclusion, next_action, created_at, updated_at
+            "#,
+        )
+        .bind(project_id)
+        .bind(stage.as_str())
+        .bind(published_at)
+        .bind(data_recorded)
+        .bind(read_count)
+        .bind(completion_rate)
+        .bind(engagement_count)
+        .bind(overall_result)
+        .bind(title_result)
+        .bind(hook_result)
+        .bind(emotion_result)
+        .bind(success_reason)
+        .bind(failure_reason)
+        .bind(continue_track)
+        .bind(reusable_conclusion)
+        .bind(next_action)
+        .fetch_one(&self.pool)
+        .await?;
+
+        map_project_review(row)
+    }
+
+    pub async fn pending_list(&self) -> Result<Vec<PendingProjectReview>> {
+        let rows = sqlx::query(&format!(
+            r#"
+            WITH stage_targets AS (
+                SELECT p.id AS project_id,
+                       p.title,
+                       p.status,
+                       p.track,
+                       p.published_at,
+                       stage.stage
+                FROM projects p
+                JOIN (
+                    VALUES ('72h', INTERVAL '72 hours'),
+                           ('24h', INTERVAL '24 hours'),
+                           ('7d', INTERVAL '7 days')
+                ) AS stage(stage, due_after)
+                  ON p.published_at IS NOT NULL
+                 AND p.published_at + stage.due_after <= NOW()
+                WHERE p.status = 'published'
+            ),
+            latest_results AS (
+                SELECT DISTINCT ON (project_id)
+                       project_id,
+                       overall_result
+                FROM project_reviews
+                WHERE overall_result IS NOT NULL
+                ORDER BY project_id,
+                         {REVIEW_STAGE_RECENCY_ORDER_SQL},
+                         updated_at DESC
+            )
+            SELECT st.project_id,
+                   st.title,
+                   st.status,
+                   st.stage,
+                   st.published_at,
+                   st.track,
+                   COALESCE(SUM(c.word_count), 0) AS total_words,
+                   COALESCE(pr.data_recorded, FALSE) AS data_recorded,
+                   lr.overall_result AS last_review_result
+            FROM stage_targets st
+            LEFT JOIN project_reviews pr
+              ON pr.project_id = st.project_id
+             AND pr.stage = st.stage
+            LEFT JOIN chapters c
+              ON c.project_id = st.project_id
+            LEFT JOIN latest_results lr
+              ON lr.project_id = st.project_id
+            WHERE pr.id IS NULL
+            GROUP BY st.project_id, st.title, st.status, st.stage, st.published_at, st.track,
+                     pr.data_recorded, lr.overall_result
+            ORDER BY
+                {REVIEW_STAGE_PENDING_ORDER_SQL_ST},
+                st.published_at ASC
+            "#,
+            REVIEW_STAGE_PENDING_ORDER_SQL_ST = REVIEW_STAGE_PENDING_ORDER_SQL.replace("stage", "st.stage"),
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(PendingProjectReview {
+                    project_id: row.get("project_id"),
+                    title: row.get("title"),
+                    status: parse_status(row.get::<&str, _>("status")),
+                    stage: parse_review_stage(row.get("stage"))?,
+                    published_at: row.get("published_at"),
+                    track: row.get("track"),
+                    total_words: row.get("total_words"),
+                    data_recorded: row.get("data_recorded"),
+                    last_review_result: parse_review_result(
+                        row.get::<Option<String>, _>("last_review_result").as_deref(),
+                    )?,
+                })
+            })
+            .collect()
+    }
+}
+
+fn map_project_review(row: PgRow) -> Result<ProjectReview> {
+    Ok(ProjectReview {
+        id: row.get("id"),
+        project_id: row.get("project_id"),
+        stage: parse_review_stage(row.get("stage"))?,
+        published_at: row.get("published_at"),
+        data_recorded: row.get("data_recorded"),
+        read_count: row.get("read_count"),
+        completion_rate: row.get("completion_rate"),
+        engagement_count: row.get("engagement_count"),
+        overall_result: parse_review_result(
+            row.get::<Option<String>, _>("overall_result").as_deref(),
+        )?,
+        title_result: row.get("title_result"),
+        hook_result: row.get("hook_result"),
+        emotion_result: row.get("emotion_result"),
+        success_reason: row.get("success_reason"),
+        failure_reason: row.get("failure_reason"),
+        continue_track: row.get("continue_track"),
+        reusable_conclusion: row.get("reusable_conclusion"),
+        next_action: row.get("next_action"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
+fn parse_review_stage(stage: &str) -> Result<ReviewStage> {
+    ReviewStage::parse(stage).ok_or_else(|| {
+        StorageError::Conflict(format!("invalid persisted review stage: {stage}"))
+    })
+}
+
+fn parse_review_result(result: Option<&str>) -> Result<Option<ReviewResult>> {
+    result
+        .map(|value| {
+            ReviewResult::parse(value).ok_or_else(|| {
+                StorageError::Conflict(format!("invalid persisted review result: {value}"))
+            })
+        })
+        .transpose()
+}
+
+#[cfg(test)]
+fn review_stage_recency_rank(stage: &str) -> i32 {
+    match stage {
+        "7d" => 0,
+        "72h" => 1,
+        "24h" => 2,
+        _ => 9,
+    }
+}
+
+#[derive(Clone)]
 pub struct ArtifactRepo {
     pool: PgPool,
 }
@@ -773,6 +1040,9 @@ impl ArtifactRepo {
 #[cfg(test)]
 mod tests {
     use super::ArtifactKind;
+    use super::ReviewResult;
+    use super::ReviewStage;
+    use super::{parse_review_result, parse_review_stage, review_stage_recency_rank};
 
     #[test]
     fn artifact_kind_parses_summary_and_polish() {
@@ -791,5 +1061,40 @@ mod tests {
         assert_eq!(ArtifactKind::BookSummary.as_str(), "book_summary");
         assert_eq!(ArtifactKind::BookPolished.as_str(), "book_polished");
         assert_eq!(ArtifactKind::CharacterSetup.as_str(), "character_setup");
+    }
+
+    #[test]
+    fn review_stage_parse_and_string_roundtrip() {
+        assert_eq!(ReviewStage::parse("24h"), Some(ReviewStage::H24));
+        assert_eq!(ReviewStage::parse("72h"), Some(ReviewStage::H72));
+        assert_eq!(ReviewStage::parse("7d"), Some(ReviewStage::D7));
+        assert_eq!(ReviewStage::H24.as_str(), "24h");
+        assert_eq!(ReviewStage::H72.as_str(), "72h");
+        assert_eq!(ReviewStage::D7.as_str(), "7d");
+    }
+
+    #[test]
+    fn review_stage_serde_matches_db_contract() {
+        let encoded = serde_json::to_string(&ReviewStage::H24).unwrap();
+        assert_eq!(encoded, "\"24h\"");
+        let decoded: ReviewStage = serde_json::from_str("\"72h\"").unwrap();
+        assert_eq!(decoded, ReviewStage::H72);
+    }
+
+    #[test]
+    fn persisted_review_values_fail_fast_when_invalid() {
+        assert!(parse_review_stage("bad-stage").is_err());
+        assert!(parse_review_result(Some("bad-result")).is_err());
+        assert_eq!(
+            parse_review_result(Some("爆")).unwrap(),
+            Some(ReviewResult::Explode)
+        );
+        assert_eq!(parse_review_result(None).unwrap(), None);
+    }
+
+    #[test]
+    fn latest_review_result_prefers_stage_recency_over_update_time() {
+        assert!(review_stage_recency_rank("7d") < review_stage_recency_rank("72h"));
+        assert!(review_stage_recency_rank("72h") < review_stage_recency_rank("24h"));
     }
 }

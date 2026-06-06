@@ -12,11 +12,12 @@ use axum::{
     Json, Router,
 };
 use bookflow_domain::{
-    Beat, Chapter, DomainError, NewSeed, Project, ProjectStatus, Seed,
+    Beat, Chapter, DomainError, NewSeed, PendingProjectReview, Project, ProjectReview,
+    ProjectStatus, ReviewResult, ReviewStage, Seed,
 };
 use bookflow_storage::{
     pool, ArtifactKind, ArtifactRepo, ChapterRepo, NewSeedDraft, ProjectArtifact, ProjectRepo,
-    SeedDraft, SeedDraftRepo, SeedRepo,
+    ProjectReviewRepo, SeedDraft, SeedDraftRepo, SeedRepo,
 };
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
@@ -40,18 +41,36 @@ use ai::{
 use docs::DocRoot;
 use settings::{Settings, SettingsPatch, SettingsRepo};
 
-#[derive(Clone)]
 struct AppState {
     pool: PgPool,
     seeds: SeedRepo,
     seed_drafts: SeedDraftRepo,
     projects: ProjectRepo,
+    reviews: ProjectReviewRepo,
     chapters: ChapterRepo,
     artifacts: ArtifactRepo,
     ai: AiClient,
     settings: SettingsRepo,
     tracks: DocRoot,
     playbook: DocRoot,
+}
+
+impl Clone for AppState {
+    fn clone(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            seeds: self.seeds.clone(),
+            seed_drafts: self.seed_drafts.clone(),
+            projects: self.projects.clone(),
+            reviews: ProjectReviewRepo::new(self.pool.clone()),
+            chapters: self.chapters.clone(),
+            artifacts: self.artifacts.clone(),
+            ai: self.ai.clone(),
+            settings: self.settings.clone(),
+            tracks: self.tracks.clone(),
+            playbook: self.playbook.clone(),
+        }
+    }
 }
 
 #[tokio::main]
@@ -92,6 +111,7 @@ async fn main() -> anyhow::Result<()> {
         seeds: SeedRepo::new(pool.clone()),
         seed_drafts: SeedDraftRepo::new(pool.clone()),
         projects: ProjectRepo::new(pool.clone()),
+        reviews: ProjectReviewRepo::new(pool.clone()),
         chapters: ChapterRepo::new(pool.clone()),
         artifacts: ArtifactRepo::new(pool.clone()),
         pool,
@@ -112,6 +132,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects", post(create_project).get(list_projects))
         .route("/api/projects/:id", get(get_project).delete(delete_project))
         .route("/api/projects/:id/transition", post(transition_project))
+        .route("/api/reviews/pending", get(list_pending_reviews))
+        .route("/api/projects/:id/reviews", get(list_project_reviews))
+        .route("/api/projects/:id/reviews/:stage", put(upsert_project_review))
         .route("/api/projects/:id/artifacts", get(list_project_artifacts))
         .route("/api/projects/:id/ai-readme/stream", post(ai_readme_stream))
         .route(
@@ -313,6 +336,106 @@ async fn transition_project(
     }
     let p = s.projects.update_status(id, to).await.map_err(AppError::Storage)?;
     Ok(Json(p))
+}
+
+// === Reviews ===
+
+#[derive(Debug, Deserialize)]
+struct UpsertProjectReviewBody {
+    data_recorded: bool,
+    read_count: Option<i64>,
+    completion_rate: Option<f64>,
+    engagement_count: Option<i64>,
+    overall_result: Option<String>,
+    title_result: Option<String>,
+    hook_result: Option<String>,
+    emotion_result: Option<String>,
+    success_reason: Option<String>,
+    failure_reason: Option<String>,
+    continue_track: Option<String>,
+    reusable_conclusion: Option<String>,
+    next_action: Option<String>,
+}
+
+async fn list_pending_reviews(
+    State(s): State<AppState>,
+) -> Result<Json<Vec<PendingProjectReview>>, AppError> {
+    let mut pending = s.reviews.pending_list().await.map_err(AppError::Storage)?;
+    pending.sort_by_key(|item| (review_stage_priority(item.stage.as_str()), item.published_at));
+    Ok(Json(pending))
+}
+
+async fn list_project_reviews(
+    State(s): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Vec<ProjectReview>>, AppError> {
+    s.projects.get(project_id).await.map_err(AppError::Storage)?;
+    let mut reviews = s.reviews.list_by_project(project_id).await.map_err(AppError::Storage)?;
+    reviews.sort_by_key(|item| (review_stage_priority(item.stage.as_str()), item.published_at));
+    Ok(Json(reviews))
+}
+
+async fn upsert_project_review(
+    State(s): State<AppState>,
+    Path((project_id, stage)): Path<(Uuid, String)>,
+    Json(body): Json<UpsertProjectReviewBody>,
+) -> Result<Json<ProjectReview>, AppError> {
+    let stage = ReviewStage::parse(&stage)
+        .ok_or_else(|| AppError::BadRequest(format!("unknown review stage: {stage}")))?;
+    s.projects.get(project_id).await.map_err(AppError::Storage)?;
+    let published_at = fetch_project_published_at(&s.pool, project_id).await?;
+    if let Some(read_count) = body.read_count {
+        if read_count < 0 {
+            return Err(AppError::BadRequest(format!(
+                "read_count must be >= 0, got {read_count}"
+            )));
+        }
+    }
+    if let Some(engagement_count) = body.engagement_count {
+        if engagement_count < 0 {
+            return Err(AppError::BadRequest(format!(
+                "engagement_count must be >= 0, got {engagement_count}"
+            )));
+        }
+    }
+    if let Some(completion_rate) = body.completion_rate {
+        if !(0.0..=1.0).contains(&completion_rate) {
+            return Err(AppError::BadRequest(format!(
+                "completion_rate must be between 0.0 and 1.0 inclusive, got {completion_rate}"
+            )));
+        }
+    }
+    let overall_result = body
+        .overall_result
+        .as_deref()
+        .map(|value| {
+            ReviewResult::parse(value)
+                .ok_or_else(|| AppError::BadRequest(format!("unknown review result: {value}")))
+        })
+        .transpose()?;
+    let review = s
+        .reviews
+        .upsert(
+            project_id,
+            stage,
+            published_at,
+            body.data_recorded,
+            body.read_count,
+            body.completion_rate,
+            body.engagement_count,
+            overall_result.map(ReviewResult::as_str),
+            body.title_result.as_deref(),
+            body.hook_result.as_deref(),
+            body.emotion_result.as_deref(),
+            body.success_reason.as_deref(),
+            body.failure_reason.as_deref(),
+            body.continue_track.as_deref(),
+            body.reusable_conclusion.as_deref(),
+            body.next_action.as_deref(),
+        )
+        .await
+        .map_err(AppError::Storage)?;
+    Ok(Json(review))
 }
 
 // === Chapters ===
@@ -530,6 +653,12 @@ async fn dashboard_summary(
         writing, ready, published, archived,
         seeds_total, seeds_greenlight, seeds_backlog,
     };
+    let pending_reviews = s.reviews.pending_list().await.map_err(AppError::Storage)?;
+    let pending_review = pending_reviews.len() as i64;
+    let pending_review_overdue = pending_reviews
+        .iter()
+        .filter(|item| matches!(item.stage, ReviewStage::H72 | ReviewStage::D7))
+        .count() as i64;
 
     // pipeline 6 阶段
     // seed = 仅 seed 未立项 = seeds_total - 已立项的 seed_id 数（粗略：用 seeds_total - 全 projects 数）
@@ -591,8 +720,8 @@ async fn dashboard_summary(
         in_progress_detail: format!("立项 {writing} / 待发 {ready}"),
         weekly_published: published,
         weekly_delta: 0,
-        pending_review: published, // 暂用 published 数占位
-        pending_review_overdue: 0,
+        pending_review,
+        pending_review_overdue,
         wc_warnings: 0,
         wc_warning_detail: "暂无字数告警".into(),
     };
@@ -615,6 +744,8 @@ async fn dashboard_summary(
 enum AppError {
     #[error(transparent)]
     Domain(DomainError),
+    #[error("{0}")]
+    BadRequest(String),
     #[error(transparent)]
     Storage(bookflow_storage::StorageError),
     #[error("ai: {0}")]
@@ -627,6 +758,11 @@ impl IntoResponse for AppError {
             AppError::Domain(e) => (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": e })),
+            )
+                .into_response(),
+            AppError::BadRequest(detail) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "bad_request", "detail": detail })),
             )
                 .into_response(),
             AppError::Storage(e) => {
@@ -682,6 +818,37 @@ fn mask_key(k: &str) -> String {
     if n <= 4 { return "*".repeat(n); }
     let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
     format!("{}{}", "*".repeat(n - 4), tail)
+}
+
+fn review_stage_priority(stage: &str) -> i32 {
+    match stage {
+        "72h" => 0,
+        "24h" => 1,
+        "7d" => 2,
+        _ => 9,
+    }
+}
+
+async fn fetch_project_published_at(
+    pool: &PgPool,
+    project_id: Uuid,
+) -> Result<chrono::DateTime<chrono::Utc>, AppError> {
+    let published_at = sqlx::query_scalar::<_, Option<chrono::DateTime<chrono::Utc>>>(
+        "SELECT published_at FROM projects WHERE id = $1",
+    )
+    .bind(project_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| AppError::Storage(err.into()))?
+    .ok_or_else(|| AppError::Storage(bookflow_storage::StorageError::NotFound(format!(
+        "project {project_id}"
+    ))))?;
+
+    published_at.ok_or_else(|| {
+        AppError::Storage(bookflow_storage::StorageError::Conflict(format!(
+            "project {project_id} has no published_at"
+        )))
+    })
 }
 
 async fn get_settings(State(s): State<AppState>) -> Result<Json<SettingsView>, AppError> {
@@ -1173,7 +1340,7 @@ fn build_full_book_source(mut chapters: Vec<Chapter>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_full_book_source, looks_like_chapter_heading};
+    use super::{build_full_book_source, looks_like_chapter_heading, review_stage_priority};
     use bookflow_domain::Chapter;
     use uuid::Uuid;
 
@@ -1258,5 +1425,11 @@ mod tests {
         let full = build_full_book_source(vec![chapter]).unwrap();
 
         assert!(full.starts_with("# 第3章 替嫁"));
+    }
+
+    #[test]
+    fn review_stage_priority_orders_72h_before_24h_before_7d() {
+        assert!(review_stage_priority("72h") < review_stage_priority("24h"));
+        assert!(review_stage_priority("24h") < review_stage_priority("7d"));
     }
 }

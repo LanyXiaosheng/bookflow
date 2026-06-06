@@ -1,5 +1,83 @@
 import { test, expect } from '@playwright/test'
 
+const dashboardMainProject = {
+  id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  seed_id: 'seed-main-0000-4000-8000-000000000000',
+  title: '闺蜜订婚宴上她未婚夫把我当小三我先公开了合伙协议',
+  track: '现言婚恋火葬场',
+  status: 'ready',
+  created_at: '2026-06-01T10:00:00Z',
+  updated_at: '2026-06-05T10:00:00Z',
+}
+
+const dashboardBackupProject = {
+  id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  seed_id: 'seed-backup-000-4000-8000-000000000000',
+  title: '公司上市敲钟那天前夫发现首席法务官是我',
+  track: '现言婚恋火葬场',
+  status: 'published',
+  created_at: '2026-05-28T10:00:00Z',
+  updated_at: '2026-06-04T10:00:00Z',
+}
+
+const dashboardPendingReview = {
+  project_id: '11111111-1111-4111-8111-111111111111',
+  title: `复盘流${Date.now()}上市敲钟那天前夫发现首席法务官是我`.slice(0, 25),
+  status: 'published',
+  stage: '24h',
+  published_at: '2026-06-01T12:00:00Z',
+  track: '现言婚恋火葬场',
+  total_words: 10456,
+  data_recorded: false,
+  last_review_result: null,
+} as const
+
+async function stubDashboardCardData(page: Parameters<typeof test>[0]['page']) {
+  await page.route('**/api/dashboard/summary', async (route) => {
+    await route.fulfill({
+      json: {
+        counts: {
+          writing: 1,
+          ready: 1,
+          published: 1,
+          archived: 0,
+          seeds_total: 2,
+          seeds_greenlight: 1,
+          seeds_backlog: 1,
+        },
+        pipeline: [
+          { key: 'seed', label: '选题', count: 1, line1: '评分 ≥28：1', line2: '备选池：1', line2_warn: false },
+          { key: 'plan', label: '立项', count: 1, line1: '大纲完成：1', line2: '言情向占比：100%', line2_warn: false },
+          { key: 'write', label: '写作', count: 1, line1: '字数达标：1 / 1', line2: null, line2_warn: false },
+          { key: 'ready', label: '待发', count: 1, line1: '7 项检查全过：1', line2: null, line2_warn: false },
+          { key: 'published', label: '已发', count: 1, line1: '本周新发：1', line2: null, line2_warn: false },
+          { key: 'archive', label: '归档', count: 0, line1: '累计归档：0', line2: '等待复盘归档', line2_warn: false },
+        ],
+        health: {
+          in_progress: 2,
+          in_progress_detail: '立项 1 / 待发 1',
+          weekly_published: 1,
+          weekly_delta: 0,
+          pending_review: 1,
+          pending_review_overdue: 0,
+          wc_warnings: 0,
+          wc_warning_detail: '暂无字数告警',
+        },
+        llm: {
+          configured: true,
+          provider: 'openai',
+          model: 'gpt-5',
+        },
+        recent_seeds: [],
+        recent_projects: [dashboardMainProject, dashboardBackupProject],
+      },
+    })
+  })
+  await page.route('**/api/reviews/pending', async (route) => {
+    await route.fulfill({ json: [dashboardPendingReview] })
+  })
+}
+
 // 端到端：选题（绿灯自动立项）→ 项目明细 → 进入写作 → 新建章节 + 手写正文 + 保存 → 定稿进入待发 → 待发列表能找到
 test('端到端：seed → project → 章节 → 定稿 → 待发列表', async ({ page }) => {
   const title = `流程${Date.now()}冲喜替嫁那夜他先掀红盖头`.slice(0, 25)
@@ -152,4 +230,150 @@ test('前期方案流：README → 角色设定，确认后才能生成大纲', 
   await page.getByTestId('character-setup-confirm-btn').click()
   await expect(page.getByTestId('outline-stale-notice')).toBeHidden()
   await expect(page.getByTestId('ai-outline-btn')).toBeEnabled()
+})
+
+test('下一篇发什么：主推荐和备选可跳项目明细', async ({ page }) => {
+  await stubDashboardCardData(page)
+
+  await page.goto('/')
+  await page.getByTestId('dashboard-next-publish-main').click()
+  await page.waitForURL(`/projects/${dashboardMainProject.id}`, { timeout: 15_000 })
+
+  await page.goto('/')
+  await page.getByTestId('dashboard-next-publish-backup').click()
+  await page.waitForURL(`/projects/${dashboardBackupProject.id}`, { timeout: 15_000 })
+
+  await page.goto('/')
+  await page.getByTestId('dashboard-next-publish-reason').click()
+  await page.waitForURL(
+    new RegExp(`/projects/${dashboardMainProject.id}\\?from=dashboard-next-publish$`),
+    { timeout: 15_000 },
+  )
+})
+
+test('催复盘：看板卡片入口可跳 review 路由', async ({ page }) => {
+  await stubDashboardCardData(page)
+
+  await page.goto('/')
+  await page.getByTestId('dashboard-review-count-link').click()
+  await page.waitForURL('/review', { timeout: 15_000 })
+
+  await page.goto('/')
+  await page.getByTestId('dashboard-review-item-0').click()
+  await page.waitForURL(
+    new RegExp(`/review\\?project_id=${dashboardPendingReview.project_id}&stage=${dashboardPendingReview.stage}$`),
+    { timeout: 15_000 },
+  )
+})
+
+test('本周目标：目标项可跳既有入口', async ({ page }) => {
+  await stubDashboardCardData(page)
+
+  await page.goto('/')
+  await page.getByTestId('dashboard-week-goal-seeds').click()
+  await page.waitForURL('/seeds', { timeout: 15_000 })
+
+  await page.goto('/')
+  await page.getByTestId('dashboard-week-goal-projects').click()
+  await page.waitForURL('/projects', { timeout: 15_000 })
+})
+
+test('Dashboard 复盘入口：通过催复盘卡进入真实 /review 页面并可保存复盘', async ({ page, request }) => {
+  const projectId = dashboardPendingReview.project_id
+  const savedReview = {
+    id: '22222222-2222-4222-8222-222222222222',
+    project_id: projectId,
+    stage: '24h',
+    published_at: '2026-06-01T12:00:00Z',
+    data_recorded: true,
+    read_count: 1234,
+    completion_rate: 0.56,
+    engagement_count: 88,
+    overall_result: '爆',
+    title_result: '标题钩子有效',
+    hook_result: '开头留人稳定',
+    emotion_result: '情绪节点够密',
+    success_reason: '节奏和反转匹配赛道预期',
+    failure_reason: '中段传播点不够集中',
+    continue_track: '继续追投婚恋火葬场',
+    reusable_conclusion: '高压身份反差仍然有效',
+    next_action: '下一篇继续做身份反转强钩子',
+    created_at: '2026-06-02T12:00:00Z',
+    updated_at: '2026-06-02T13:00:00Z',
+  }
+
+  let reviewsByProject = [savedReview]
+  let receivedSaveBody: Record<string, unknown> | null = null
+  let saveCount = 0
+
+  await stubDashboardCardData(page)
+  await page.route(`**/api/projects/${projectId}/reviews`, async (route) => {
+    await route.fulfill({ json: reviewsByProject })
+  })
+  await page.route(`**/api/projects/${projectId}/reviews/24h`, async (route) => {
+    saveCount += 1
+    receivedSaveBody = route.request().postDataJSON() as Record<string, unknown>
+    reviewsByProject = [
+      {
+        ...savedReview,
+        ...receivedSaveBody,
+        updated_at: '2026-06-02T14:00:00Z',
+      },
+    ]
+    await route.fulfill({ json: reviewsByProject[0] })
+  })
+
+  await page.goto('/')
+  await page.getByTestId('dashboard-review-item-0').click()
+  await page.waitForURL(/\/review\?project_id=.*&stage=24h$/, { timeout: 15_000 })
+
+  await expect(page.getByRole('heading', { name: '复盘', exact: true })).toBeVisible()
+  await expect(page.getByTestId('review-pending-list')).toBeVisible()
+  await expect(page.getByTestId('review-project-summary')).toContainText(dashboardPendingReview.title)
+  await expect(page.getByTestId('review-project-detail-link')).toHaveAttribute(
+    'href',
+    `/projects/${projectId}`,
+  )
+
+  await page.getByTestId('review-read-count').fill('')
+  await page.getByTestId('review-completion-rate').fill('')
+  await page.getByTestId('review-engagement-count').fill('')
+  await page.getByTestId('review-save-btn').click()
+
+  await expect.poll(() => saveCount).toBe(1)
+  expect(receivedSaveBody).toMatchObject({
+    data_recorded: false,
+    read_count: null,
+    completion_rate: null,
+    engagement_count: null,
+  })
+
+  await page.getByTestId('review-read-count').fill('1234')
+  await page.getByTestId('review-completion-rate').fill('0.56')
+  await page.getByTestId('review-engagement-count').fill('88')
+  await page.getByTestId('review-overall-result').selectOption('爆')
+  await page.getByTestId('review-title-result').fill('标题钩子有效')
+  await page.getByTestId('review-hook-result').fill('开头留人稳定')
+  await page.getByTestId('review-emotion-result').fill('情绪节点够密')
+  await page.getByTestId('review-success-reason').fill('节奏和反转匹配赛道预期')
+  await page.getByTestId('review-failure-reason').fill('中段传播点不够集中')
+  await page.getByTestId('review-continue-track').fill('继续追投婚恋火葬场')
+  await page.getByTestId('review-reusable-conclusion').fill('高压身份反差仍然有效')
+  await page.getByTestId('review-next-action').fill('下一篇继续做身份反转强钩子')
+  await page.getByTestId('review-save-btn').click()
+
+  await expect(page.getByText('已保存复盘')).toBeVisible({ timeout: 15_000 })
+  await expect.poll(() => saveCount).toBe(2)
+  await expect(page.getByTestId('review-read-count')).toHaveValue('1234')
+  await expect(page.getByTestId('review-overall-result')).toHaveValue('爆')
+  await expect.poll(() => receivedSaveBody).not.toBeNull()
+  expect(receivedSaveBody).toMatchObject({
+    data_recorded: true,
+    read_count: 1234,
+    completion_rate: 0.56,
+    engagement_count: 88,
+    overall_result: '爆',
+    title_result: '标题钩子有效',
+    next_action: '下一篇继续做身份反转强钩子',
+  })
 })

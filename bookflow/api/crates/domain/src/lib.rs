@@ -194,6 +194,100 @@ pub struct Project {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ReviewStage {
+    #[serde(rename = "24h")]
+    H24,
+    #[serde(rename = "72h")]
+    H72,
+    #[serde(rename = "7d")]
+    D7,
+}
+
+impl ReviewStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReviewStage::H24 => "24h",
+            ReviewStage::H72 => "72h",
+            ReviewStage::D7 => "7d",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "24h" => Some(Self::H24),
+            "72h" => Some(Self::H72),
+            "7d" => Some(Self::D7),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ReviewResult {
+    #[serde(rename = "爆")]
+    Explode,
+    #[serde(rename = "平")]
+    Flat,
+    #[serde(rename = "扑")]
+    Flop,
+}
+
+impl ReviewResult {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReviewResult::Explode => "爆",
+            ReviewResult::Flat => "平",
+            ReviewResult::Flop => "扑",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "爆" => Some(Self::Explode),
+            "平" => Some(Self::Flat),
+            "扑" => Some(Self::Flop),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectReview {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub stage: ReviewStage,
+    pub published_at: chrono::DateTime<chrono::Utc>,
+    pub data_recorded: bool,
+    pub read_count: Option<i64>,
+    pub completion_rate: Option<f64>,
+    pub engagement_count: Option<i64>,
+    pub overall_result: Option<ReviewResult>,
+    pub title_result: Option<String>,
+    pub hook_result: Option<String>,
+    pub emotion_result: Option<String>,
+    pub success_reason: Option<String>,
+    pub failure_reason: Option<String>,
+    pub continue_track: Option<String>,
+    pub reusable_conclusion: Option<String>,
+    pub next_action: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingProjectReview {
+    pub project_id: Uuid,
+    pub title: String,
+    pub status: ProjectStatus,
+    pub stage: ReviewStage,
+    pub published_at: chrono::DateTime<chrono::Utc>,
+    pub track: String,
+    pub total_words: i64,
+    pub data_recorded: bool,
+    pub last_review_result: Option<ReviewResult>,
+}
+
 /// 章节段落 beat：AI 拆出来的小节点，由前端可重排
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Beat {
@@ -255,5 +349,12 @@ mod tests {
         // 26 字超
         ns.title = "婚礼彩排那天伴娘群里弹出他和伴娘的开房记录还多写一字".into();
         assert!(matches!(ns.validate(), Err(DomainError::TitleLength { .. })));
+    }
+
+    #[test]
+    fn review_result_values_are_stable() {
+        assert_eq!(ReviewResult::Explode.as_str(), "爆");
+        assert_eq!(ReviewResult::Flat.as_str(), "平");
+        assert_eq!(ReviewResult::Flop.as_str(), "扑");
     }
 }
