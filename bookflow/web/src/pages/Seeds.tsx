@@ -205,40 +205,40 @@ export default function Seeds() {
     <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
       {/* AI 批量生成选题（紧凑可折叠） */}
       <section
-        className="mb-4 rounded-lg bg-white shadow-sm ring-1 ring-gray-200"
+        className="mb-5 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200"
         data-testid="ai-generate-panel"
       >
         <button
           type="button"
           onClick={() => setAiPanelOpen((v) => !v)}
-          className="flex w-full items-center gap-3 px-5 py-3 text-left"
+          className="flex w-full items-center gap-4 bg-gradient-to-r from-slate-50 to-violet-50 px-5 py-4 text-left"
         >
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
             <Brain className="h-4 w-4" />
           </div>
           <div className="flex-1">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-gray-900">AI 批量出选题</h2>
-              <span className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[10px] text-gray-600">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-base font-semibold text-gray-900">AI 批量出选题</h2>
+              <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[10px] text-slate-600 shadow-sm">
                 {track}
               </span>
               {drafts.data && drafts.data.length > 0 && (
-                <span className="text-[11px] text-gray-400">历史 {drafts.data.length} 候选</span>
+                <span className="text-[11px] text-slate-400">历史 {drafts.data.length} 候选</span>
               )}
             </div>
-            <p className="mt-0.5 text-[11px] text-gray-400">
-              选主分类 + 情节 → AI 一次出 5 个标题 + 7 维评分 → 一键立项
+            <p className="mt-1 text-xs text-slate-500">
+              先定赛道，再批量生成标题，最后挑高分候选推进立项。
             </p>
           </div>
           {aiPanelOpen ? (
-            <ChevronUp className="h-4 w-4 text-gray-400" />
+            <ChevronUp className="h-4 w-4 text-slate-400" />
           ) : (
-            <ChevronDown className="h-4 w-4 text-gray-400" />
+            <ChevronDown className="h-4 w-4 text-slate-400" />
           )}
         </button>
 
         {aiPanelOpen && (
-          <div className="border-t border-gray-100 px-5 py-4">
+          <div className="border-t border-slate-100 px-5 py-5">
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
               <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="mb-3">
@@ -348,12 +348,12 @@ export default function Seeds() {
               </section>
             </div>
 
-            <div className="mt-4 flex flex-col gap-3 rounded-xl border border-violet-100 bg-violet-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-violet-100 bg-gradient-to-r from-violet-50 to-sky-50 p-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-600">
                   当前组合赛道
                 </div>
-                <div className="mt-1 break-all text-sm font-semibold text-gray-900">
+                <div className="mt-1 break-all text-sm font-semibold text-slate-900">
                   {track}
                 </div>
               </div>
@@ -362,7 +362,7 @@ export default function Seeds() {
                 onClick={() => aiGen.mutate(track)}
                 disabled={aiGen.isPending}
                 data-testid="ai-generate-btn"
-                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
               >
                 {aiGen.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -384,8 +384,8 @@ export default function Seeds() {
           )}
 
           {aiGen.data && (
-            <div className="mt-5">
-              <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-violet-700">
+            <div className="mt-6 rounded-2xl border border-violet-100 bg-violet-50/40 p-4">
+              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-violet-700">
                 <Wand2 className="h-3.5 w-3.5" /> 本次生成（{aiGen.data.candidates.length}）
               </div>
               <ul className="grid gap-3 lg:grid-cols-2">
@@ -409,8 +409,8 @@ export default function Seeds() {
 
           {/* 历史候选：跨刷新都在，按 track 分组只看当前 */}
           {drafts.data && drafts.data.length > 0 && (
-            <div className="mt-6 border-t border-gray-100 pt-5">
-              <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-gray-500">
+            <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50/60 p-4">
+              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                 <History className="h-3.5 w-3.5" /> 历史候选 · {track}（{drafts.data.length}）
               </div>
               <ul className="grid gap-3 lg:grid-cols-2" data-testid="drafts-list">
@@ -448,18 +448,20 @@ export default function Seeds() {
       </section>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
-        <section className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-6 lg:sticky lg:top-20">
-          <header className="flex items-center gap-2 mb-4">
+        <section className="rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 p-6 lg:sticky lg:top-20">
+          <header className="mb-4 flex flex-wrap items-center gap-2">
             <Sparkles className="h-5 w-5 text-violet-600" />
             <h1 className="text-lg font-semibold">选题评分卡</h1>
-            <span className="ml-3 hidden text-xs text-gray-400 sm:inline">7 维 · 每维 1-5 · 立项 ≥28 / 备选 ≥23</span>
+            <span className="hidden rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-500 sm:inline-flex">
+              7 维 · 每维 1-5 · 立项 ≥28 / 备选 ≥23
+            </span>
             <button
               type="button"
               onClick={() => aiLaunch.mutate(track)}
               disabled={aiLaunch.isPending}
               data-testid="ai-launch-btn"
               title={`基于赛道「${track}」让 AI 直接生成最高分选题并立项进入项目明细`}
-              className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-60"
+              className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-60"
             >
               {aiLaunch.isPending ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -507,6 +509,13 @@ export default function Seeds() {
               </button>
             </div>
           </label>
+
+          <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              当前赛道设定
+            </div>
+            <TrackPills track={track} />
+          </div>
 
           <label className="block mt-4">
             <span className="text-sm font-medium text-gray-700">主分类</span>
@@ -605,7 +614,7 @@ export default function Seeds() {
             ))}
           </div>
 
-          <div className="mt-6 flex items-center gap-3 border-t border-gray-100 pt-4">
+          <div className="mt-6 flex items-center gap-3 border-t border-slate-100 pt-4">
             <span className="text-sm text-gray-500">总分</span>
             <span className="text-3xl font-bold text-gray-900 font-mono" data-testid="score-total">
               {total}
@@ -638,8 +647,8 @@ export default function Seeds() {
           )}
         </section>
 
-        <aside className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-5 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:sticky lg:top-20">
-          <header className="sticky top-0 z-10 -mx-5 -mt-5 mb-4 space-y-2 border-b border-gray-100 bg-white px-5 pt-5 pb-3">
+        <aside className="rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 p-5 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:sticky lg:top-20">
+          <header className="sticky top-0 z-10 -mx-5 -mt-5 mb-4 space-y-2 border-b border-slate-100 bg-white px-5 pt-5 pb-3">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-sm font-semibold text-gray-700">最近选题</h2>
@@ -659,7 +668,7 @@ export default function Seeds() {
                 隐藏测试
               </label>
             </div>
-            <div className="rounded-lg bg-gray-50 px-3 py-2 text-[11px] text-gray-500">
+            <div className="rounded-xl bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
               绿灯项目可直接点进项目明细，未立项的种子可继续推进。
             </div>
           </header>
@@ -683,14 +692,24 @@ export default function Seeds() {
                 <li
                   key={s.id}
                   data-testid="seed-item"
+                  onClick={clickable ? onClick : undefined}
+                  onKeyDown={
+                    clickable
+                      ? (e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            onClick()
+                          }
+                        }
+                      : undefined
+                  }
+                  role={clickable ? 'button' : undefined}
+                  tabIndex={clickable ? 0 : undefined}
                   className={`group rounded-md border border-gray-200 p-2 text-xs transition ${
-                    clickable ? 'hover:border-blue-300 hover:bg-blue-50/40' : 'opacity-70'
+                    clickable ? 'cursor-pointer hover:border-blue-300 hover:bg-blue-50/40' : 'opacity-70'
                   }`}
                 >
-                  <div
-                    onClick={clickable ? onClick : undefined}
-                    className={clickable ? 'cursor-pointer' : ''}
-                  >
+                  <div>
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-medium text-gray-900 truncate">{s.title}</span>
                       <span className={`shrink-0 inline-flex items-center rounded-full border px-1.5 text-[10px] font-semibold ${TIER_BG[s.tier]}`}>
@@ -911,7 +930,7 @@ function CandidateCard({
   return (
     <li
       data-testid={`${testIdPrefix}-candidate-${index}`}
-      className={`rounded-lg border border-gray-200 p-4 ${muted ? 'bg-white' : 'bg-gray-50/60'}`}
+      className={`rounded-2xl border border-slate-200 p-4 ${muted ? 'bg-white' : 'bg-slate-50/70'}`}
     >
       <div className="flex items-start justify-between gap-3">
         <h3 className="text-sm font-semibold text-gray-900 leading-6">{title}</h3>
@@ -921,12 +940,12 @@ function CandidateCard({
           {TIER_LABEL[t]} · {total}
         </span>
       </div>
-      <p className="mt-1.5 text-xs text-gray-500 line-clamp-2">{why_buy}</p>
+      <p className="mt-2 text-xs leading-6 text-slate-500 line-clamp-3">{why_buy}</p>
       <div className="mt-3 flex flex-wrap gap-1">
         {DIM_KEYS.map((k) => (
           <span
             key={k}
-            className="inline-flex items-center rounded bg-white px-1.5 py-0.5 text-[11px] text-gray-600 ring-1 ring-gray-200"
+            className="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600 ring-1 ring-slate-200"
             title={DIM_LABELS[k]}
           >
             {DIM_LABELS[k][0]}

@@ -174,7 +174,7 @@ test('最近选题：已立项的 seed 点击跳到项目明细页', async ({ pa
   const item = page.getByTestId('seed-item').filter({ hasText: `流程自动立项${stamp}` }).first()
   await expect(item).toBeVisible()
   await expect(item).toContainText('进项目明细')
-  await item.click()
+  await item.getByText('进项目明细').click()
   await page.waitForURL(/\/projects\/[^/]+$/, { timeout: 5_000 })
   await expect(page.getByTestId('projectize-flow-btn')).toContainText('重新生成前期方案')
   await expect(page.getByTestId('character_setup-card')).toBeVisible()
