@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 
-test('选题：绿灯评分 → 自动立项 → 跳到 Write 页', async ({ page }) => {
+test('选题：绿灯评分 → 自动立项 → 跳到项目明细页', async ({ page }) => {
   // 用唯一标题，避免和 db 已有数据撞
   const title = `测试-${Date.now()}-彩排那天伴娘群弹出他和伴娘的开房记录`.slice(0, 25)
 
@@ -14,9 +14,11 @@ test('选题：绿灯评分 → 自动立项 → 跳到 Write 页', async ({ pag
   await page.getByTestId('seed-title').fill(title)
   await page.getByTestId('submit-seed').click()
 
-  // 绿灯自动 createFromSeed → 跳到 /projects/:id/write
-  await page.waitForURL(/\/projects\/[\w-]+\/write/, { timeout: 15_000 })
+  // 绿灯自动 createFromSeed → 跳到 /projects/:id
+  await page.waitForURL(/\/projects\/[\w-]+$/, { timeout: 15_000 })
   await expect(page.getByText(title)).toBeVisible()
+  await expect(page.getByTestId('projectize-flow-btn')).toContainText('重新生成前期方案')
+  await expect(page.getByTestId('character_setup-card')).toBeVisible()
 })
 
 test('评分 < 23 → tier 显示 不做', async ({ page }) => {
@@ -126,6 +128,8 @@ test('Write 页：AI 全章 + AI 全篇按钮可见', async ({ page }) => {
   const stamp = Date.now().toString().slice(-6)
   await page.getByTestId('seed-title').fill(`测试全章按钮${stamp}`)
   await page.getByTestId('submit-seed').click()
+  await page.waitForURL(/\/projects\/[^/]+$/, { timeout: 15_000 })
+  await page.getByRole('link', { name: /进入写作/ }).click()
   await page.waitForURL(/\/projects\/[^/]+\/write/, { timeout: 15_000 })
   // 先建一章
   await page.getByTestId('new-chapter-btn').click()
@@ -133,19 +137,21 @@ test('Write 页：AI 全章 + AI 全篇按钮可见', async ({ page }) => {
   await expect(page.getByTestId('ai-full-book-btn')).toBeVisible()
 })
 
-test('最近选题：已立项的 seed 点击跳到 Write 页', async ({ page }) => {
-  // 走完整流程：评分卡建一个绿灯 seed → 自动立项 → 跳 Write
+test('最近选题：已立项的 seed 点击跳到项目明细页', async ({ page }) => {
+  // 走完整流程：评分卡建一个绿灯 seed → 自动立项 → 跳项目明细
   await page.goto('/seeds')
   const stamp = Date.now().toString().slice(-6)
-  await page.getByTestId('seed-title').fill(`测试自动立项${stamp}`)
+  await page.getByTestId('seed-title').fill(`流程自动立项${stamp}`)
   // 默认评分 5/5/5/4/4/5/5 = 33 分，绿灯
   await page.getByTestId('submit-seed').click()
-  await page.waitForURL(/\/projects\/[^/]+\/write/, { timeout: 15_000 })
-  // 回 seeds 页，验证最近选题里这条带「进项目继续写」hint 且可点击
+  await page.waitForURL(/\/projects\/[^/]+$/, { timeout: 15_000 })
+  // 回 seeds 页，验证最近选题里这条带「进项目明细」hint 且可点击
   await page.goto('/seeds')
-  const item = page.getByTestId('seed-item').filter({ hasText: `测试自动立项${stamp}` }).first()
+  const item = page.getByTestId('seed-item').filter({ hasText: `流程自动立项${stamp}` }).first()
   await expect(item).toBeVisible()
-  await expect(item).toContainText('进项目继续写')
+  await expect(item).toContainText('进项目明细')
   await item.click()
-  await page.waitForURL(/\/projects\/[^/]+\/write/, { timeout: 5_000 })
+  await page.waitForURL(/\/projects\/[^/]+$/, { timeout: 5_000 })
+  await expect(page.getByTestId('projectize-flow-btn')).toContainText('重新生成前期方案')
+  await expect(page.getByTestId('character_setup-card')).toBeVisible()
 })

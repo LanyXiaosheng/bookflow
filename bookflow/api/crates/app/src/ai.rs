@@ -438,6 +438,8 @@ fn extract_json(s: &str) -> Option<&str> {
 // === 项目级流式生成 ===
 
 const README_SYSTEM: &str = include_str!("ai_prompts/project_readme.system.md");
+const CHARACTER_SETUP_SYSTEM: &str =
+    include_str!("ai_prompts/project_character_setup.system.md");
 const OUTLINE_SYSTEM: &str = include_str!("ai_prompts/project_outline.system.md");
 const PUBLISH_SYSTEM: &str = include_str!("ai_prompts/project_publish.system.md");
 const SIDE_DISHES_SYSTEM: &str = include_str!("ai_prompts/project_side_dishes.system.md");
@@ -459,10 +461,30 @@ pub async fn stream_readme(
         .await
 }
 
-pub async fn stream_outline(client: &AiClient, readme_md: &str) -> mpsc::Receiver<StreamEvent> {
+pub async fn stream_character_setup(
+    client: &AiClient,
+    readme_md: &str,
+) -> mpsc::Receiver<StreamEvent> {
     let user = format!(
-        "项目 README：\n\n{readme_md}\n\n请按大纲模板输出（故事主线 + 10 章细纲 + 爆点节奏表）。"
+        "项目 README：\n\n{readme_md}\n\n请基于这份 README 输出固定模板的角色设定，供后续大纲和正文直接沿用。"
     );
+    client
+        .stream_text(CHARACTER_SETUP_SYSTEM.to_string(), user, 6000)
+        .await
+}
+
+fn outline_user_prompt(readme_md: &str, character_setup_md: &str) -> String {
+    format!(
+        "项目 README：\n\n{readme_md}\n\n角色设定：\n\n{character_setup_md}\n\n请按大纲模板输出（故事主线 + 10 章细纲 + 爆点节奏表）。"
+    )
+}
+
+pub async fn stream_outline(
+    client: &AiClient,
+    readme_md: &str,
+    character_setup_md: &str,
+) -> mpsc::Receiver<StreamEvent> {
+    let user = outline_user_prompt(readme_md, character_setup_md);
     client
         .stream_text(OUTLINE_SYSTEM.to_string(), user, 4000)
         .await
@@ -690,6 +712,23 @@ mod tests {
         let system = BOOK_POLISH_SYSTEM;
         assert!(system.contains("去 AI 味"));
         assert!(system.contains("代入感"));
+    }
+
+    #[test]
+    fn character_setup_prompt_mentions_relationships_and_romance() {
+        let system = CHARACTER_SETUP_SYSTEM;
+        assert!(system.contains("关系图"));
+        assert!(system.contains("感情线"));
+        assert!(system.contains("角色名"));
+    }
+
+    #[test]
+    fn outline_prompt_embeds_character_setup_context() {
+        let user = outline_user_prompt("# README", "角色设定正文");
+        assert!(user.contains("项目 README"));
+        assert!(user.contains("# README"));
+        assert!(user.contains("角色设定"));
+        assert!(user.contains("角色设定正文"));
     }
 
     #[test]

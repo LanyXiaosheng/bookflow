@@ -661,6 +661,7 @@ pub enum ArtifactKind {
     SideDishes,
     BookSummary,
     BookPolished,
+    CharacterSetup,
 }
 
 impl ArtifactKind {
@@ -672,6 +673,7 @@ impl ArtifactKind {
             ArtifactKind::SideDishes => "side_dishes",
             ArtifactKind::BookSummary => "book_summary",
             ArtifactKind::BookPolished => "book_polished",
+            ArtifactKind::CharacterSetup => "character_setup",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -682,6 +684,7 @@ impl ArtifactKind {
             "side_dishes" => Some(Self::SideDishes),
             "book_summary" => Some(Self::BookSummary),
             "book_polished" => Some(Self::BookPolished),
+            "character_setup" => Some(Self::CharacterSetup),
             _ => None,
         }
     }
@@ -781,7 +784,12 @@ mod tests {
             ArtifactKind::parse("book_polished"),
             Some(ArtifactKind::BookPolished)
         );
+        assert_eq!(
+            ArtifactKind::parse("character_setup"),
+            Some(ArtifactKind::CharacterSetup)
+        );
         assert_eq!(ArtifactKind::BookSummary.as_str(), "book_summary");
         assert_eq!(ArtifactKind::BookPolished.as_str(), "book_polished");
+        assert_eq!(ArtifactKind::CharacterSetup.as_str(), "character_setup");
     }
 }

@@ -33,9 +33,9 @@ mod docs;
 mod settings;
 use ai::{
     beats_for_chapter, generate_seeds, score_seed, stream_book_polish, stream_book_summary,
-    stream_outline, stream_publish_post, stream_readme, stream_side_dishes, stream_write_paragraph,
-    write_paragraph, AiClient, AiConfig, AiScoreRequest, AiScoreResponse, AiSeedGenerated,
-    StreamEvent,
+    stream_character_setup, stream_outline, stream_publish_post, stream_readme,
+    stream_side_dishes, stream_write_paragraph, write_paragraph, AiClient, AiConfig,
+    AiScoreRequest, AiScoreResponse, AiSeedGenerated, StreamEvent,
 };
 use docs::DocRoot;
 use settings::{Settings, SettingsPatch, SettingsRepo};
@@ -114,6 +114,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects/:id/transition", post(transition_project))
         .route("/api/projects/:id/artifacts", get(list_project_artifacts))
         .route("/api/projects/:id/ai-readme/stream", post(ai_readme_stream))
+        .route(
+            "/api/projects/:id/ai-character-setup/stream",
+            post(ai_character_setup_stream),
+        )
         .route("/api/projects/:id/ai-outline/stream", post(ai_outline_stream))
         .route("/api/projects/:id/ai-publish/stream", post(ai_publish_stream))
         .route("/api/projects/:id/ai-side-dishes/stream", post(ai_side_dishes_stream))
@@ -927,17 +931,55 @@ async fn ai_readme_stream(
     }))
 }
 
-async fn ai_outline_stream(
+async fn ai_character_setup_stream(
     State(s): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
-    // outline 必须基于 README，没 README 就先返 400
+    s.projects.get(project_id).await.map_err(AppError::Storage)?;
     let arts = s.artifacts.latest_all(project_id).await.map_err(AppError::Storage)?;
     let readme = arts
         .iter()
         .find(|a| a.kind == ArtifactKind::Readme)
-        .ok_or_else(|| AppError::Ai(anyhow::anyhow!("先生成 README，再生成大纲")))?;
-    let rx = stream_outline(&s.ai, &readme.content).await;
+        .map(|a| a.content.clone())
+        .unwrap_or_default();
+    if readme.trim().is_empty() {
+        return Err(AppError::Storage(bookflow_storage::StorageError::Conflict(
+            "先生成项目 README，再生成角色设定".into(),
+        )));
+    }
+    let rx = stream_character_setup(&s.ai, &readme).await;
+    let artifacts = s.artifacts.clone();
+    Ok(sse_from_stream(rx, move |full| async move {
+        artifacts
+            .save(project_id, ArtifactKind::CharacterSetup, &full)
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("{e:#}"))
+    }))
+}
+
+async fn ai_outline_stream(
+    State(s): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
+    s.projects.get(project_id).await.map_err(AppError::Storage)?;
+    let arts = s.artifacts.latest_all(project_id).await.map_err(AppError::Storage)?;
+    let readme = arts
+        .iter()
+        .find(|a| a.kind == ArtifactKind::Readme)
+        .map(|a| a.content.clone())
+        .unwrap_or_default();
+    let character_setup = arts
+        .iter()
+        .find(|a| a.kind == ArtifactKind::CharacterSetup)
+        .map(|a| a.content.clone())
+        .unwrap_or_default();
+    if readme.trim().is_empty() || character_setup.trim().is_empty() {
+        return Err(AppError::Storage(bookflow_storage::StorageError::Conflict(
+            "先生成 README 和角色设定，再生成大纲".into(),
+        )));
+    }
+    let rx = stream_outline(&s.ai, &readme, &character_setup).await;
     let artifacts = s.artifacts.clone();
     Ok(sse_from_stream(rx, move |full| async move {
         artifacts
@@ -1198,5 +1240,23 @@ mod tests {
                     .into()
             )
         );
+    }
+
+    #[test]
+    fn build_full_book_source_keeps_numbered_heading_when_title_missing_prefix() {
+        let chapter = Chapter {
+            id: Uuid::nil(),
+            project_id: Uuid::nil(),
+            idx: 3,
+            title: "替嫁".into(),
+            beats: vec![],
+            body: "正文".into(),
+            word_count: 2,
+            updated_at: chrono::Utc::now(),
+        };
+
+        let full = build_full_book_source(vec![chapter]).unwrap();
+
+        assert!(full.starts_with("# 第3章 替嫁"));
     }
 }

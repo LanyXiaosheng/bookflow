@@ -1,13 +1,14 @@
 import { useCallback, useRef, useState } from 'react'
 
 export interface PipelineStep {
-  key: 'readme' | 'outline' | 'body'
+  key: 'readme' | 'character_setup' | 'outline' | 'body'
   label: string
   url: string
   /** 可选 body */
   body?: unknown
   /** 流式：true=SSE 解析；false=普通 fetch（保留位） */
   stream?: boolean
+  onText?: (full: string) => void
 }
 
 export interface PipelineProgress {
@@ -64,6 +65,7 @@ async function runStep(
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let full = ''
   let chars = 0
   let errored: string | null = null
   while (true) {
@@ -83,13 +85,17 @@ async function runStep(
       }
       const data = dataLines.join('\n')
       if (event === 'delta') {
+        let text: string
         try {
-          const { text } = JSON.parse(data) as SSEEventDelta
-          chars += text.length
-          onDelta(chars)
+          ;({ text } = JSON.parse(data) as SSEEventDelta)
         } catch {
           // skip bad frame
+          continue
         }
+        full += text
+        chars += text.length
+        step.onText?.(full)
+        onDelta(chars)
       } else if (event === 'error') {
         try {
           const { message } = JSON.parse(data) as SSEEventError
@@ -104,9 +110,10 @@ async function runStep(
 }
 
 /**
- * SOP 阶段 2 「一键立项流」：链式跑 README → 大纲（→ 可选 body 等）
+ * SOP 阶段 2 「一键立项流」：链式跑 README → 角色设定 → 大纲
+ * 并支持把每个 step 的完整流式文本回调给外层 UI。
  *
- * 串行而非并行 — 大纲依赖 README 内容，并行会让 outline prompt 拿不到上下文。
+ * 串行而非并行 — 后续步骤依赖前置产物内容，并行会让 prompt 拿不到上下文。
  * 用户视角是"一键"，引擎做的是 sequential SSE。
  */
 export function usePipeline() {

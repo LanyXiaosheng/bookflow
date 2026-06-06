@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
@@ -25,6 +25,42 @@ import {
 import { useSSE } from '../hooks/useSSE'
 import { useFullBook } from '../hooks/useFullBook'
 import { usePipeline } from '../hooks/usePipeline'
+
+type PreflightDrafts = Record<'readme' | 'character_setup', string>
+
+function emptyPreflightDrafts(): PreflightDrafts {
+  return { readme: '', character_setup: '' }
+}
+
+function confirmedCharacterSetupKey(projectId: string): string {
+  return `bookflow.character-setup-confirmed:${projectId}`
+}
+
+function readConfirmedCharacterSetupVersion(projectId: string): number | null {
+  try {
+    const raw = localStorage.getItem(confirmedCharacterSetupKey(projectId))
+    if (!raw) return null
+    const version = Number.parseInt(raw, 10)
+    return Number.isFinite(version) ? version : null
+  } catch {
+    return null
+  }
+}
+
+function writeConfirmedCharacterSetupVersion(
+  projectId: string,
+  version: number | null,
+) {
+  try {
+    if (version === null) {
+      localStorage.removeItem(confirmedCharacterSetupKey(projectId))
+      return
+    }
+    localStorage.setItem(confirmedCharacterSetupKey(projectId), String(version))
+  } catch {
+    // ignore storage write errors
+  }
+}
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>()
@@ -53,6 +89,10 @@ export default function ProjectDetail() {
     () => pickLatest(artifacts.data, 'readme'),
     [artifacts.data],
   )
+  const characterSetup = useMemo(
+    () => pickLatest(artifacts.data, 'character_setup'),
+    [artifacts.data],
+  )
   const outline = useMemo(
     () => pickLatest(artifacts.data, 'outline'),
     [artifacts.data],
@@ -75,28 +115,63 @@ export default function ProjectDetail() {
   )
   const aiJob = useAiJob(projectId)
   const bodyChars = useMemo(() => countBodyChars(chapters.data), [chapters.data])
+  const [preflightDrafts, setPreflightDrafts] = useState<PreflightDrafts>(() =>
+    emptyPreflightDrafts(),
+  )
+  const [confirmedCharacterSetupVersion, setConfirmedCharacterSetupVersion] = useState<number | null>(
+    () => readConfirmedCharacterSetupVersion(projectId),
+  )
+  const readmeIsNewerThanCharacterSetup =
+    !!readme && !!characterSetup && artifactTs(readme) > artifactTs(characterSetup)
+  const characterSetupConfirmed =
+    !!characterSetup &&
+    !readmeIsNewerThanCharacterSetup &&
+    confirmedCharacterSetupVersion === characterSetup.version
+  const outlineNeedsRefresh =
+    !!outline &&
+    !!characterSetup &&
+    (artifactTs(outline) < artifactTs(characterSetup) || !characterSetupConfirmed)
+  const bodyNeedsRefresh =
+    bodyChars > 0 &&
+    (!!characterSetup &&
+      (!outline || artifactTs(outline) < artifactTs(characterSetup) || !characterSetupConfirmed))
 
   const refreshArtifacts = () =>
     qc.invalidateQueries({ queryKey: ['project-artifacts', projectId] })
 
-  /** SOP 阶段 2 一键立项流：README → 大纲（链式 SSE，自动落库） */
+  useEffect(() => {
+    setPreflightDrafts(emptyPreflightDrafts())
+    setConfirmedCharacterSetupVersion(readConfirmedCharacterSetupVersion(projectId))
+  }, [projectId])
+
+  useEffect(() => {
+    writeConfirmedCharacterSetupVersion(projectId, confirmedCharacterSetupVersion)
+  }, [confirmedCharacterSetupVersion, projectId])
+
+  /** SOP 阶段 2 前期方案流：README → 角色设定（链式 SSE，自动落库） */
   const pipeline = usePipeline()
   const runProjectizeFlow = async () => {
+    setPreflightDrafts(emptyPreflightDrafts())
     const ok = await pipeline.run([
       {
         key: 'readme',
         label: 'README',
         url: `/api/projects/${projectId}/ai-readme/stream`,
         stream: true,
+        onText: (full) =>
+          setPreflightDrafts((drafts) => ({ ...drafts, readme: full })),
       },
       {
-        key: 'outline',
-        label: '大纲',
-        url: `/api/projects/${projectId}/ai-outline/stream`,
+        key: 'character_setup',
+        label: '角色设定',
+        url: `/api/projects/${projectId}/ai-character-setup/stream`,
         stream: true,
+        onText: (full) =>
+          setPreflightDrafts((drafts) => ({ ...drafts, character_setup: full })),
       },
     ])
-    if (ok) refreshArtifacts()
+    if (ok) await refreshArtifacts()
+    setPreflightDrafts(emptyPreflightDrafts())
   }
 
   return (
@@ -119,12 +194,8 @@ export default function ProjectDetail() {
           <button
             type="button"
             onClick={runProjectizeFlow}
-            disabled={pipeline.progress.running || (!!readme && !!outline)}
-            title={
-              !!readme && !!outline
-                ? 'README + 大纲都已生成，重新生成请用对应卡片'
-                : '一键链式生成 README → 大纲（SOP 阶段 2）'
-            }
+            disabled={pipeline.progress.running}
+            title="串行重新生成 README → 角色设定，确认后再生成大纲"
             className="ml-auto inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
             data-testid="projectize-flow-btn"
           >
@@ -135,9 +206,7 @@ export default function ProjectDetail() {
             )}
             {pipeline.progress.running
               ? `${pipelineLabel(pipeline.progress.currentKey)} · ${pipeline.progress.chars}字`
-              : !!readme && !!outline
-                ? '立项已完成'
-                : '一键立项流'}
+              : '重新生成前期方案'}
           </button>
           {pipeline.progress.running && (
             <button
@@ -159,7 +228,7 @@ export default function ProjectDetail() {
         {pipeline.progress.error && (
           <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-600 inline-flex items-center gap-1">
             <TriangleAlert className="h-3 w-3" />
-            立项流失败：{pipeline.progress.error}
+            前期方案流失败：{pipeline.progress.error}
           </div>
         )}
       </header>
@@ -168,6 +237,9 @@ export default function ProjectDetail() {
         <div className="flex flex-col gap-4">
           <WorkflowStrip
             hasReadme={!!readme}
+            hasCharacterSetup={!!characterSetup}
+            characterSetupNeedsRegeneration={readmeIsNewerThanCharacterSetup}
+            characterSetupConfirmed={characterSetupConfirmed}
             hasOutline={!!outline}
             chapterCount={chapters.data?.length ?? 0}
             totalWords={chapters.data?.reduce((a, c) => a + c.word_count, 0) ?? 0}
@@ -179,11 +251,34 @@ export default function ProjectDetail() {
             readme={readme}
             onDone={refreshArtifacts}
             globalJob={aiJob}
+            externalText={preflightDrafts.readme}
+            externalStreaming={pipeline.progress.running && pipeline.progress.currentKey === 'readme'}
+          />
+          <CharacterSetupCard
+            projectId={projectId}
+            characterSetup={characterSetup}
+            hasReadme={!!readme}
+            characterSetupConfirmed={characterSetupConfirmed}
+            characterSetupNeedsRegeneration={readmeIsNewerThanCharacterSetup}
+            onConfirm={() => {
+              if (!characterSetup) return
+              setConfirmedCharacterSetupVersion(characterSetup.version)
+            }}
+            onDone={refreshArtifacts}
+            globalJob={aiJob}
+            externalText={preflightDrafts.character_setup}
+            externalStreaming={
+              pipeline.progress.running && pipeline.progress.currentKey === 'character_setup'
+            }
           />
           <OutlineCard
             projectId={projectId}
             outline={outline}
             hasReadme={!!readme}
+            hasCharacterSetup={!!characterSetup}
+            characterSetupCurrent={!readmeIsNewerThanCharacterSetup}
+            characterSetupConfirmed={characterSetupConfirmed}
+            outlineNeedsRefresh={outlineNeedsRefresh}
             onDone={refreshArtifacts}
             globalJob={aiJob}
           />
@@ -193,6 +288,7 @@ export default function ProjectDetail() {
             hasOutline={!!outline}
             isWriting={project.data?.status === 'writing'}
             globalJob={aiJob}
+            bodyNeedsRefresh={bodyNeedsRefresh}
           />
           <ArtifactStreamCard
             projectId={projectId}
@@ -288,6 +384,9 @@ export default function ProjectDetail() {
 
 interface WorkflowStripProps {
   hasReadme: boolean
+  hasCharacterSetup: boolean
+  characterSetupNeedsRegeneration: boolean
+  characterSetupConfirmed: boolean
   hasOutline: boolean
   chapterCount: number
   totalWords: number
@@ -297,6 +396,9 @@ interface WorkflowStripProps {
 
 function WorkflowStrip({
   hasReadme,
+  hasCharacterSetup,
+  characterSetupNeedsRegeneration,
+  characterSetupConfirmed,
   hasOutline,
   chapterCount,
   totalWords,
@@ -306,9 +408,32 @@ function WorkflowStrip({
   const steps = [
     { label: 'README', done: hasReadme, hint: hasReadme ? '已生成' : '点击下方 AI 生成' },
     {
+      label: '角色设定',
+      done: hasCharacterSetup && characterSetupConfirmed,
+      hint: !hasReadme
+        ? '先生成 README'
+        : hasCharacterSetup
+          ? characterSetupNeedsRegeneration
+            ? '待重生'
+            : characterSetupConfirmed
+            ? '已确认'
+            : '待确认'
+          : '可生成',
+    },
+    {
       label: '大纲',
       done: hasOutline,
-      hint: hasOutline ? '已生成' : hasReadme ? '可生成' : '先生成 README',
+      hint: hasOutline
+        ? characterSetupConfirmed
+          ? '已生成'
+          : '待按新设定重生'
+        : !hasReadme
+          ? '先生成 README'
+          : !hasCharacterSetup
+            ? '先出角色设定'
+            : characterSetupConfirmed
+              ? '可生成'
+              : '先确认角色设定',
     },
     {
       label: '正文',
@@ -334,7 +459,7 @@ function WorkflowStrip({
 
   return (
     <section className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-6">
         {steps.map((step, index) => (
           <div
             key={step.label}
@@ -372,17 +497,26 @@ function pickLatest(
     .sort((a, b) => b.version - a.version)[0]
 }
 
-const PIPELINE_LABELS: Record<'readme' | 'outline' | 'body', string> = {
+const PIPELINE_LABELS: Record<'readme' | 'character_setup' | 'outline' | 'body', string> = {
   readme: 'README',
+  character_setup: '角色设定',
   outline: '大纲',
   body: '正文',
 }
-function pipelineLabel(key: 'readme' | 'outline' | 'body' | null): string {
+function pipelineLabel(
+  key: 'readme' | 'character_setup' | 'outline' | 'body' | null,
+): string {
   return key ? PIPELINE_LABELS[key] : ''
 }
 
 function countBodyChars(chapters?: Chapter[]): number {
   return chapters?.reduce((sum, c) => sum + Array.from(c.body ?? '').length, 0) ?? 0
+}
+
+function artifactTs(artifact?: ProjectArtifact): number {
+  if (!artifact) return 0
+  const ts = new Date(artifact.created_at).getTime()
+  return Number.isFinite(ts) ? ts : 0
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -419,6 +553,10 @@ interface ArtifactStreamCardProps {
   onDone: () => void
   copyable?: boolean
   globalJob?: AiJob
+  externalText?: string
+  externalStreaming?: boolean
+  notice?: React.ReactNode
+  footer?: React.ReactNode
 }
 
 function ArtifactStreamCard({
@@ -433,6 +571,10 @@ function ArtifactStreamCard({
   onDone,
   copyable = false,
   globalJob,
+  externalText,
+  externalStreaming = false,
+  notice,
+  footer,
 }: ArtifactStreamCardProps) {
   const activeJob = globalJob?.kind === kind ? globalJob : undefined
   const startedAtRef = useRef(0)
@@ -468,10 +610,12 @@ function ArtifactStreamCard({
     },
   })
   const [copyState, setCopyState] = useState<'idle' | 'done' | 'error'>('idle')
-  const streaming = sse.status === 'streaming' || !!activeJob
-  const display = sse.text || activeJob?.previewText || artifact?.content || ''
+  const streaming = sse.status === 'streaming' || !!activeJob || externalStreaming
+  const display =
+    sse.text || activeJob?.previewText || externalText || artifact?.content || ''
   const statusTitle = activeJob?.title || title
-  const statusChars = activeJob?.chars ?? Array.from(sse.text).length
+  const statusChars =
+    activeJob?.chars ?? Array.from(sse.text || externalText || '').length
 
   return (
     <section
@@ -531,6 +675,7 @@ function ArtifactStreamCard({
           <TriangleAlert className="h-3 w-3" /> 生成失败：{sse.error}
         </p>
       )}
+      {notice}
 
       {display ? (
         <MarkdownPreview content={display} maxHeightClass="max-h-[520px]" testId={`${kind}-content`}>
@@ -539,6 +684,7 @@ function ArtifactStreamCard({
       ) : (
         <p className="text-xs text-gray-400">{emptyHint}</p>
       )}
+      {footer}
     </section>
   )
 }
@@ -548,9 +694,18 @@ interface ReadmeCardProps {
   readme?: ProjectArtifact
   onDone: () => void
   globalJob?: AiJob
+  externalText?: string
+  externalStreaming?: boolean
 }
 
-function ReadmeCard({ projectId, readme, onDone, globalJob }: ReadmeCardProps) {
+function ReadmeCard({
+  projectId,
+  readme,
+  onDone,
+  globalJob,
+  externalText,
+  externalStreaming,
+}: ReadmeCardProps) {
   return (
     <ArtifactStreamCard
       projectId={projectId}
@@ -563,6 +718,81 @@ function ReadmeCard({ projectId, readme, onDone, globalJob }: ReadmeCardProps) {
       emptyHint="点上面的按钮，让 AI 基于选题生成项目 README（包含赛道、目标、节奏、文风提醒）。"
       onDone={onDone}
       globalJob={globalJob}
+      externalText={externalText}
+      externalStreaming={externalStreaming}
+    />
+  )
+}
+
+interface CharacterSetupCardProps {
+  projectId: string
+  characterSetup?: ProjectArtifact
+  hasReadme: boolean
+  characterSetupConfirmed: boolean
+  characterSetupNeedsRegeneration: boolean
+  onConfirm: () => void
+  onDone: () => void
+  globalJob?: AiJob
+  externalText?: string
+  externalStreaming?: boolean
+}
+
+function CharacterSetupCard({
+  projectId,
+  characterSetup,
+  hasReadme,
+  characterSetupConfirmed,
+  characterSetupNeedsRegeneration,
+  onConfirm,
+  onDone,
+  globalJob,
+  externalText,
+  externalStreaming,
+}: CharacterSetupCardProps) {
+  return (
+    <ArtifactStreamCard
+      projectId={projectId}
+      kind="character_setup"
+      title="角色设定"
+      artifact={characterSetup}
+      endpoint={`/api/projects/${projectId}/ai-character-setup/stream`}
+      disabled={!hasReadme}
+      disabledHint="先生成 README，再生成角色设定。"
+      emptyHint="基于 README 产出角色总表、关系图、感情线和正文硬约束，确认后再进入大纲。"
+      onDone={onDone}
+      globalJob={globalJob}
+      externalText={externalText}
+      externalStreaming={externalStreaming}
+      footer={
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <span
+            className={`rounded-full px-2 py-1 ${
+              characterSetupConfirmed
+                ? 'bg-emerald-50 text-emerald-700'
+                : 'bg-amber-50 text-amber-700'
+            }`}
+            data-testid="character-setup-confirm-state"
+          >
+            {characterSetup
+              ? characterSetupNeedsRegeneration
+                ? `README 已更新，当前角色设定 v${characterSetup.version} 待重生`
+                : characterSetupConfirmed
+                ? `当前版本 v${characterSetup.version} 已确认`
+                : `当前版本 v${characterSetup.version} 待确认`
+              : '生成后确认，才能解锁大纲'}
+          </span>
+          {characterSetup && !characterSetupConfirmed && !characterSetupNeedsRegeneration && (
+            <button
+              type="button"
+              onClick={onConfirm}
+              className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+              data-testid="character-setup-confirm-btn"
+            >
+              确认并作为大纲依据
+            </button>
+          )}
+        </div>
+      }
     />
   )
 }
@@ -571,11 +801,36 @@ interface OutlineCardProps {
   projectId: string
   outline?: ProjectArtifact
   hasReadme: boolean
+  hasCharacterSetup: boolean
+  characterSetupCurrent: boolean
+  characterSetupConfirmed: boolean
+  outlineNeedsRefresh: boolean
   onDone: () => void
   globalJob?: AiJob
 }
 
-function OutlineCard({ projectId, outline, hasReadme, onDone, globalJob }: OutlineCardProps) {
+function OutlineCard({
+  projectId,
+  outline,
+  hasReadme,
+  hasCharacterSetup,
+  characterSetupCurrent,
+  characterSetupConfirmed,
+  outlineNeedsRefresh,
+  onDone,
+  globalJob,
+}: OutlineCardProps) {
+  const disabled =
+    !hasReadme || !hasCharacterSetup || !characterSetupCurrent || !characterSetupConfirmed
+  const showStaleNotice = (hasCharacterSetup && !characterSetupConfirmed) || outlineNeedsRefresh
+  const disabledHint = !hasReadme
+    ? '先生成 README，再生成大纲。'
+    : !hasCharacterSetup
+      ? '先生成角色设定，再生成大纲。'
+      : !characterSetupCurrent
+        ? 'README 已更新，请先重生并确认角色设定。'
+      : '先确认当前角色设定，再生成大纲。'
+
   return (
     <ArtifactStreamCard
       projectId={projectId}
@@ -583,11 +838,23 @@ function OutlineCard({ projectId, outline, hasReadme, onDone, globalJob }: Outli
       title="章节大纲"
       artifact={outline}
       endpoint={`/api/projects/${projectId}/ai-outline/stream`}
-      disabled={!hasReadme}
-      disabledHint="先生成 README，再生成大纲。"
+      disabled={disabled}
+      disabledHint={disabledHint}
       emptyHint="基于 README 生成 6 章左右的章节大纲，每章一段（标题 + 主要冲突 + 钩子）。"
       onDone={onDone}
       globalJob={globalJob}
+      notice={
+        <div
+          className={`mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 ${
+            showStaleNotice ? '' : 'hidden'
+          }`}
+          data-testid="outline-stale-notice"
+        >
+          {outlineNeedsRefresh
+            ? '角色设定已变更，当前大纲可能过期，建议重新生成。'
+            : '角色设定当前版本还没确认，现有大纲视为待更新；先确认角色设定，再生成或重生大纲。'}
+        </div>
+      }
     />
   )
 }
@@ -619,6 +886,7 @@ interface BodyGenCardProps {
   hasOutline: boolean
   isWriting: boolean
   globalJob?: AiJob
+  bodyNeedsRefresh: boolean
 }
 
 /**
@@ -632,9 +900,10 @@ function BodyGenCard({
   hasOutline,
   isWriting,
   globalJob,
+  bodyNeedsRefresh,
 }: BodyGenCardProps) {
   const { progress, run, abort } = useFullBook()
-  const [target, setTarget] = useState(6)
+  const [target, setTarget] = useState(10)
   const chapterCount = chapters?.length ?? 0
   const totalWords = chapters?.reduce((a, c) => a + c.word_count, 0) ?? 0
   const remoteRunning = globalJob?.kind === 'full_book'
@@ -723,6 +992,14 @@ function BodyGenCard({
       </header>
 
       {blocked && <p className="text-xs text-gray-400 mb-2">{blockedHint}</p>}
+      <div
+        className={`mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 ${
+          bodyNeedsRefresh ? '' : 'hidden'
+        }`}
+        data-testid="body-stale-notice"
+      >
+        当前正文可能基于旧设定或旧大纲生成，建议先确认角色设定并重生大纲后再继续正文。
+      </div>
       {progress.error && (
         <p className="text-xs text-rose-600 inline-flex items-center gap-1 mb-2">
           <TriangleAlert className="h-3 w-3" /> 生成失败：{progress.error}

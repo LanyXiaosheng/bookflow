@@ -14,6 +14,7 @@ export interface Project {
 
 export type ArtifactKind =
   | 'readme'
+  | 'character_setup'
   | 'outline'
   | 'publish_post'
   | 'side_dishes'

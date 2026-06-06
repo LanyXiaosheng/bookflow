@@ -85,7 +85,7 @@ export default function Seeds() {
     onSuccess: (proj) => {
       qc.invalidateQueries({ queryKey: ['projects'] })
       qc.invalidateQueries({ queryKey: ['dashboard'] })
-      navigate(`/projects/${proj.id}/write`)
+      navigate(`/projects/${proj.id}`)
     },
   })
   /** AI 候选「直接立项」：先 createSeed 再视情况自动 projectize */
@@ -139,7 +139,7 @@ export default function Seeds() {
       qc.invalidateQueries({ queryKey: ['projects'] })
       qc.invalidateQueries({ queryKey: ['ai-drafts'] })
       qc.invalidateQueries({ queryKey: ['dashboard'] })
-      navigate(`/projects/${proj.id}/write`)
+      navigate(`/projects/${proj.id}`)
     },
   })
 
@@ -174,7 +174,7 @@ export default function Seeds() {
         onSuccess: (seed) => {
           setTitle('')
           setScore(DEFAULT_SCORE)
-          // 绿灯（>=28）自动立项 + 跳转去写作
+          // 绿灯（>=28）自动立项 + 跳转去项目明细
           if (seed.tier === 'greenlight') {
             projectize.mutate(seed.id)
           }
@@ -347,7 +347,7 @@ export default function Seeds() {
               onClick={() => aiLaunch.mutate(track)}
               disabled={aiLaunch.isPending}
               data-testid="ai-launch-btn"
-              title={`基于赛道「${track}」让 AI 直接生成最高分选题并立项跳 Write`}
+              title={`基于赛道「${track}」让 AI 直接生成最高分选题并立项进入项目明细`}
               className="ml-auto inline-flex items-center gap-1.5 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-60"
             >
               {aiLaunch.isPending ? (
@@ -355,7 +355,7 @@ export default function Seeds() {
               ) : (
                 <Rocket className="h-3.5 w-3.5" />
               )}
-              {aiLaunch.isPending ? 'AI 生成中…自动跳 Write' : 'AI 一键立项'}
+              {aiLaunch.isPending ? 'AI 生成中…自动跳项目' : 'AI 一键立项'}
             </button>
           </header>
           {aiLaunch.isError && (
@@ -494,7 +494,7 @@ export default function Seeds() {
               const proj = projectBySeedId.get(s.id)
               const canLaunch = !proj && s.tier !== 'reject'
               const onClick = () => {
-                if (proj) navigate(`/projects/${proj.id}/write`)
+                if (proj) navigate(`/projects/${proj.id}`)
                 else if (canLaunch) projectize.mutate(s.id)
               }
               const clickable = !!proj || canLaunch
@@ -524,11 +524,11 @@ export default function Seeds() {
                   <div className="mt-1.5 flex items-center justify-between">
                     {proj ? (
                       <span className="inline-flex items-center gap-1 text-[11px] text-blue-600">
-                        <ArrowRight className="h-3 w-3" /> 进项目继续写
+                        <ArrowRight className="h-3 w-3" /> 进项目明细
                       </span>
                     ) : canLaunch ? (
                       <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600">
-                        <Rocket className="h-3 w-3" /> 点这一行立项 + 去写
+                        <Rocket className="h-3 w-3" /> 点这一行立项 + 进项目
                       </span>
                     ) : (
                       <span className="text-[11px] text-gray-400">评分不足，已归档</span>
@@ -779,7 +779,7 @@ function CandidateCard({
           ) : (
             <Rocket className="h-3.5 w-3.5" />
           )}
-          {t === 'greenlight' ? '立项 + 去写' : t === 'backlog' ? '立项备选' : '不做'}
+          {t === 'greenlight' ? '立项 + 进项目' : t === 'backlog' ? '立项备选' : '不做'}
         </button>
       </div>
     </li>
