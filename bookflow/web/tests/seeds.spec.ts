@@ -1,5 +1,20 @@
 import { test, expect } from '@playwright/test'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      json: {
+        user: {
+          id: 'test-user',
+          email: 'writer@example.com',
+          display_name: '守单客',
+          created_at: '2026-06-06T10:00:00Z',
+        },
+      },
+    })
+  })
+})
+
 test('选题：绿灯评分 → 自动立项 → 跳到项目明细页', async ({ page }) => {
   // 用唯一标题，避免和 db 已有数据撞
   const title = `测试-${Date.now()}-彩排那天伴娘群弹出他和伴娘的开房记录`.slice(0, 25)
@@ -87,12 +102,16 @@ test('Settings 页：表单可见 + 字段已从 .env 兜底', async ({ page }) 
   await expect(masked).toContainText('*')
 })
 
-test('Tracks 页：4 个赛道列出 + 点开能渲染 markdown', async ({ page }) => {
+test('Tracks 页：赛道文档和两级词库都可见', async ({ page }) => {
   await page.goto('/tracks')
   await expect(page.getByRole('heading', { name: '赛道库' })).toBeVisible()
   for (const slug of ['现言婚恋火葬场', '古言重生打脸', '古言替嫁冲喜', '悬疑规则怪谈']) {
     await expect(page.getByTestId(`doc-item-${slug}`)).toBeVisible()
   }
+  await expect(page.getByTestId('track-primary-card')).toContainText('主分类')
+  await expect(page.getByTestId('track-primary-card')).toContainText('婚姻家庭')
+  await expect(page.getByTestId('track-plot-card')).toContainText('情节标签')
+  await expect(page.getByTestId('track-plot-card')).toContainText('追妻火葬场')
   await page.getByTestId('doc-item-现言婚恋火葬场').click()
   await expect(page.getByTestId('doc-content').getByRole('heading', { name: '赛道定义' })).toBeVisible()
 })
@@ -107,13 +126,18 @@ test('Playbook 页：11 篇手册 + 点开能渲染', async ({ page }) => {
   await expect(page.getByTestId('doc-content')).toBeVisible()
 })
 
-test('Seeds 页：AI 生成面板可见 + 赛道 chip 可切换', async ({ page }) => {
+test('Seeds 页：AI 生成面板可见 + 主分类单选且情节可多选', async ({ page }) => {
   await page.goto('/seeds')
   await expect(page.getByTestId('ai-generate-panel')).toBeVisible()
+  await page.getByTestId('ai-generate-panel').getByRole('button').first().click()
   await expect(page.getByTestId('ai-generate-btn')).toBeVisible()
-  // 默认选中现言；切到悬疑
-  await page.getByTestId('gen-track-悬疑规则怪谈').click()
-  await expect(page.getByTestId('gen-track-悬疑规则怪谈')).toHaveClass(/ring-2/)
+  await page.getByTestId('gen-track-primary-悬疑惊悚').click()
+  await expect(page.getByTestId('gen-track-primary-悬疑惊悚')).toHaveClass(/ring-2/)
+  await expect(page.getByTestId('track-plot-selected')).toContainText('规则怪谈')
+  await expect(page.getByTestId('track-plot-available')).toContainText('推理')
+  await page.getByTestId('gen-track-plot-推理').click()
+  await expect(page.getByTestId('seed-track')).toHaveValue('悬疑惊悚·规则怪谈/推理')
+  await expect(page.getByTestId('track-plot-selected')).toContainText('推理')
 })
 
 test('评分卡顶部「AI 一键立项」按钮可见', async ({ page }) => {

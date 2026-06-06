@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm'
 import {
   ChevronLeft,
   FileText,
+  Image as ImageIcon,
   Loader2,
   Pencil,
   Rocket,
@@ -16,6 +17,9 @@ import {
 } from 'lucide-react'
 import { projectsApi, type ArtifactKind, type ProjectArtifact } from '../api/projects'
 import { chaptersApi, type Chapter } from '../api/chapters'
+import { imagesApi, type StoryImagePayload } from '../api/images'
+import { extractErrorMessage } from '../api/errors'
+import TrackPills from '../components/TrackPills'
 import {
   clearAiJob,
   setAiJob,
@@ -105,6 +109,10 @@ export default function ProjectDetail() {
     () => pickLatest(artifacts.data, 'side_dishes'),
     [artifacts.data],
   )
+  const storyImage = useMemo(
+    () => pickLatest(artifacts.data, 'story_image'),
+    [artifacts.data],
+  )
   const bookSummary = useMemo(
     () => pickLatest(artifacts.data, 'book_summary'),
     [artifacts.data],
@@ -189,13 +197,13 @@ export default function ProjectDetail() {
             <div className="truncate font-semibold text-gray-900">
               {project.data?.title ?? '…'}
             </div>
-            <div className="truncate text-xs text-gray-400 sm:hidden">
-              {project.data?.track}
+            <div className="sm:hidden">
+              {project.data?.track ? <TrackPills track={project.data.track} compact /> : null}
             </div>
           </div>
-          <span className="hidden truncate text-xs text-gray-400 sm:inline">
-            {project.data?.track}
-          </span>
+          <div className="hidden sm:block">
+            {project.data?.track ? <TrackPills track={project.data.track} compact /> : null}
+          </div>
           <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:justify-end">
             <button
               type="button"
@@ -346,6 +354,14 @@ export default function ProjectDetail() {
             disabled={!readme || !outline}
             disabledHint="先生成 README 和大纲，再生成配套素材。"
             emptyHint="生成配套.md：标题变体、短视频钩子、评论区话术、封面关键词等。"
+            onDone={refreshArtifacts}
+            globalJob={aiJob}
+          />
+          <StoryImageCard
+            projectId={projectId}
+            artifact={storyImage}
+            disabled={!readme}
+            disabledHint="先生成 README，再生成小说配图。"
             onDone={refreshArtifacts}
             globalJob={aiJob}
           />
@@ -520,6 +536,17 @@ function countBodyChars(chapters?: Chapter[]): number {
   return chapters?.reduce((sum, c) => sum + Array.from(c.body ?? '').length, 0) ?? 0
 }
 
+function parseStoryImageArtifact(
+  artifact?: ProjectArtifact,
+): StoryImagePayload | null {
+  if (!artifact?.content) return null
+  try {
+    return JSON.parse(artifact.content) as StoryImagePayload
+  } catch {
+    return null
+  }
+}
+
 function artifactTs(artifact?: ProjectArtifact): number {
   if (!artifact) return 0
   const ts = new Date(artifact.created_at).getTime()
@@ -546,6 +573,105 @@ async function copyText(text: string): Promise<boolean> {
       return false
     }
   }
+}
+
+async function downloadCompositedCover(
+  dataUrl: string,
+  filename: string,
+  titleText?: string | null,
+  authorName?: string | null,
+  showAuthor?: boolean,
+  options?: {
+    format?: 'png' | 'jpg' | 'jpeg'
+    quality?: number
+  },
+): Promise<void> {
+  const img = new Image()
+  const imageReady = new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve()
+    img.onerror = () => reject(new Error('图片加载失败'))
+  })
+  img.src = dataUrl
+  await imageReady
+
+  const targetWidth = 600
+  const targetHeight = 800
+  const canvas = document.createElement('canvas')
+  canvas.width = targetWidth
+  canvas.height = targetHeight
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('封面导出失败：canvas 不可用')
+
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
+  if (titleText?.trim()) {
+    const text = titleText.trim()
+    const maxWidth = canvas.width * 0.84
+    let fontSize = 42
+    ctx.fillStyle = '#ffffff'
+    ctx.strokeStyle = 'rgba(0,0,0,0.42)'
+    ctx.lineWidth = 8
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'top'
+    while (fontSize > 26) {
+      ctx.font = `800 ${fontSize}px sans-serif`
+      if (ctx.measureText(text).width <= maxWidth) break
+      fontSize -= 2
+    }
+    const x = canvas.width / 2
+    const y = Math.round(canvas.height * 0.08)
+    ctx.strokeText(text, x, y, maxWidth)
+    ctx.fillText(text, x, y, maxWidth)
+  }
+
+  if (showAuthor && authorName?.trim()) {
+    const text = authorName.trim()
+    const fontSize = Math.max(24, Math.round(canvas.width * 0.045))
+    const padX = Math.round(fontSize * 0.9)
+    const padY = Math.round(fontSize * 0.55)
+    ctx.font = `600 ${fontSize}px sans-serif`
+    const textWidth = ctx.measureText(text).width
+    const badgeWidth = textWidth + padX * 2
+    const badgeHeight = fontSize + padY * 2
+    const x = canvas.width - badgeWidth - Math.round(canvas.width * 0.04)
+    const y = canvas.height - badgeHeight - Math.round(canvas.height * 0.04)
+    const radius = badgeHeight / 2
+
+    ctx.fillStyle = 'rgba(0,0,0,0.58)'
+    ctx.beginPath()
+    ctx.moveTo(x + radius, y)
+    ctx.lineTo(x + badgeWidth - radius, y)
+    ctx.quadraticCurveTo(x + badgeWidth, y, x + badgeWidth, y + radius)
+    ctx.lineTo(x + badgeWidth, y + badgeHeight - radius)
+    ctx.quadraticCurveTo(x + badgeWidth, y + badgeHeight, x + badgeWidth - radius, y + badgeHeight)
+    ctx.lineTo(x + radius, y + badgeHeight)
+    ctx.quadraticCurveTo(x, y + badgeHeight, x, y + badgeHeight - radius)
+    ctx.lineTo(x, y + radius)
+    ctx.quadraticCurveTo(x, y, x + radius, y)
+    ctx.closePath()
+    ctx.fill()
+
+    ctx.fillStyle = '#ffffff'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(text, x + padX, y + badgeHeight / 2 + 1)
+  }
+
+  const format = options?.format ?? 'png'
+  const mimeType = format === 'png' ? 'image/png' : 'image/jpeg'
+  const quality = Math.min(0.95, Math.max(0.6, options?.quality ?? 0.88))
+  const out = format === 'png'
+    ? canvas.toDataURL(mimeType)
+    : canvas.toDataURL(mimeType, quality)
+  const a = document.createElement('a')
+  a.href = out
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+}
+
+function storyImageFilename(projectId: string, format: 'png' | 'jpg' | 'jpeg'): string {
+  return `story-image-${projectId}.${format}`
 }
 
 interface ArtifactStreamCardProps {
@@ -884,6 +1010,253 @@ function MarkdownPreview({ content, maxHeightClass, testId, children }: Markdown
         {children}
       </div>
     </div>
+  )
+}
+
+interface StoryImageCardProps {
+  projectId: string
+  artifact?: ProjectArtifact
+  disabled: boolean
+  disabledHint: string
+  onDone: () => void
+  globalJob?: AiJob
+}
+
+function StoryImageCard({
+  projectId,
+  artifact,
+  disabled,
+  disabledHint,
+  onDone,
+  globalJob,
+}: StoryImageCardProps) {
+  const [error, setError] = useState<string | null>(null)
+  const [generating, setGenerating] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const [size, setSize] = useState<'1024x1024' | '1024x1536' | '1536x1024'>('1024x1536')
+  const [showAuthor, setShowAuthor] = useState(false)
+  const [authorName, setAuthorName] = useState('作者名')
+  const [exportFormat, setExportFormat] = useState<'png' | 'jpg' | 'jpeg'>('png')
+  const [exportQuality, setExportQuality] = useState(88)
+  const payload = parseStoryImageArtifact(artifact)
+  const activeJob = globalJob?.kind === 'story_image' ? globalJob : undefined
+
+  useEffect(() => {
+    if (!payload) return
+    setShowAuthor(payload.show_author)
+    setAuthorName(payload.author_name ?? '作者名')
+    if (payload.cover_size === '1024x1024' || payload.cover_size === '1024x1536' || payload.cover_size === '1536x1024') {
+      setSize(payload.cover_size)
+    }
+  }, [payload])
+
+  const start = async () => {
+    setError(null)
+    setGenerating(true)
+    setAiJob({
+      projectId,
+      kind: 'story_image',
+      title: '小说配图',
+      chars: 0,
+      previewText: '',
+      startedAt: Date.now(),
+    })
+    try {
+      await imagesApi.generateStoryImage(projectId, {
+        size,
+        quality: 'high',
+        author_name: authorName,
+        show_author: showAuthor,
+      })
+      onDone()
+    } catch (e) {
+      setError(extractErrorMessage(e))
+    } finally {
+      clearAiJob(projectId)
+      setGenerating(false)
+    }
+  }
+
+  return (
+    <section
+      className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4"
+      data-testid="story_image-card"
+    >
+      <header className="mb-3 flex items-center gap-2">
+        <ImageIcon className="h-4 w-4 text-sky-600" />
+        <h2 className="text-sm font-semibold">小说配图</h2>
+        {artifact && !generating && (
+          <span className="text-[10px] text-gray-400">v{artifact.version}</span>
+        )}
+        <button
+          type="button"
+          onClick={start}
+          disabled={generating || !!activeJob || disabled}
+          title={disabled ? disabledHint : ''}
+          className="ml-auto inline-flex items-center gap-1 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+          data-testid="ai-story-image-btn"
+        >
+          {generating || activeJob ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Wand2 className="h-3 w-3" />
+          )}
+          {artifact ? '重新生成' : 'AI 生成小说配图'}
+        </button>
+      </header>
+      {disabled && <p className="mb-2 text-xs text-gray-400">{disabledHint}</p>}
+      <div className="mb-3 flex flex-wrap gap-2">
+        {[
+          { value: '1024x1536', label: '番茄封面' },
+          { value: '1024x1024', label: '方图' },
+          { value: '1536x1024', label: '横版宣传图' },
+        ].map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => setSize(option.value as typeof size)}
+            className={`rounded-full px-3 py-1 text-[11px] ${
+              size === option.value
+                ? 'bg-sky-100 text-sky-700'
+                : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+            }`}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      <div className="mb-3 rounded-md border border-gray-200 bg-gray-50 p-3">
+        <p className="mb-2 text-[11px] leading-5 text-gray-500">
+          默认按番茄小说封面导出：600×800 像素；预览和下载都会叠加清晰作品名称，作者署名可选。
+        </p>
+        <label className="flex items-center gap-2 text-xs text-gray-700">
+          <input
+            type="checkbox"
+            checked={showAuthor}
+            onChange={(e) => setShowAuthor(e.target.checked)}
+            className="rounded border-gray-300"
+          />
+          封面带作者署名
+        </label>
+        {showAuthor && (
+          <input
+            type="text"
+            value={authorName}
+            onChange={(e) => setAuthorName(e.target.value)}
+            placeholder="输入作者名"
+            className="mt-2 block w-full rounded-md border border-gray-300 px-3 py-2 text-xs shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+          />
+        )}
+        <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <label className="text-[11px] font-medium text-gray-600">
+            导出格式
+            <select
+              value={exportFormat}
+              onChange={(e) => setExportFormat(e.target.value as typeof exportFormat)}
+              className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+              data-testid="cover-export-format"
+            >
+              <option value="png">PNG 无损</option>
+              <option value="jpg">JPG 压缩</option>
+              <option value="jpeg">JPEG 压缩</option>
+            </select>
+          </label>
+          <label className="text-[11px] font-medium text-gray-600">
+            JPEG 质量：{exportQuality}%
+            <input
+              type="range"
+              min="60"
+              max="95"
+              step="1"
+              value={exportQuality}
+              disabled={exportFormat === 'png'}
+              onChange={(e) => setExportQuality(Number(e.target.value))}
+              className="mt-2 block w-full accent-sky-600 disabled:opacity-40"
+              data-testid="cover-export-quality"
+            />
+          </label>
+        </div>
+        <p className="mt-2 text-[11px] leading-5 text-gray-400">
+          平台要求小于 5MB 时优先选 JPG/JPEG；若仍超限，降低质量后重新下载。
+        </p>
+      </div>
+      {(generating || activeJob) && (
+        <p className="mb-2 inline-flex items-center gap-1 text-xs text-sky-700">
+          <Sparkles className="h-3 w-3 animate-pulse" />
+          AI 生成中 · 小说配图 · {size}
+        </p>
+      )}
+      {error && (
+        <p className="mb-2 inline-flex items-center gap-1 text-xs text-rose-600">
+          <TriangleAlert className="h-3 w-3" /> 生成失败：{error}
+        </p>
+      )}
+      {payload ? (
+        <div className="space-y-3">
+          <div className="relative overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
+            <img
+              src={payload.data_url}
+              alt="小说配图"
+              className="mx-auto block max-h-[520px] w-full object-contain"
+            />
+            {payload.title_text && (
+              <div className="pointer-events-none absolute left-1/2 top-6 w-[84%] -translate-x-1/2 text-center text-lg font-extrabold leading-tight tracking-[0.04em] text-white drop-shadow-[0_3px_10px_rgba(0,0,0,0.85)] sm:text-2xl">
+                {payload.title_text}
+              </div>
+            )}
+            {payload.show_author && payload.author_name && (
+              <div className="pointer-events-none absolute bottom-4 right-4 rounded-full bg-black/55 px-3 py-1.5 text-xs font-medium tracking-[0.08em] text-white shadow-lg backdrop-blur-sm">
+                {payload.author_name}
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  setDownloading(true)
+                  await downloadCompositedCover(
+                    payload.data_url,
+                    storyImageFilename(projectId, exportFormat),
+                    payload.title_text,
+                    payload.author_name,
+                    payload.show_author,
+                    {
+                      format: exportFormat,
+                      quality: exportQuality / 100,
+                    },
+                  )
+                } catch (e) {
+                  setError(extractErrorMessage(e))
+                } finally {
+                  setDownloading(false)
+                }
+              }}
+              className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+              data-testid="download-story-image-btn"
+            >
+              {downloading ? '导出中…' : `下载${exportFormat.toUpperCase()}`}
+            </button>
+            <span className="rounded-full bg-sky-50 px-2 py-1 text-[11px] text-sky-700">
+              {payload.model}
+            </span>
+          </div>
+          <details className="rounded-md border border-gray-200 bg-gray-50 p-3">
+            <summary className="cursor-pointer text-xs font-medium text-gray-700">
+              查看生图提示词
+            </summary>
+            <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-gray-600">
+              {payload.prompt}
+            </pre>
+          </details>
+        </div>
+      ) : (
+        <p className="text-xs text-gray-400">
+          生成一张用于小说封面/首图的高情绪配图，优先吃 README、大纲和配套素材里的封面关键词。
+        </p>
+      )}
+    </section>
   )
 }
 

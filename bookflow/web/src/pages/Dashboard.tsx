@@ -190,7 +190,7 @@ function QuickStart(props: {
             <div className="min-w-0 flex-1">
               <h3 className="text-base font-semibold text-gray-900">配置赛道与 playbook</h3>
               <p className="mt-2 text-sm leading-6 text-gray-500">
-                已就绪 4 个赛道、11 篇 playbook。新号当前主攻"现言婚恋火葬场"。
+                已就绪主分类 + 情节词库，以及 11 篇 playbook。新号当前主攻"婚姻家庭·追妻火葬场"。
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 {TRACK_TAGS.map((t) => (
@@ -369,6 +369,20 @@ function Pipeline({
   )
 }
 
+function reviewProjectStatusLabel(status: Project['status']): string {
+  switch (status) {
+    case 'published':
+      return '已发'
+    case 'archived':
+      return '已归档'
+    case 'ready':
+      return '待发'
+    case 'writing':
+    default:
+      return '写作中'
+  }
+}
+
 function PipelineNode({ stage }: { stage: PipelineStage }) {
   const Icon = STAGE_ICONS[stage.key]
   const isWrite = stage.key === 'write'
@@ -532,7 +546,7 @@ function ReviewReminderCard({
             >
               <div className="text-gray-900 line-clamp-1">{item.title}</div>
               <div className="mt-1 text-xs text-amber-700">
-                已发 {reviewStageMeta(item.stage)} · {item.data_recorded ? '已录数据' : '数据未录入'}
+                {reviewProjectStatusLabel(item.status)} {reviewStageMeta(item.stage)} · {item.data_recorded ? '已录数据' : '数据未录入'}
               </div>
             </Link>
           </li>
@@ -659,7 +673,7 @@ function WritingMaterials() {
       <h2 className="text-xl font-semibold text-gray-900">写作素材</h2>
       <p className="mt-2 text-sm leading-6 text-gray-500">赛道、playbook、模板、禁用词表 — 写作时一键打开</p>
       <div className="mt-5 grid gap-3">
-        <MaterialRow Icon={RouteIcon} title="赛道配置" desc="4 个赛道，含受众画像、套路、禁忌" count="4" to="/tracks" />
+        <MaterialRow Icon={RouteIcon} title="赛道配置" desc="主分类 + 情节词库，含受众画像、套路、禁忌" count="24+33" to="/tracks" />
         <MaterialRow Icon={BookOpen} title="Playbook 写作手册" desc="去 AI 味 / 钩子 / 反转 / 精修清单" count="11" to="/playbook" />
         <MaterialRow Icon={FilePlus} title="项目模板" desc="立项时一键复制" count="1" to="/seeds" />
         <MaterialRow Icon={Ban} title="禁用词表" desc="写作 + 发布检查双重扫描" count="217" to="/playbook" />
@@ -875,7 +889,7 @@ function SkillResources() {
           Icon={Terminal}
           iconBg="bg-violet-50 text-violet-600"
           title="赛道库"
-          desc="4 个赛道的死局公式、常见反杀、标签体系。立项前先选赛道。"
+          desc="主分类 + 情节词库，以及死局公式、常见反杀、标签体系。立项前先选赛道。"
           cta="打开赛道库"
           href="/tracks"
         />

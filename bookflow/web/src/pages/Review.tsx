@@ -10,6 +10,8 @@ import {
   type ReviewStage,
   type UpsertProjectReviewInput,
 } from '../api/reviews'
+import type { ProjectStatus } from '../api/projects'
+import TrackPills from '../components/TrackPills'
 
 interface ReviewFormState {
   read_count: string
@@ -55,6 +57,20 @@ function stageLabel(stage: ReviewStage): string {
       return '72 小时复盘'
     case '7d':
       return '7 天复盘'
+  }
+}
+
+function statusLabel(status: ProjectStatus): string {
+  switch (status) {
+    case 'published':
+      return '已发'
+    case 'archived':
+      return '已归档'
+    case 'ready':
+      return '待发'
+    case 'writing':
+    default:
+      return '写作中'
   }
 }
 
@@ -263,10 +279,11 @@ export default function Review() {
                     >
                       <div className="text-sm font-medium text-gray-900 line-clamp-2">{item.title}</div>
                       <div className="mt-1 text-xs text-gray-500">
-                        {stageLabel(item.stage)} · {item.track}
+                        {stageLabel(item.stage)}
                       </div>
+                      <TrackPills track={item.track} compact />
                       <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-gray-500">
-                        <span>已发 {formatDate(item.published_at)}</span>
+                        <span>{statusLabel(item.status)} {formatDate(item.published_at)}</span>
                         <span>{item.total_words} 字</span>
                         <span>{item.data_recorded ? '已录数据' : '待录数据'}</span>
                       </div>
@@ -303,7 +320,7 @@ export default function Review() {
                     </div>
                     <h2 className="mt-1 text-xl font-semibold text-gray-900">{selectedPending.title}</h2>
                     <div className="mt-2 flex flex-wrap gap-3 text-sm text-gray-500">
-                      <span>{selectedPending.track}</span>
+                      <TrackPills track={selectedPending.track} compact />
                       <span>{selectedPending.total_words} 字</span>
                       <span>发布时间 {formatDate(selectedPending.published_at)}</span>
                       <span>

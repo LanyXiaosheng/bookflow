@@ -4,7 +4,19 @@ import { useNavigate } from 'react-router-dom'
 import { Sparkles, TriangleAlert, Check, Wand2, X, Loader2, Brain, ListPlus, Rocket, ArrowRight, History, ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 import { seedsApi, type AiScoreResponse, type AiSeedCandidate, type Score, type Tier } from '../api/seeds'
 import { projectsApi, type Project } from '../api/projects'
+import { extractErrorMessage } from '../api/errors'
 import { useConfirm } from '../components/ConfirmDialog'
+import TrackPills from '../components/TrackPills'
+import {
+  composeTrack,
+  DEFAULT_TRACK_PLOT,
+  DEFAULT_TRACK_PRIMARY,
+  defaultPlotForPrimary,
+  splitTrack,
+  TRACK_PLOT_OPTIONS,
+  TRACK_PRIMARY_OPTIONS,
+  type TrackPrimary,
+} from '../lib/tracks'
 
 const DIM_LABELS: Record<keyof Score, string> = {
   title: '标题张力',
@@ -19,12 +31,18 @@ const DIM_LABELS: Record<keyof Score, string> = {
 const DIM_KEYS = Object.keys(DIM_LABELS) as Array<keyof Score>
 const DEFAULT_SCORE: Score = { title: 5, opening: 5, slap: 5, emotion: 4, twist: 4, hook: 5, finish: 5 }
 
-const TRACKS = [
-  { value: '现言婚恋火葬场', tone: 'border-orange-200 bg-orange-50 text-orange-700' },
-  { value: '古言重生打脸', tone: 'border-green-200 bg-green-50 text-green-700' },
-  { value: '古言替嫁冲喜', tone: 'border-blue-200 bg-blue-50 text-blue-700' },
-  { value: '悬疑规则怪谈', tone: 'border-purple-200 bg-purple-50 text-purple-700' },
+const TRACK_PILL_TONES = [
+  'border-orange-200 bg-orange-50 text-orange-700',
+  'border-green-200 bg-green-50 text-green-700',
+  'border-blue-200 bg-blue-50 text-blue-700',
+  'border-purple-200 bg-purple-50 text-purple-700',
+  'border-rose-200 bg-rose-50 text-rose-700',
+  'border-cyan-200 bg-cyan-50 text-cyan-700',
 ] as const
+
+function toneForIndex(index: number): string {
+  return TRACK_PILL_TONES[index % TRACK_PILL_TONES.length]
+}
 
 function tierOf(total: number): Tier {
   if (total >= 28) return 'greenlight'
@@ -43,17 +61,6 @@ const TIER_BG: Record<Tier, string> = {
 const TEST_PREFIX_RE = /^(测试|e2e|smoke|playwright|test)/i
 function looksLikeTestData(title: string): boolean {
   return TEST_PREFIX_RE.test(title.trim())
-}
-
-/** 抽 axios 错误的人类信息：优先后端 detail，其次 message */
-function extractErrorMessage(err: unknown): string {
-  if (!err) return '未知错误'
-  // axios error
-  const anyErr = err as { response?: { data?: { detail?: string; error?: string } }; message?: string }
-  const data = anyErr.response?.data
-  if (data?.detail) return data.detail
-  if (data?.error) return data.error
-  return anyErr.message ?? String(err)
 }
 
 export default function Seeds() {
@@ -103,7 +110,9 @@ export default function Seeds() {
   })
 
   const [title, setTitle] = useState('')
-  const [track, setTrack] = useState('现言婚恋火葬场')
+  const [trackPrimary, setTrackPrimary] = useState<TrackPrimary>(DEFAULT_TRACK_PRIMARY)
+  const [trackPlots, setTrackPlots] = useState<string[]>([DEFAULT_TRACK_PLOT])
+  const track = useMemo(() => composeTrack(trackPrimary, trackPlots), [trackPrimary, trackPlots])
   const [score, setScore] = useState<Score>(DEFAULT_SCORE)
   const [drawer, setDrawer] = useState(false)
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
@@ -210,7 +219,7 @@ export default function Seeds() {
           <div className="flex-1">
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-semibold text-gray-900">AI 批量出选题</h2>
-              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] ${TRACKS.find((t) => t.value === track)?.tone ?? 'border-gray-200 bg-white text-gray-600'}`}>
+              <span className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[10px] text-gray-600">
                 {track}
               </span>
               {drafts.data && drafts.data.length > 0 && (
@@ -218,7 +227,7 @@ export default function Seeds() {
               )}
             </div>
             <p className="mt-0.5 text-[11px] text-gray-400">
-              选赛道 → AI 一次出 5 个标题 + 7 维评分 → 一键立项
+              选主分类 + 情节 → AI 一次出 5 个标题 + 7 维评分 → 一键立项
             </p>
           </div>
           {aiPanelOpen ? (
@@ -230,37 +239,139 @@ export default function Seeds() {
 
         {aiPanelOpen && (
           <div className="border-t border-gray-100 px-5 py-4">
-          <div className="flex flex-wrap items-center gap-2">
-            {TRACKS.map((t) => (
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+              <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-3">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    主分类
+                  </div>
+                  <p className="mt-1 text-xs text-slate-400">
+                    只能选一个，先定受众和情绪大盘。
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2" data-testid="track-primary-grid">
+                  {TRACK_PRIMARY_OPTIONS.map((value, index) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => {
+                        setTrackPrimary(value)
+                        setTrackPlots((current) =>
+                          current.length === 1
+                            ? [defaultPlotForPrimary(value)]
+                            : current,
+                        )
+                      }}
+                      data-testid={`gen-track-primary-${value}`}
+                      className={`relative inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                        trackPrimary === value
+                          ? `${toneForIndex(index)} ring-2 ring-offset-1 ring-current shadow-sm`
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      {value}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="rounded-2xl border border-violet-100 bg-violet-50/40 p-4">
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-700">
+                      情节标签
+                    </div>
+                    <p className="mt-1 text-xs text-violet-500">
+                      可多选，补冲突钩子、关系结构和爽点方向。
+                    </p>
+                  </div>
+                  <span className="inline-flex shrink-0 items-center rounded-full border border-violet-200 bg-white px-2.5 py-1 text-[11px] font-medium text-violet-700">
+                    已选 {trackPlots.length}
+                  </span>
+                </div>
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-violet-100 bg-white/80 p-3" data-testid="track-plot-selected">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-600">
+                        已选情节
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setTrackPlots([defaultPlotForPrimary(trackPrimary)])}
+                        className="text-[11px] text-violet-500 hover:text-violet-700"
+                        data-testid="track-plot-reset"
+                      >
+                        重置
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {trackPlots.map((plot) => (
+                        <button
+                          key={plot}
+                          type="button"
+                          onClick={() => {
+                            setTrackPlots((current) => {
+                              const next = current.filter((item) => item !== plot)
+                              return next.length > 0 ? next : [DEFAULT_TRACK_PLOT]
+                            })
+                          }}
+                          data-testid={`gen-track-plot-${plot}`}
+                          className="inline-flex items-center rounded-full border border-violet-200 bg-violet-100 px-3 py-1.5 text-xs font-medium text-violet-700 ring-2 ring-offset-1 ring-violet-200 transition"
+                        >
+                          {plot}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-violet-100 bg-white/60 p-3">
+                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-600">
+                      可选情节
+                    </div>
+                    <div className="max-h-52 overflow-y-auto px-1 pt-1 pr-1">
+                      <div className="flex flex-wrap gap-2 overflow-visible" data-testid="track-plot-available">
+                        {TRACK_PLOT_OPTIONS.filter((plot) => !trackPlots.includes(plot)).map((plot) => (
+                          <button
+                            key={plot}
+                            type="button"
+                            onClick={() => setTrackPlots((current) => [...current, plot])}
+                            data-testid={`gen-track-plot-${plot}`}
+                            className="inline-flex items-center rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50"
+                          >
+                            {plot}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <div className="mt-4 flex flex-col gap-3 rounded-xl border border-violet-100 bg-violet-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-600">
+                  当前组合赛道
+                </div>
+                <div className="mt-1 break-all text-sm font-semibold text-gray-900">
+                  {track}
+                </div>
+              </div>
               <button
-                key={t.value}
                 type="button"
-                onClick={() => setTrack(t.value)}
-                data-testid={`gen-track-${t.value}`}
-                className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                  track === t.value
-                    ? `${t.tone} ring-2 ring-offset-1 ring-current`
-                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                }`}
+                onClick={() => aiGen.mutate(track)}
+                disabled={aiGen.isPending}
+                data-testid="ai-generate-btn"
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
               >
-                {t.value}
+                {aiGen.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Wand2 className="h-4 w-4" />
+                )}
+                {aiGen.isPending ? 'AI 生成中…' : `生成 5 个候选`}
               </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => aiGen.mutate(track)}
-              disabled={aiGen.isPending}
-              data-testid="ai-generate-btn"
-              className="ml-auto inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
-            >
-              {aiGen.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Wand2 className="h-4 w-4" />
-              )}
-              {aiGen.isPending ? 'AI 生成中…' : `生成 5 个候选`}
-            </button>
-          </div>
+            </div>
 
           {aiGen.isError && (
             <div className="mt-4 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
@@ -398,14 +509,77 @@ export default function Seeds() {
           </label>
 
           <label className="block mt-4">
-            <span className="text-sm font-medium text-gray-700">赛道</span>
+            <span className="text-sm font-medium text-gray-700">主分类</span>
+            <select
+              value={trackPrimary}
+              onChange={(e) => {
+                const nextPrimary = e.target.value as TrackPrimary
+                setTrackPrimary(nextPrimary)
+                setTrackPlots((current) =>
+                  current.length === 1
+                    ? [defaultPlotForPrimary(nextPrimary)]
+                    : current,
+                )
+              }}
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+              data-testid="seed-track-primary"
+            >
+              {TRACK_PRIMARY_OPTIONS.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block mt-4">
+            <span className="text-sm font-medium text-gray-700">情节（可多选）</span>
+            <div className="mt-2 flex flex-wrap gap-2" data-testid="seed-track-plot">
+              {TRACK_PLOT_OPTIONS.map((value) => {
+                const active = trackPlots.includes(value)
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => {
+                      setTrackPlots((current) => {
+                        if (current.includes(value)) {
+                          const next = current.filter((item) => item !== value)
+                          return next.length > 0 ? next : [DEFAULT_TRACK_PLOT]
+                        }
+                        return [...current, value]
+                      })
+                    }}
+                    data-testid={`seed-track-plot-${value}`}
+                    className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                      active
+                        ? 'border-violet-200 bg-violet-50 text-violet-700'
+                        : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    {value}
+                  </button>
+                )
+              })}
+            </div>
+          </label>
+
+          <label className="block mt-4">
+            <span className="text-sm font-medium text-gray-700">最终赛道</span>
             <input
               type="text"
               value={track}
-              onChange={(e) => setTrack(e.target.value)}
+              onChange={(e) => {
+                const parsed = splitTrack(e.target.value)
+                setTrackPrimary(parsed.primary as TrackPrimary)
+                setTrackPlots(parsed.plots)
+              }}
               className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
               data-testid="seed-track"
             />
+            <p className="mt-1 text-xs text-gray-400">
+              系统按“主分类·情节”组合保存，兼容历史单字符串赛道。
+            </p>
           </label>
 
           <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
@@ -465,22 +639,29 @@ export default function Seeds() {
         </section>
 
         <aside className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-5 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:sticky lg:top-20">
-          <header className="sticky top-0 bg-white pb-2 mb-3 flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-gray-700">最近选题</h2>
-            <span className="text-[10px] text-gray-400">
-              {visibleSeeds.length}
-              {hiddenCount > 0 && ` · 隐藏 ${hiddenCount}`}
-            </span>
-            <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={hideTestData}
-                onChange={(e) => setHideTestData(e.target.checked)}
-                className="h-3 w-3"
-                data-testid="hide-test-data-toggle"
-              />
-              隐藏测试
-            </label>
+          <header className="sticky top-0 z-10 -mx-5 -mt-5 mb-4 space-y-2 border-b border-gray-100 bg-white px-5 pt-5 pb-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-700">最近选题</h2>
+                <p className="mt-0.5 text-[11px] text-gray-400">
+                  {visibleSeeds.length} 条可见
+                  {hiddenCount > 0 ? `，已隐藏 ${hiddenCount} 条测试数据` : ''}
+                </p>
+              </div>
+              <label className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] text-gray-500 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={hideTestData}
+                  onChange={(e) => setHideTestData(e.target.checked)}
+                  className="h-3 w-3"
+                  data-testid="hide-test-data-toggle"
+                />
+                隐藏测试
+              </label>
+            </div>
+            <div className="rounded-lg bg-gray-50 px-3 py-2 text-[11px] text-gray-500">
+              绿灯项目可直接点进项目明细，未立项的种子可继续推进。
+            </div>
           </header>
           {list.isLoading && <p className="text-sm text-gray-400">加载中…</p>}
           {list.isError && <p className="text-sm text-rose-600">读取失败</p>}
@@ -517,7 +698,9 @@ export default function Seeds() {
                       </span>
                     </div>
                     <div className="mt-1 flex items-center justify-between text-gray-500">
-                      <span className="truncate">{s.track}</span>
+                      <div className="min-w-0 flex-1">
+                        <TrackPills track={s.track} compact />
+                      </div>
                       <span className="font-mono">{s.total_score}</span>
                     </div>
                   </div>

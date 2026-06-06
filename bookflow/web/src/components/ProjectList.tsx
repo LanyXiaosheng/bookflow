@@ -6,6 +6,7 @@ import { projectsApi, type Project, type ProjectStatus } from '../api/projects'
 import { chaptersApi } from '../api/chapters'
 import { aiJobKindLabel, useAllAiJobs, type AiJob } from '../hooks/useAiJobStore'
 import { useConfirm } from './ConfirmDialog'
+import TrackPills from './TrackPills'
 
 type FilterStatus = ProjectStatus | 'all'
 
@@ -41,6 +42,7 @@ interface ProjectListProps {
   status: FilterStatus
   title: string
   emptyHint?: string
+  includeStatuses?: ProjectStatus[]
 }
 
 interface ProjectCardData {
@@ -64,7 +66,12 @@ function renderAiJobText(job: AiJob): string {
   return `AI 生成中 · ${job.title || aiJobKindLabel(job.kind)}`
 }
 
-export default function ProjectList({ status: initialStatus, title, emptyHint }: ProjectListProps) {
+export default function ProjectList({
+  status: initialStatus,
+  title,
+  emptyHint,
+  includeStatuses,
+}: ProjectListProps) {
   const qc = useQueryClient()
   const aiJobs = useAllAiJobs()
   const confirm = useConfirm()
@@ -72,10 +79,11 @@ export default function ProjectList({ status: initialStatus, title, emptyHint }:
   const [hideTestData, setHideTestData] = useState(true)
 
   const list = useQuery({
-    queryKey: ['projects', status],
+    queryKey: ['projects', status, includeStatuses?.join(',') ?? ''],
     queryFn: async () => {
-      const projects =
-        status === 'all'
+      const projects = includeStatuses?.length
+        ? (await Promise.all(includeStatuses.map((s) => projectsApi.list(s)))).flat()
+        : status === 'all'
           ? await projectsApi.list()
           : await projectsApi.list(status)
       const enriched = await Promise.all(
@@ -206,7 +214,9 @@ export default function ProjectList({ status: initialStatus, title, emptyHint }:
                   {STATUS_LABEL[project.status]}
                 </span>
               </header>
-              <div className="text-xs text-gray-500 mb-3">{project.track}</div>
+              <div className="mb-3">
+                <TrackPills track={project.track} compact />
+              </div>
               {job && (
                 <div
                   className="mb-3 inline-flex items-center gap-1.5 rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-[11px] font-medium text-violet-700"

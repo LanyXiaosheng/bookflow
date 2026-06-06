@@ -7,6 +7,8 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{mpsc, RwLock};
+use tokio::time::sleep;
+use tracing::{error, warn};
 
 /// 后端用的 AI 配置（从 env 读，运行时可被 Settings 接口热替换）
 #[derive(Clone, Debug)]
@@ -15,6 +17,7 @@ pub struct AiConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    pub image_model: String,
     pub timeout: Duration,
 }
 
@@ -46,6 +49,7 @@ impl AiConfig {
         let base_url = std::env::var("AI_BASE_URL").context("AI_BASE_URL 未设置")?;
         let api_key = std::env::var("AI_API_KEY").context("AI_API_KEY 未设置")?;
         let model = std::env::var("AI_MODEL").context("AI_MODEL 未设置")?;
+        let image_model = std::env::var("AI_IMAGE_MODEL").unwrap_or_else(|_| "gpt-image-2".into());
         let timeout = Duration::from_secs(
             std::env::var("AI_TIMEOUT_SECS")
                 .ok()
@@ -57,6 +61,7 @@ impl AiConfig {
             base_url,
             api_key,
             model,
+            image_model,
             timeout,
         })
     }
@@ -66,6 +71,14 @@ impl AiConfig {
 pub struct AiClient {
     cfg: Arc<RwLock<AiConfig>>,
     http: reqwest::Client,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneratedImage {
+    pub model: String,
+    pub prompt: String,
+    pub mime_type: String,
+    pub data_url: String,
 }
 
 impl AiClient {
@@ -87,6 +100,22 @@ impl AiClient {
 
     pub async fn snapshot(&self) -> AiConfig {
         self.cfg.read().await.clone()
+    }
+
+    pub async fn generate_image(
+        &self,
+        prompt: &str,
+        size: &str,
+        quality: &str,
+    ) -> Result<GeneratedImage> {
+        let cfg = self.cfg.read().await.clone();
+        match cfg.provider {
+            Provider::Openai => {
+                self.generate_openai_image(&cfg, prompt, size, quality)
+                    .await
+            }
+            Provider::Anthropic => Err(anyhow!("当前 provider 不支持生图，请切到 OpenAI")),
+        }
     }
 
     /// 发一段 user 消息，让模型严格回 JSON。返回模型的纯文本响应。
@@ -137,37 +166,171 @@ impl AiClient {
 
     async fn complete_openai(&self, cfg: &AiConfig, system: &str, user: &str) -> Result<String> {
         let url = format!("{}/v1/chat/completions", cfg.base_url.trim_end_matches('/'));
-        let body = json!({
-            "model": cfg.model,
-            "temperature": 0.4,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        });
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&cfg.api_key)
-            .json(&body)
-            .send()
-            .await
-            .context("调 openai 失败（连接/超时）")?;
-        let status = resp.status();
-        let text = resp.text().await.context("读 openai 响应失败")?;
-        if !status.is_success() {
-            return Err(anyhow!("openai {} : {}", status, text));
+        for attempt in 1..=OPENAI_MAX_ATTEMPTS {
+            let body = json!({
+                "model": cfg.model,
+                "temperature": 0.4,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+            });
+            let send = self
+                .http
+                .post(&url)
+                .bearer_auth(&cfg.api_key)
+                .json(&body)
+                .send()
+                .await;
+            match send {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let text = resp.text().await.context("读 openai 响应失败")?;
+                    if status.is_success() {
+                        let parsed: OpenAiResp = serde_json::from_str(&text)
+                            .with_context(|| format!("解析 openai 响应失败: {text}"))?;
+                        let out = parsed
+                            .choices
+                            .into_iter()
+                            .next()
+                            .map(|c| c.message.content)
+                            .unwrap_or_default();
+                        return Ok(out);
+                    }
+
+                    if should_retry_openai_status(status) && attempt < OPENAI_MAX_ATTEMPTS {
+                        warn!(
+                            attempt,
+                            max_attempts = OPENAI_MAX_ATTEMPTS,
+                            %status,
+                            "openai completion failed with retryable status"
+                        );
+                        sleep(openai_retry_delay(attempt)).await;
+                        continue;
+                    }
+
+                    error!(
+                        attempt,
+                        %status,
+                        body = %text,
+                        "openai completion failed"
+                    );
+                    return Err(anyhow!(openai_status_user_message(status)));
+                }
+                Err(err) => {
+                    if should_retry_openai_transport(&err) && attempt < OPENAI_MAX_ATTEMPTS {
+                        warn!(
+                            attempt,
+                            max_attempts = OPENAI_MAX_ATTEMPTS,
+                            err = %err,
+                            "openai completion transport failed, retrying"
+                        );
+                        sleep(openai_retry_delay(attempt)).await;
+                        continue;
+                    }
+
+                    error!(attempt, err = %err, "openai completion transport failed");
+                    return Err(anyhow!(openai_transport_user_message(&err)));
+                }
+            }
         }
-        let parsed: OpenAiResp =
-            serde_json::from_str(&text).with_context(|| format!("解析 openai 响应失败: {text}"))?;
-        let out = parsed
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content)
-            .unwrap_or_default();
-        Ok(out)
+        unreachable!("openai completion retry loop must return")
+    }
+
+    async fn generate_openai_image(
+        &self,
+        cfg: &AiConfig,
+        prompt: &str,
+        size: &str,
+        quality: &str,
+    ) -> Result<GeneratedImage> {
+        #[derive(Deserialize)]
+        struct OpenAiImageData {
+            b64_json: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct OpenAiImageResp {
+            data: Vec<OpenAiImageData>,
+        }
+
+        let url = format!(
+            "{}/v1/images/generations",
+            cfg.base_url.trim_end_matches('/')
+        );
+        for attempt in 1..=OPENAI_MAX_ATTEMPTS {
+            let body = json!({
+                "model": cfg.image_model,
+                "prompt": prompt,
+                "size": size,
+                "quality": quality,
+                "response_format": "b64_json",
+            });
+            let send = self
+                .http
+                .post(&url)
+                .bearer_auth(&cfg.api_key)
+                .json(&body)
+                .send()
+                .await;
+            match send {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let text = resp.text().await.context("读 openai 生图响应失败")?;
+                    if status.is_success() {
+                        let parsed: OpenAiImageResp = serde_json::from_str(&text)
+                            .with_context(|| format!("解析 openai 生图响应失败: {text}"))?;
+                        let b64 = parsed
+                            .data
+                            .into_iter()
+                            .next()
+                            .and_then(|item| item.b64_json)
+                            .ok_or_else(|| anyhow!("openai 生图响应没有返回 b64_json"))?;
+                        return Ok(GeneratedImage {
+                            model: cfg.image_model.clone(),
+                            prompt: prompt.to_string(),
+                            mime_type: "image/png".into(),
+                            data_url: format!("data:image/png;base64,{b64}"),
+                        });
+                    }
+
+                    if should_retry_openai_status(status) && attempt < OPENAI_MAX_ATTEMPTS {
+                        warn!(
+                            attempt,
+                            max_attempts = OPENAI_MAX_ATTEMPTS,
+                            %status,
+                            "openai image generation failed with retryable status"
+                        );
+                        sleep(openai_retry_delay(attempt)).await;
+                        continue;
+                    }
+
+                    error!(
+                        attempt,
+                        %status,
+                        body = %text,
+                        "openai image generation failed"
+                    );
+                    return Err(anyhow!(openai_status_user_message(status)));
+                }
+                Err(err) => {
+                    if should_retry_openai_transport(&err) && attempt < OPENAI_MAX_ATTEMPTS {
+                        warn!(
+                            attempt,
+                            max_attempts = OPENAI_MAX_ATTEMPTS,
+                            err = %err,
+                            "openai image generation transport failed, retrying"
+                        );
+                        sleep(openai_retry_delay(attempt)).await;
+                        continue;
+                    }
+
+                    error!(attempt, err = %err, "openai image generation transport failed");
+                    return Err(anyhow!(openai_transport_user_message(&err)));
+                }
+            }
+        }
+        unreachable!("openai image retry loop must return")
     }
 
     /// 流式生成纯文本（不要求 JSON）。返回一个 mpsc 接收端，
@@ -209,6 +372,40 @@ pub enum StreamEvent {
 
 fn stream_timeout(cfg: &AiConfig) -> Duration {
     cfg.timeout.max(Duration::from_secs(600))
+}
+
+const OPENAI_MAX_ATTEMPTS: usize = 3;
+
+fn should_retry_openai_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 429 | 502 | 503 | 504)
+}
+
+fn should_retry_openai_transport(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect()
+}
+
+fn openai_retry_delay(attempt: usize) -> Duration {
+    match attempt {
+        1 => Duration::from_millis(400),
+        2 => Duration::from_millis(1200),
+        _ => Duration::from_millis(2500),
+    }
+}
+
+fn openai_status_user_message(status: reqwest::StatusCode) -> &'static str {
+    match status.as_u16() {
+        429 | 502 | 503 | 504 => "上游 AI 服务暂时不可用，请稍后重试",
+        400 | 401 | 403 | 404 => "AI 服务请求失败，请检查模型、鉴权和网关配置",
+        _ => "AI 服务请求失败，请稍后重试",
+    }
+}
+
+fn openai_transport_user_message(err: &reqwest::Error) -> &'static str {
+    if err.is_timeout() || err.is_connect() {
+        "AI 服务连接超时，请稍后重试"
+    } else {
+        "AI 服务请求失败，请稍后重试"
+    }
 }
 
 async fn stream_anthropic(
@@ -295,30 +492,64 @@ async fn stream_openai(
     tx: mpsc::Sender<StreamEvent>,
 ) -> Result<()> {
     let url = format!("{}/v1/chat/completions", cfg.base_url.trim_end_matches('/'));
-    let body = json!({
-        "model": cfg.model,
-        "temperature": 0.4,
-        "stream": true,
-        "max_tokens": max_tokens,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    });
-    let resp = http
-        .post(&url)
-        .bearer_auth(&cfg.api_key)
-        .header("accept", "text/event-stream")
-        .timeout(stream_timeout(cfg))
-        .json(&body)
-        .send()
-        .await
-        .context("调 openai stream 失败（连接/超时）")?;
-    let status = resp.status();
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("openai stream {} : {}", status, text));
+    let mut resp = None;
+    for attempt in 1..=OPENAI_MAX_ATTEMPTS {
+        let body = json!({
+            "model": cfg.model,
+            "temperature": 0.4,
+            "stream": true,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        });
+        let send = http
+            .post(&url)
+            .bearer_auth(&cfg.api_key)
+            .header("accept", "text/event-stream")
+            .timeout(stream_timeout(cfg))
+            .json(&body)
+            .send()
+            .await;
+        match send {
+            Ok(candidate) => {
+                let status = candidate.status();
+                if status.is_success() {
+                    resp = Some(candidate);
+                    break;
+                }
+                let text = candidate.text().await.unwrap_or_default();
+                if should_retry_openai_status(status) && attempt < OPENAI_MAX_ATTEMPTS {
+                    warn!(
+                        attempt,
+                        max_attempts = OPENAI_MAX_ATTEMPTS,
+                        %status,
+                        "openai stream failed with retryable status"
+                    );
+                    sleep(openai_retry_delay(attempt)).await;
+                    continue;
+                }
+                error!(attempt, %status, body = %text, "openai stream failed");
+                return Err(anyhow!(openai_status_user_message(status)));
+            }
+            Err(err) => {
+                if should_retry_openai_transport(&err) && attempt < OPENAI_MAX_ATTEMPTS {
+                    warn!(
+                        attempt,
+                        max_attempts = OPENAI_MAX_ATTEMPTS,
+                        err = %err,
+                        "openai stream transport failed, retrying"
+                    );
+                    sleep(openai_retry_delay(attempt)).await;
+                    continue;
+                }
+                error!(attempt, err = %err, "openai stream transport failed");
+                return Err(anyhow!(openai_transport_user_message(&err)));
+            }
+        }
     }
+    let resp = resp.expect("openai stream retry loop must produce a response");
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
     while let Some(chunk) = stream.next().await {
@@ -438,8 +669,7 @@ fn extract_json(s: &str) -> Option<&str> {
 // === 项目级流式生成 ===
 
 const README_SYSTEM: &str = include_str!("ai_prompts/project_readme.system.md");
-const CHARACTER_SETUP_SYSTEM: &str =
-    include_str!("ai_prompts/project_character_setup.system.md");
+const CHARACTER_SETUP_SYSTEM: &str = include_str!("ai_prompts/project_character_setup.system.md");
 const OUTLINE_SYSTEM: &str = include_str!("ai_prompts/project_outline.system.md");
 const PUBLISH_SYSTEM: &str = include_str!("ai_prompts/project_publish.system.md");
 const SIDE_DISHES_SYSTEM: &str = include_str!("ai_prompts/project_side_dishes.system.md");
@@ -738,6 +968,7 @@ mod tests {
             base_url: String::new(),
             api_key: String::new(),
             model: String::new(),
+            image_model: "gpt-image-2".into(),
             timeout: Duration::from_secs(60),
         };
         assert_eq!(stream_timeout(&cfg), Duration::from_secs(600));
@@ -750,6 +981,7 @@ mod tests {
             base_url: String::new(),
             api_key: String::new(),
             model: String::new(),
+            image_model: "gpt-image-2".into(),
             timeout: Duration::from_secs(900),
         };
         assert_eq!(stream_timeout(&cfg), Duration::from_secs(900));
