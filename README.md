@@ -1,64 +1,90 @@
-# 番茄短篇工厂
+# 番茄短篇项目仓库
 
-只做一件事：**批量生产能过番茄冷启动的短篇小说**。
+这个仓库现在有两个主要入口：
 
----
+1. `bookflow/`
+   一个可运行的番茄短篇生产平台，包含前后端、数据库、演示数据、登录、项目写作、复盘、通知和 AI 工作流。
+2. 内容工厂资料目录
+   包括 `pipeline/`、`playbook/`、`tracks/`、`templates/` 等，用于选题、写作、发布和沉淀方法论。
 
-## 系统结构
+如果你的目标是“把系统跑起来给别人用”，直接看下面的 `Bookflow` 快速启动。  
+如果你的目标是“查看内容生产资料和 SOP”，看后面的“资料目录说明”。
+
+## Bookflow 快速启动
+
+前置条件：
+
+- Docker / Docker Compose
+- Rust toolchain
+- Node.js 20+
+- pnpm
+
+执行：
+
+```bash
+cd bookflow
+cp .env.example .env
+bash scripts/bootstrap-demo.sh
+cd web
+pnpm install
+pnpm dev
+```
+
+启动后：
+
+- 前端：`http://127.0.0.1:5174`
+- 后端：`http://127.0.0.1:3000`
+- 健康检查：`http://127.0.0.1:3000/healthz`
+
+默认演示账号：
+
+- 邮箱：`demo@bookflow.local`
+- 密码：`Demo123456`
+
+常用命令：
+
+```bash
+# 重置演示数据
+cd bookflow
+bash scripts/reseed-demo.sh
+
+# 一键开发
+cd bookflow
+./dev.sh
+
+# 运行 Rust 测试
+cd bookflow
+DATABASE_URL=postgres://bookflow:bookflow@localhost:5433/bookflow_dev cargo test --workspace
+```
+
+更完整的系统说明见：
+
+- [bookflow/README.md](./bookflow/README.md)
+
+## 资料目录说明
+
+仓库根目录下的内容工厂资料仍然保留，主要用于写作与生产流程沉淀：
 
 | 目录 | 用途 |
 |------|------|
-| `pipeline/` | 生产管线 — 项目按阶段流转 |
-| `templates/` | 项目模板 — 新建项目时复制 |
-| `playbook/` | 写作手册 — 去AI味、代入感、爆点节奏 |
-| `tracks/` | 赛道配置 — 选题方向和标签体系 |
-| `archive/` | 归档 — 旧内容和已完结项目 |
+| `pipeline/` | 项目按阶段流转的生产管线 |
+| `templates/` | 项目模板 |
+| `playbook/` | 写作手册、去 AI 味、爆点节奏 |
+| `tracks/` | 赛道配置、选题方向、标签体系 |
+| `archive/` | 已归档内容 |
+| `DASHBOARD.md` | 当前项目状态、本周目标、最近动态 |
+| `SOP.md` | 生产 SOP 与阶段要求 |
 
----
+## 仓库建议阅读顺序
 
-## 每次打开这个目录，只看两个文件
+如果你是第一次接手这个仓库，建议按这个顺序看：
 
-1. **DASHBOARD.md** — 当前所有项目的状态、本周目标、最近动态
-2. **SOP.md** — 不确定下一步做什么时看这个
+1. [bookflow/README.md](./bookflow/README.md)
+2. [BOOKFLOW.md](./BOOKFLOW.md)
+3. [SOP.md](./SOP.md)
+4. [DASHBOARD.md](./DASHBOARD.md)
 
----
+## 当前推荐入口
 
-## 项目生命周期
-
-```
-选题 → 立项 → 写作 → 待发 → 已发 → 归档
-```
-
-对应 `pipeline/` 下的 6 个子目录。项目完成一个阶段就移到下一个目录。
-
----
-
-## 一个项目只有 6 个文件
-
-```
-项目-XXX/
-├── README.md    # 项目卡片（状态、评分、卖点）
-├── 大纲.md      # 故事线 + 章节细纲 + 爆点节奏
-├── 正文.md      # 正文
-├── 正文-手机复制版.txt # 手机端复制粘贴纯文本
-├── 发布稿.md    # 平台终稿（含章节断点）
-└── 配套.md      # 标题AB + 简介 + 标签
-```
-
----
-
-## 赛道（只做这 4 个）
-
-1. 古言重生打脸
-2. 古言替嫁冲喜
-3. 现言婚恋火葬场
-4. 悬疑规则怪谈
-
----
-
-## 核心原则
-
-- 一个阶段做一件事，做完再进下一个
-- 不囤题不囤稿，立项了就推到发布
-- 前 3000 字决定生死，所有精力优先砸试读区
-- 去 AI 味是硬门槛，不是可选项
+- 要跑系统：进 `bookflow/`
+- 要看生产资料：留在仓库根目录继续读 `SOP.md`、`DASHBOARD.md`、`pipeline/`
