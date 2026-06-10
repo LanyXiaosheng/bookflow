@@ -40,14 +40,15 @@ mod character_names;
 mod docs;
 mod settings;
 use ai::{
-    beats_for_chapter, generate_seeds, recommend_character_name, score_seed, stream_book_polish,
+    beats_for_chapter, generate_seeds, score_seed, stream_book_polish,
     stream_book_summary, stream_character_setup, stream_outline, stream_publish_post,
     stream_readme, stream_side_dishes, stream_write_paragraph, write_paragraph, AiClient,
     AiConfig, AiScoreRequest, AiScoreResponse, AiSeedGenerated, GeneratedImage, StreamEvent,
 };
 use character_names::{
-    apply_exact_replacement, build_preview_item, extract_candidate_names, fallback_recommended_name,
+    apply_exact_replacement, build_preview_item, extract_candidate_names, local_recommended_name,
     CharacterNameCandidate, CharacterReplacementPreview, CharacterReplacementPreviewItem,
+    LocalCharacterRenameRecommendation,
 };
 use docs::DocRoot;
 use settings::{Settings, SettingsPatch, SettingsRepo};
@@ -1383,37 +1384,9 @@ async fn character_name_recommend(
     headers: HeaderMap,
     Path(project_id): Path<Uuid>,
     Json(body): Json<CharacterNameRecommendBody>,
-) -> Result<Json<ai::CharacterRenameRecommendation>, AppError> {
+) -> Result<Json<LocalCharacterRenameRecommendation>, AppError> {
     let (_, project) = require_project(&s, &headers, project_id).await?;
-    let artifacts = s
-        .artifacts
-        .latest_all(project_id)
-        .await
-        .map_err(AppError::Storage)?;
-    let character_setup = artifacts
-        .iter()
-        .find(|a| a.kind == ArtifactKind::CharacterSetup)
-        .map(|a| a.content.clone())
-        .unwrap_or_default();
-    if character_setup.trim().is_empty() {
-        return Err(AppError::Storage(bookflow_storage::StorageError::Conflict(
-            "先生成角色设定，再替换角色名".into(),
-        )));
-    }
-
-    let recommended = match recommend_character_name(&s.ai, &project.track, &body.old_name, &character_setup).await {
-        Ok(rec) if rec.recommended_name.trim() != body.old_name.trim() => rec,
-        Ok(rec) => ai::CharacterRenameRecommendation {
-            old_name: body.old_name.clone(),
-            recommended_name: fallback_recommended_name(&project.track, &body.old_name),
-            reason: format!("AI 原推荐与旧名重复，已按赛道兜底为更自然的新名。原理由：{}", rec.reason),
-        },
-        Err(_) => ai::CharacterRenameRecommendation {
-            old_name: body.old_name.clone(),
-            recommended_name: fallback_recommended_name(&project.track, &body.old_name),
-            reason: "AI 推荐失败，已按赛道使用本地兜底新名。".into(),
-        },
-    };
+    let recommended = local_recommended_name(&project.track, &body.old_name);
 
     Ok(Json(recommended))
 }

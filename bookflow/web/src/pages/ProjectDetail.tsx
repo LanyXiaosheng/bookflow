@@ -951,6 +951,14 @@ function CharacterSetupCard({
     },
   })
   const recommendation = recommendationQuery.data
+  const requestRecommendation = (oldName: string) => {
+    previewMutation.reset()
+    if (activeRecommendationName === oldName) {
+      void recommendationQuery.refetch()
+      return
+    }
+    setActiveRecommendationName(oldName)
+  }
 
   useEffect(() => {
     if (!detectedCandidates.length) return
@@ -994,7 +1002,7 @@ function CharacterSetupCard({
                 <div>
                   <div className="font-medium text-gray-900">替换角色名称</div>
                   <div className="mt-1 text-[11px] text-gray-500">
-                    从角色设定里识别旧名字，给出按赛道生成的新名字推荐，再预览后统一替换到角色设定、README、大纲、正文、发布稿。
+                    从角色设定里识别旧名字，按赛道主分类和情节分类生成本地推荐新名，再预览后统一替换到角色设定、README、大纲、正文、发布稿。
                   </div>
                 </div>
                 <button
@@ -1084,31 +1092,39 @@ function CharacterSetupCard({
                               className="h-10 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800"
                               data-testid={`character-name-new-${idx}`}
                             />
+                            <span className="invisible text-[11px] text-gray-400">
+                              命中范围占位
+                            </span>
                           </label>
-                          <div className="flex items-end">
+                          <div className="grid gap-1 text-gray-600">
+                            <span className="invisible">操作</span>
                             <button
                               type="button"
                               onClick={() => {
-                                setActiveRecommendationName(item.old_name)
+                                requestRecommendation(item.old_name)
                               }}
                               className="h-10 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 hover:bg-gray-100"
                               data-testid={`character-name-pick-${idx}`}
                             >
-                              生成推荐
+                              本地推荐
                             </button>
+                            <span className="invisible text-[11px] text-gray-400">
+                              命中范围占位
+                            </span>
                           </div>
                         </div>
                       ))}
                     </div>
                   )}
-                  {activeRecommendationName && recommendationQuery.isLoading && (
+                  {activeRecommendationName &&
+                    (recommendationQuery.isLoading || recommendationQuery.isFetching) && (
                     <div className="rounded-md border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500">
-                      正在为“{activeRecommendationName}”生成推荐新名…
+                      正在为“{activeRecommendationName}”生成本地推荐新名…
                     </div>
                   )}
                   {activeRecommendationName && recommendationQuery.isError && (
                     <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-                      AI 推荐加载失败：{(recommendationQuery.error as Error).message}。你仍然可以手动填写新名字并继续预览替换。
+                      推荐加载失败：{(recommendationQuery.error as Error).message}。你仍然可以手动填写新名字并继续预览替换。
                     </div>
                   )}
                   {recommendation && (
@@ -1116,7 +1132,7 @@ function CharacterSetupCard({
                       className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700"
                       data-testid="character-name-recommendation"
                     >
-                      AI 推荐：{recommendation.recommended_name} · {recommendation.reason}
+                      本地推荐：{recommendation.recommended_name} · {recommendation.reason}
                       <button
                         type="button"
                         onClick={() => {
