@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bookflow-postgres
+    environment:
+      POSTGRES_USER: bookflow
+      POSTGRES_PASSWORD: bookflow
+      POSTGRES_DB: bookflow_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - bookflow_pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bookflow -d bookflow_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  bookflow_pgdata:
