@@ -296,6 +296,110 @@ pub struct PendingProjectReview {
     pub last_review_result: Option<ReviewResult>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationCategory {
+    Production,
+    Ai,
+    System,
+}
+
+impl NotificationCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NotificationCategory::Production => "production",
+            NotificationCategory::Ai => "ai",
+            NotificationCategory::System => "system",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "production" => Some(Self::Production),
+            "ai" => Some(Self::Ai),
+            "system" => Some(Self::System),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationLevel {
+    Info,
+    Warning,
+    Error,
+}
+
+impl NotificationLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NotificationLevel::Info => "info",
+            NotificationLevel::Warning => "warning",
+            NotificationLevel::Error => "error",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "info" => Some(Self::Info),
+            "warning" => Some(Self::Warning),
+            "error" => Some(Self::Error),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationStatus {
+    Unread,
+    Read,
+    Resolved,
+    Archived,
+}
+
+impl NotificationStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NotificationStatus::Unread => "unread",
+            NotificationStatus::Read => "read",
+            NotificationStatus::Resolved => "resolved",
+            NotificationStatus::Archived => "archived",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "unread" => Some(Self::Unread),
+            "read" => Some(Self::Read),
+            "resolved" => Some(Self::Resolved),
+            "archived" => Some(Self::Archived),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Notification {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub category: NotificationCategory,
+    pub level: NotificationLevel,
+    pub status: NotificationStatus,
+    pub title: String,
+    pub body: String,
+    pub action_label: Option<String>,
+    pub action_href: Option<String>,
+    pub source_type: Option<String>,
+    pub source_id: Option<String>,
+    pub fingerprint: Option<String>,
+    pub read_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// 章节段落 beat：AI 拆出来的小节点，由前端可重排
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Beat {

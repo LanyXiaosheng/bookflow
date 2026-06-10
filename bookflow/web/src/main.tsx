@@ -21,6 +21,12 @@ import Auth from './pages/Auth'
 import { ConfirmProvider } from './components/ConfirmDialog'
 import RequireAuth from './components/RequireAuth'
 
+if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+  const next = new URL(window.location.href)
+  next.hostname = '127.0.0.1'
+  window.location.replace(next.toString())
+}
+
 const qc = new QueryClient({
   defaultOptions: { queries: { staleTime: 5_000, refetchOnWindowFocus: false } },
 })

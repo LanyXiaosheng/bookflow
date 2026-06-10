@@ -1,8 +1,27 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Loader2, Lock, Mail, User as UserIcon } from 'lucide-react'
 import { authApi } from '../api/auth'
+
+const REMEMBER_KEY = 'bookflow.auth.remember.v1'
+
+function readRememberedAuth(): { email: string; rememberMe: boolean } {
+  if (typeof window === 'undefined') {
+    return { email: '', rememberMe: true }
+  }
+  try {
+    const raw = window.localStorage.getItem(REMEMBER_KEY)
+    if (!raw) return { email: '', rememberMe: true }
+    const parsed = JSON.parse(raw) as Partial<{ email: string; rememberMe: boolean }>
+    return {
+      email: typeof parsed.email === 'string' ? parsed.email : '',
+      rememberMe: parsed.rememberMe !== false,
+    }
+  } catch {
+    return { email: '', rememberMe: true }
+  }
+}
 
 export default function Auth() {
   const [params, setParams] = useSearchParams()
@@ -10,10 +29,22 @@ export default function Auth() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const redirect = safeRedirect(params.get('redirect'))
-  const [email, setEmail] = useState('')
+  const [email, setEmail] = useState(() => readRememberedAuth().email)
   const [displayName, setDisplayName] = useState('')
   const [password, setPassword] = useState('')
-  const [rememberMe, setRememberMe] = useState(true)
+  const [rememberMe, setRememberMe] = useState(() => readRememberedAuth().rememberMe)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (rememberMe) {
+      window.localStorage.setItem(
+        REMEMBER_KEY,
+        JSON.stringify({ email: email.trim(), rememberMe: true }),
+      )
+      return
+    }
+    window.localStorage.removeItem(REMEMBER_KEY)
+  }, [email, rememberMe])
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -23,6 +54,17 @@ export default function Auth() {
       return authApi.login({ email, password, remember_me: rememberMe })
     },
     onSuccess: async () => {
+      if (typeof window !== 'undefined') {
+        if (rememberMe) {
+          window.localStorage.setItem(
+            REMEMBER_KEY,
+            JSON.stringify({ email: email.trim(), rememberMe: true }),
+          )
+        } else {
+          window.localStorage.removeItem(REMEMBER_KEY)
+        }
+      }
+      setPassword('')
       await qc.invalidateQueries({ queryKey: ['auth', 'me'] })
       navigate(redirect, { replace: true })
     },

@@ -8,7 +8,7 @@ export default defineConfig({
   fullyParallel: true,
   reporter: 'list',
   use: {
-    baseURL: `http://localhost:${PORT}`,
+    baseURL: `http://127.0.0.1:${PORT}`,
     headless: true,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

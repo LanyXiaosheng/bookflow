@@ -16,12 +16,14 @@ use axum::{
     Json, Router,
 };
 use bookflow_domain::{
-    Beat, Chapter, DomainError, NewSeed, PendingProjectReview, Project, ProjectReview,
-    ProjectStatus, ReviewResult, ReviewStage, Seed, User,
+    Beat, Chapter, DomainError, NewSeed, Notification, NotificationCategory, NotificationLevel,
+    PendingProjectReview, Project, ProjectReview, ProjectStatus, ReviewResult, ReviewStage, Seed,
+    User,
 };
 use bookflow_storage::{
-    pool, ArtifactKind, ArtifactRepo, ChapterRepo, NewSeedDraft, ProjectArtifact, ProjectRepo,
-    ProjectReviewRepo, SeedDraft, SeedDraftRepo, SeedRepo, UserRepo,
+    pool, ArtifactKind, ArtifactRepo, ChapterRepo, NewSeedDraft, NotificationRepo, ProjectArtifact,
+    ProjectRepo, ProjectReviewRepo, SeedDraft, SeedDraftRepo, SeedRepo, UpsertNotification,
+    UserRepo,
 };
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
@@ -34,13 +36,18 @@ use tracing::info;
 use uuid::Uuid;
 
 mod ai;
+mod character_names;
 mod docs;
 mod settings;
 use ai::{
-    beats_for_chapter, generate_seeds, score_seed, stream_book_polish, stream_book_summary,
-    stream_character_setup, stream_outline, stream_publish_post, stream_readme, stream_side_dishes,
-    stream_write_paragraph, write_paragraph, AiClient, AiConfig, AiScoreRequest, AiScoreResponse,
-    AiSeedGenerated, GeneratedImage, StreamEvent,
+    beats_for_chapter, generate_seeds, recommend_character_name, score_seed, stream_book_polish,
+    stream_book_summary, stream_character_setup, stream_outline, stream_publish_post,
+    stream_readme, stream_side_dishes, stream_write_paragraph, write_paragraph, AiClient,
+    AiConfig, AiScoreRequest, AiScoreResponse, AiSeedGenerated, GeneratedImage, StreamEvent,
+};
+use character_names::{
+    apply_exact_replacement, build_preview_item, extract_candidate_names, fallback_recommended_name,
+    CharacterNameCandidate, CharacterReplacementPreview, CharacterReplacementPreviewItem,
 };
 use docs::DocRoot;
 use settings::{Settings, SettingsPatch, SettingsRepo};
@@ -54,6 +61,7 @@ struct AppState {
     reviews: ProjectReviewRepo,
     chapters: ChapterRepo,
     artifacts: ArtifactRepo,
+    notifications: NotificationRepo,
     ai: AiClient,
     settings: SettingsRepo,
     tracks: DocRoot,
@@ -71,6 +79,7 @@ impl Clone for AppState {
             reviews: ProjectReviewRepo::new(self.pool.clone()),
             chapters: self.chapters.clone(),
             artifacts: self.artifacts.clone(),
+            notifications: self.notifications.clone(),
             ai: self.ai.clone(),
             settings: self.settings.clone(),
             tracks: self.tracks.clone(),
@@ -128,6 +137,7 @@ async fn main() -> anyhow::Result<()> {
         reviews: ProjectReviewRepo::new(pool.clone()),
         chapters: ChapterRepo::new(pool.clone()),
         artifacts: ArtifactRepo::new(pool.clone()),
+        notifications: NotificationRepo::new(pool.clone()),
         pool,
         ai,
         settings: settings_repo,
@@ -164,6 +174,22 @@ async fn main() -> anyhow::Result<()> {
             post(ai_character_setup_stream),
         )
         .route(
+            "/api/projects/:id/character-name-recommendations",
+            get(character_name_recommendations),
+        )
+        .route(
+            "/api/projects/:id/character-name-recommend",
+            post(character_name_recommend),
+        )
+        .route(
+            "/api/projects/:id/character-name-preview",
+            post(character_name_preview),
+        )
+        .route(
+            "/api/projects/:id/character-name-apply",
+            post(character_name_apply),
+        )
+        .route(
             "/api/projects/:id/ai-outline/stream",
             post(ai_outline_stream),
         )
@@ -197,6 +223,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/dashboard/summary", get(dashboard_summary))
         .route("/api/settings", get(get_settings).put(put_settings))
+        .route("/api/notifications", get(list_notifications))
+        .route("/api/notifications/:id/read", post(mark_notification_read))
+        .route("/api/notifications/read-all", post(mark_notifications_read_all))
+        .route("/api/notifications/clear-resolved", post(clear_resolved_notifications))
         .route("/api/tracks", get(list_tracks))
         .route("/api/tracks/:slug", get(get_track))
         .route("/api/playbook", get(list_playbook))
@@ -1289,6 +1319,227 @@ struct AuthView {
     user: User,
 }
 
+#[derive(Debug, Serialize)]
+struct NotificationListView {
+    unread_count: i64,
+    items: Vec<Notification>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NotificationListQuery {
+    unread_only: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct CharacterNameRecommendationView {
+    candidates: Vec<CharacterNameCandidate>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CharacterNameRecommendBody {
+    old_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CharacterNamePreviewBody {
+    old_name: String,
+    new_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CharacterNameApplyBody {
+    old_name: String,
+    new_name: String,
+}
+
+async fn character_name_recommendations(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<CharacterNameRecommendationView>, AppError> {
+    let (_, project) = require_project(&s, &headers, project_id).await?;
+    let artifacts = s
+        .artifacts
+        .latest_all(project_id)
+        .await
+        .map_err(AppError::Storage)?;
+    let character_setup = artifacts
+        .iter()
+        .find(|a| a.kind == ArtifactKind::CharacterSetup)
+        .map(|a| a.content.clone())
+        .unwrap_or_default();
+    if character_setup.trim().is_empty() {
+        return Err(AppError::Storage(bookflow_storage::StorageError::Conflict(
+            "先生成角色设定，再替换角色名".into(),
+        )));
+    }
+
+    let candidates = extract_candidate_names(&character_setup);
+    Ok(Json(CharacterNameRecommendationView { candidates }))
+}
+
+async fn character_name_recommend(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<Uuid>,
+    Json(body): Json<CharacterNameRecommendBody>,
+) -> Result<Json<ai::CharacterRenameRecommendation>, AppError> {
+    let (_, project) = require_project(&s, &headers, project_id).await?;
+    let artifacts = s
+        .artifacts
+        .latest_all(project_id)
+        .await
+        .map_err(AppError::Storage)?;
+    let character_setup = artifacts
+        .iter()
+        .find(|a| a.kind == ArtifactKind::CharacterSetup)
+        .map(|a| a.content.clone())
+        .unwrap_or_default();
+    if character_setup.trim().is_empty() {
+        return Err(AppError::Storage(bookflow_storage::StorageError::Conflict(
+            "先生成角色设定，再替换角色名".into(),
+        )));
+    }
+
+    let recommended = match recommend_character_name(&s.ai, &project.track, &body.old_name, &character_setup).await {
+        Ok(rec) if rec.recommended_name.trim() != body.old_name.trim() => rec,
+        Ok(rec) => ai::CharacterRenameRecommendation {
+            old_name: body.old_name.clone(),
+            recommended_name: fallback_recommended_name(&project.track, &body.old_name),
+            reason: format!("AI 原推荐与旧名重复，已按赛道兜底为更自然的新名。原理由：{}", rec.reason),
+        },
+        Err(_) => ai::CharacterRenameRecommendation {
+            old_name: body.old_name.clone(),
+            recommended_name: fallback_recommended_name(&project.track, &body.old_name),
+            reason: "AI 推荐失败，已按赛道使用本地兜底新名。".into(),
+        },
+    };
+
+    Ok(Json(recommended))
+}
+
+async fn character_name_preview(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<Uuid>,
+    Json(body): Json<CharacterNamePreviewBody>,
+) -> Result<Json<CharacterReplacementPreview>, AppError> {
+    require_project(&s, &headers, project_id).await?;
+    let artifacts = s
+        .artifacts
+        .latest_all(project_id)
+        .await
+        .map_err(AppError::Storage)?;
+    let chapters = s
+        .chapters
+        .list_by_project(project_id)
+        .await
+        .map_err(AppError::Storage)?;
+
+    let mut items = Vec::<CharacterReplacementPreviewItem>::new();
+    for artifact in &artifacts {
+        if !matches!(
+            artifact.kind,
+            ArtifactKind::Readme
+                | ArtifactKind::CharacterSetup
+                | ArtifactKind::Outline
+                | ArtifactKind::PublishPost
+        ) {
+            continue;
+        }
+        if let Some(item) = build_preview_item(
+            "artifact",
+            artifact.kind.as_str(),
+            &artifact.content,
+            &body.old_name,
+            &body.new_name,
+        ) {
+            items.push(item);
+        }
+    }
+
+    for chapter in &chapters {
+        if let Some(item) = build_preview_item(
+            "chapter",
+            &format!("chapter:{}", chapter.idx),
+            &chapter.body,
+            &body.old_name,
+            &body.new_name,
+        ) {
+            items.push(item);
+        }
+    }
+
+    Ok(Json(CharacterReplacementPreview {
+        old_name: body.old_name,
+        new_name: body.new_name,
+        items,
+    }))
+}
+
+async fn character_name_apply(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<Uuid>,
+    Json(body): Json<CharacterNameApplyBody>,
+) -> Result<Json<CharacterReplacementPreview>, AppError> {
+    require_project(&s, &headers, project_id).await?;
+    let preview = character_name_preview(
+        State(s.clone()),
+        headers.clone(),
+        Path(project_id),
+        Json(CharacterNamePreviewBody {
+            old_name: body.old_name.clone(),
+            new_name: body.new_name.clone(),
+        }),
+    )
+    .await?
+    .0;
+
+    let artifacts = s
+        .artifacts
+        .latest_all(project_id)
+        .await
+        .map_err(AppError::Storage)?;
+    for artifact in artifacts {
+        if !matches!(
+            artifact.kind,
+            ArtifactKind::Readme
+                | ArtifactKind::CharacterSetup
+                | ArtifactKind::Outline
+                | ArtifactKind::PublishPost
+        ) {
+            continue;
+        }
+        if let Some(next) =
+            apply_exact_replacement(&artifact.content, &body.old_name, &body.new_name)
+        {
+            s.artifacts
+                .save(project_id, artifact.kind, &next)
+                .await
+                .map_err(AppError::Storage)?;
+        }
+    }
+
+    let chapters = s
+        .chapters
+        .list_by_project(project_id)
+        .await
+        .map_err(AppError::Storage)?;
+    for chapter in chapters {
+        if let Some(next) =
+            apply_exact_replacement(&chapter.body, &body.old_name, &body.new_name)
+        {
+            s.chapters
+                .update_body(chapter.id, &chapter.title, &next)
+                .await
+                .map_err(AppError::Storage)?;
+        }
+    }
+
+    Ok(Json(preview))
+}
+
 fn parse_session_token(headers: &HeaderMap) -> Option<String> {
     let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
     cookie.split(';').find_map(|part| {
@@ -1517,6 +1768,162 @@ async fn update_profile(
     Ok(Json(AuthView { user }))
 }
 
+async fn sync_notifications_for_user(s: &AppState, user: &User) -> Result<(), AppError> {
+    let ready_projects = s
+        .projects
+        .list(user.id, Some(ProjectStatus::Ready))
+        .await
+        .map_err(AppError::Storage)?;
+    if ready_projects.is_empty() {
+        s.notifications
+            .resolve_by_fingerprint(user.id, "ready-backlog")
+            .await
+            .map_err(AppError::Storage)?;
+    } else {
+        s.notifications
+            .upsert_active(
+                user.id,
+                &UpsertNotification {
+                    category: NotificationCategory::Production,
+                    level: NotificationLevel::Warning,
+                    title: format!("待发项目 {} 篇待处理", ready_projects.len()),
+                    body: format!(
+                        "当前有 {} 个项目停留在待发阶段，建议尽快处理发布或回查。",
+                        ready_projects.len()
+                    ),
+                    action_label: Some("去待发".into()),
+                    action_href: Some("/ready".into()),
+                    source_type: Some("project_status".into()),
+                    source_id: None,
+                    fingerprint: Some("ready-backlog".into()),
+                },
+            )
+            .await
+            .map_err(AppError::Storage)?;
+    }
+
+    let pending_reviews = s
+        .reviews
+        .pending_list(user.id)
+        .await
+        .map_err(AppError::Storage)?;
+    if pending_reviews.is_empty() {
+        s.notifications
+            .resolve_by_fingerprint(user.id, "pending-reviews")
+            .await
+            .map_err(AppError::Storage)?;
+    } else {
+        s.notifications
+            .upsert_active(
+                user.id,
+                &UpsertNotification {
+                    category: NotificationCategory::Production,
+                    level: NotificationLevel::Warning,
+                    title: format!("待复盘项目 {} 篇", pending_reviews.len()),
+                    body: format!(
+                        "当前有 {} 个项目等待补录复盘数据，优先处理 72h / 7d 节点。",
+                        pending_reviews.len()
+                    ),
+                    action_label: Some("去复盘".into()),
+                    action_href: Some("/review".into()),
+                    source_type: Some("review_pending".into()),
+                    source_id: None,
+                    fingerprint: Some("pending-reviews".into()),
+                },
+            )
+            .await
+            .map_err(AppError::Storage)?;
+    }
+
+    let settings = s.settings.read().await.map_err(AppError::Ai)?;
+    let settings_ok = settings
+        .map(|cfg| !cfg.base_url.trim().is_empty() && !cfg.api_key.trim().is_empty())
+        .unwrap_or(false);
+    if settings_ok {
+        s.notifications
+            .resolve_by_fingerprint(user.id, "settings-ai-missing")
+            .await
+            .map_err(AppError::Storage)?;
+    } else {
+        s.notifications
+            .upsert_active(
+                user.id,
+                &UpsertNotification {
+                    category: NotificationCategory::System,
+                    level: NotificationLevel::Error,
+                    title: "AI 设置未配置完整".into(),
+                    body: "当前 AI API 的 base_url 或 api_key 缺失，部分生成能力不可用。".into(),
+                    action_label: Some("去设置".into()),
+                    action_href: Some("/settings".into()),
+                    source_type: Some("settings".into()),
+                    source_id: None,
+                    fingerprint: Some("settings-ai-missing".into()),
+                },
+            )
+            .await
+            .map_err(AppError::Storage)?;
+    }
+
+    Ok(())
+}
+
+async fn list_notifications(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<NotificationListQuery>,
+) -> Result<Json<NotificationListView>, AppError> {
+    let user = require_user(&s, &headers).await?;
+    sync_notifications_for_user(&s, &user).await?;
+    let items = s
+        .notifications
+        .list(user.id, query.unread_only.unwrap_or(false))
+        .await
+        .map_err(AppError::Storage)?;
+    let unread_count = s
+        .notifications
+        .unread_count(user.id)
+        .await
+        .map_err(AppError::Storage)?;
+    Ok(Json(NotificationListView { unread_count, items }))
+}
+
+async fn mark_notification_read(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, AppError> {
+    let user = require_user(&s, &headers).await?;
+    s.notifications
+        .mark_read(user.id, id)
+        .await
+        .map_err(AppError::Storage)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn mark_notifications_read_all(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, AppError> {
+    let user = require_user(&s, &headers).await?;
+    s.notifications
+        .mark_all_read(user.id)
+        .await
+        .map_err(AppError::Storage)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn clear_resolved_notifications(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> Result<StatusCode, AppError> {
+    let user = require_user(&s, &headers).await?;
+    s.notifications
+        .archive_resolved(user.id)
+        .await
+        .map_err(AppError::Storage)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // === 项目产物：流式生成 + 列表 ===
 
 async fn list_project_artifacts(
@@ -1602,6 +2009,34 @@ where
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
+async fn create_ai_event_notification(
+    notifications: NotificationRepo,
+    user_id: Uuid,
+    title: String,
+    body: String,
+    action_href: String,
+    level: NotificationLevel,
+    source_type: &str,
+    source_id: String,
+) {
+    let _ = notifications
+        .upsert_active(
+            user_id,
+            &UpsertNotification {
+                category: NotificationCategory::Ai,
+                level,
+                title,
+                body,
+                action_label: Some("查看结果".into()),
+                action_href: Some(action_href),
+                source_type: Some(source_type.into()),
+                source_id: Some(source_id),
+                fingerprint: None,
+            },
+        )
+        .await;
+}
+
 async fn ai_readme_stream(
     State(s): State<AppState>,
     headers: HeaderMap,
@@ -1617,12 +2052,26 @@ async fn ai_readme_stream(
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let rx = stream_readme(&s.ai, &seed.title, &seed.track, total, &today).await;
     let artifacts = s.artifacts.clone();
+    let notifications = s.notifications.clone();
+    let action_href = format!("/projects/{project_id}");
+    let source_id = project_id.to_string();
     Ok(sse_from_stream(rx, move |full| async move {
         artifacts
             .save(project_id, ArtifactKind::Readme, &full)
             .await
-            .map(|_| ())
-            .map_err(|e| format!("{e:#}"))
+            .map_err(|e| format!("{e:#}"))?;
+        create_ai_event_notification(
+            notifications,
+            user.id,
+            "AI 已生成 README".into(),
+            format!("《{}》的项目 README 已生成完成。", project.title),
+            action_href,
+            NotificationLevel::Info,
+            "artifact",
+            source_id,
+        )
+        .await;
+        Ok(())
     }))
 }
 
@@ -1631,7 +2080,7 @@ async fn ai_character_setup_stream(
     headers: HeaderMap,
     Path(project_id): Path<Uuid>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
-    require_project(&s, &headers, project_id).await?;
+    let (user, project) = require_project(&s, &headers, project_id).await?;
     let arts = s
         .artifacts
         .latest_all(project_id)
@@ -1649,12 +2098,26 @@ async fn ai_character_setup_stream(
     }
     let rx = stream_character_setup(&s.ai, &readme).await;
     let artifacts = s.artifacts.clone();
+    let notifications = s.notifications.clone();
+    let action_href = format!("/projects/{project_id}");
+    let source_id = project_id.to_string();
     Ok(sse_from_stream(rx, move |full| async move {
         artifacts
             .save(project_id, ArtifactKind::CharacterSetup, &full)
             .await
-            .map(|_| ())
-            .map_err(|e| format!("{e:#}"))
+            .map_err(|e| format!("{e:#}"))?;
+        create_ai_event_notification(
+            notifications,
+            user.id,
+            "AI 已生成角色设定".into(),
+            format!("《{}》的角色设定已生成完成。", project.title),
+            action_href,
+            NotificationLevel::Info,
+            "artifact",
+            source_id,
+        )
+        .await;
+        Ok(())
     }))
 }
 
@@ -1663,7 +2126,7 @@ async fn ai_outline_stream(
     headers: HeaderMap,
     Path(project_id): Path<Uuid>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
-    require_project(&s, &headers, project_id).await?;
+    let (user, project) = require_project(&s, &headers, project_id).await?;
     let arts = s
         .artifacts
         .latest_all(project_id)
@@ -1686,12 +2149,26 @@ async fn ai_outline_stream(
     }
     let rx = stream_outline(&s.ai, &readme, &character_setup).await;
     let artifacts = s.artifacts.clone();
+    let notifications = s.notifications.clone();
+    let action_href = format!("/projects/{project_id}");
+    let source_id = project_id.to_string();
     Ok(sse_from_stream(rx, move |full| async move {
         artifacts
             .save(project_id, ArtifactKind::Outline, &full)
             .await
-            .map(|_| ())
-            .map_err(|e| format!("{e:#}"))
+            .map_err(|e| format!("{e:#}"))?;
+        create_ai_event_notification(
+            notifications,
+            user.id,
+            "AI 已生成大纲".into(),
+            format!("《{}》的大纲已生成完成。", project.title),
+            action_href,
+            NotificationLevel::Info,
+            "artifact",
+            source_id,
+        )
+        .await;
+        Ok(())
     }))
 }
 

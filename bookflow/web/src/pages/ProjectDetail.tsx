@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -19,7 +19,13 @@ import { projectsApi, type ArtifactKind, type ProjectArtifact } from '../api/pro
 import { chaptersApi, type Chapter } from '../api/chapters'
 import { imagesApi, type StoryImagePayload } from '../api/images'
 import { extractErrorMessage } from '../api/errors'
+import {
+  characterReplacementApi,
+  type CharacterReplacementMapping,
+  type CharacterReplacementPreview,
+} from '../api/characterReplacement'
 import TrackPills from '../components/TrackPills'
+import { useConfirm } from '../components/ConfirmDialog'
 import {
   clearAiJob,
   setAiJob,
@@ -29,6 +35,8 @@ import {
 import { useSSE } from '../hooks/useSSE'
 import { useFullBook } from '../hooks/useFullBook'
 import { usePipeline } from '../hooks/usePipeline'
+import { renderedMarkdownToPlainText } from '../lib/copyRenderedMarkdown'
+import { extractCharacterNamesFromReadme } from '../lib/extractCharacterNames'
 
 type PreflightDrafts = Record<'readme' | 'character_setup', string>
 
@@ -271,7 +279,11 @@ export default function ProjectDetail() {
           />
           <CharacterSetupCard
             projectId={projectId}
+            readme={readme}
             characterSetup={characterSetup}
+            outline={outline}
+            publishPost={publishPost}
+            chapters={chapters.data}
             hasReadme={!!readme}
             characterSetupConfirmed={characterSetupConfirmed}
             characterSetupNeedsRegeneration={readmeIsNewerThanCharacterSetup}
@@ -343,6 +355,7 @@ export default function ProjectDetail() {
             disabledHint="先生成 README 和大纲，再生成发布稿。"
             emptyHint="生成面向平台发布的标题、简介、卖点和正文引流文案。"
             onDone={refreshArtifacts}
+            copyable
             globalJob={aiJob}
           />
           <ArtifactStreamCard
@@ -355,6 +368,7 @@ export default function ProjectDetail() {
             disabledHint="先生成 README 和大纲，再生成配套素材。"
             emptyHint="生成配套.md：标题变体、短视频钩子、评论区话术、封面关键词等。"
             onDone={refreshArtifacts}
+            copyable
             globalJob={aiJob}
           />
           <StoryImageCard
@@ -575,6 +589,21 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
+function copyDisplayText(kind: ArtifactKind, display: string): string {
+  switch (kind) {
+    case 'readme':
+    case 'character_setup':
+    case 'outline':
+    case 'publish_post':
+    case 'side_dishes':
+    case 'book_summary':
+    case 'book_polished':
+      return renderedMarkdownToPlainText(display)
+    case 'story_image':
+      return display
+  }
+}
+
 async function downloadCompositedCover(
   dataUrl: string,
   filename: string,
@@ -765,7 +794,7 @@ function ArtifactStreamCard({
           <button
             type="button"
             onClick={async () => {
-              const ok = await copyText(display)
+              const ok = await copyText(copyDisplayText(kind, display))
               setCopyState(ok ? 'done' : 'error')
               window.setTimeout(() => setCopyState('idle'), 1500)
             }}
@@ -859,7 +888,11 @@ function ReadmeCard({
 
 interface CharacterSetupCardProps {
   projectId: string
+  readme?: ProjectArtifact
   characterSetup?: ProjectArtifact
+  outline?: ProjectArtifact
+  publishPost?: ProjectArtifact
+  chapters?: Chapter[]
   hasReadme: boolean
   characterSetupConfirmed: boolean
   characterSetupNeedsRegeneration: boolean
@@ -872,7 +905,11 @@ interface CharacterSetupCardProps {
 
 function CharacterSetupCard({
   projectId,
+  readme,
   characterSetup,
+  outline,
+  publishPost,
+  chapters,
   hasReadme,
   characterSetupConfirmed,
   characterSetupNeedsRegeneration,
@@ -882,6 +919,60 @@ function CharacterSetupCard({
   externalText,
   externalStreaming,
 }: CharacterSetupCardProps) {
+  const qc = useQueryClient()
+  const confirm = useConfirm()
+  const [replaceOpen, setReplaceOpen] = useState(true)
+  const [detected, setDetected] = useState(false)
+  const [detectedCandidates, setDetectedCandidates] = useState<string[]>([])
+  const [mappings, setMappings] = useState<CharacterReplacementMapping[]>([])
+  const [activeRecommendationName, setActiveRecommendationName] = useState('')
+  const recommendationQuery = useQuery({
+    queryKey: ['character-name-recommend', projectId, activeRecommendationName, characterSetup?.version],
+    queryFn: () => characterReplacementApi.recommend(projectId, activeRecommendationName),
+    enabled: replaceOpen && detected && !!readme && !!activeRecommendationName,
+  })
+  const previewMutation = useMutation({
+    mutationFn: async () => {
+      const firstReady = mappings.find((item) => item.new_name.trim())
+      if (!firstReady) throw new Error('请先填写至少一个新名字')
+      return characterReplacementApi.preview(projectId, firstReady.old_name, firstReady.new_name)
+    },
+  })
+  const applyMutation = useMutation({
+    mutationFn: async () => {
+      const firstReady = mappings.find((item) => item.new_name.trim())
+      if (!firstReady) throw new Error('请先填写至少一个新名字')
+      return characterReplacementApi.apply(projectId, firstReady.old_name, firstReady.new_name)
+    },
+    onSuccess: async () => {
+      await onDone()
+      await qc.invalidateQueries({ queryKey: ['chapters', projectId] })
+      setReplaceOpen(false)
+    },
+  })
+  const recommendation = recommendationQuery.data
+
+  useEffect(() => {
+    if (!detectedCandidates.length) return
+    setMappings((prev) => {
+      const map = new Map(prev.map((item) => [item.old_name, item]))
+      return detectedCandidates.map((oldName) => map.get(oldName) ?? { old_name: oldName, new_name: '' })
+    })
+  }, [detectedCandidates])
+
+  useEffect(() => {
+    if (!recommendation) return
+    setMappings((prev) =>
+      prev.map((row) =>
+        row.old_name === recommendation.old_name
+          ? { ...row, new_name: row.new_name || recommendation.recommended_name }
+          : row,
+      ),
+    )
+  }, [recommendation])
+
+  const preview = previewMutation.data
+
   return (
     <ArtifactStreamCard
       projectId={projectId}
@@ -897,7 +988,201 @@ function CharacterSetupCard({
       externalText={externalText}
       externalStreaming={externalStreaming}
       footer={
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+        <div className="mt-3 flex flex-col gap-3 text-xs">
+          <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-3" data-testid="character-name-replace-panel">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="font-medium text-gray-900">替换角色名称</div>
+                  <div className="mt-1 text-[11px] text-gray-500">
+                    从角色设定里识别旧名字，给出按赛道生成的新名字推荐，再预览后统一替换到角色设定、README、大纲、正文、发布稿。
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReplaceOpen((open) => !open)
+                    setActiveRecommendationName('')
+                    previewMutation.reset()
+                  }}
+                  className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+                  data-testid="character-name-replace-toggle"
+                >
+                  {replaceOpen ? '收起' : '打开'}
+                </button>
+              </div>
+              {replaceOpen && (
+                <div className="mt-3 space-y-3">
+                  {!characterSetup && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                      先生成角色设定，再识别旧角色名。当前还没有可供识别的角色设定正文。
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!readme) return
+                        const candidates = extractCharacterNamesFromReadme(readme.content)
+                        setDetected(true)
+                        setDetectedCandidates(candidates)
+                        setActiveRecommendationName('')
+                        setMappings(candidates.map((name) => ({ old_name: name, new_name: '' })))
+                        previewMutation.reset()
+                      }}
+                      disabled={!readme}
+                      className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                      data-testid="character-name-detect-btn"
+                    >
+                      {!readme ? '等待 README 生成' : '识别旧角色名'}
+                    </button>
+                  </div>
+                  {detected &&
+                    detectedCandidates.length === 0 && (
+                      <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                        还没从项目 README 里识别到可替换的旧名字。请先确认 README 里已经出现明确角色名，再继续。
+                      </div>
+                    )}
+                  {detected && mappings.length > 0 && (
+                    <div className="space-y-2" data-testid="character-name-mapping-list">
+                      {mappings.map((item, idx) => (
+                        <div
+                          key={item.old_name}
+                          className="grid gap-2 rounded-md border border-gray-200 bg-white p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+                        >
+                          <label className="grid gap-1 text-gray-600">
+                            <span>旧名字</span>
+                            <input
+                              value={item.old_name}
+                              readOnly
+                              className="h-10 rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-800"
+                              data-testid={`character-name-old-${idx}`}
+                            />
+                            <span className="text-[11px] text-gray-400">
+                              命中范围：{
+                                summarizeImpacts(item.old_name, {
+                                  readme,
+                                  characterSetup,
+                                  outline,
+                                  publishPost,
+                                  chapters,
+                                }).join(' / ') || '暂未命中'
+                              }
+                            </span>
+                          </label>
+                          <label className="grid gap-1 text-gray-600">
+                            <span>新名字</span>
+                            <input
+                              value={item.new_name}
+                              onChange={(e) => {
+                                const value = e.target.value
+                                setMappings((prev) =>
+                                  prev.map((row) =>
+                                    row.old_name === item.old_name ? { ...row, new_name: value } : row,
+                                  ),
+                                )
+                              }}
+                              className="h-10 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800"
+                              data-testid={`character-name-new-${idx}`}
+                            />
+                          </label>
+                          <div className="flex items-end">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveRecommendationName(item.old_name)
+                              }}
+                              className="h-10 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 hover:bg-gray-100"
+                              data-testid={`character-name-pick-${idx}`}
+                            >
+                              生成推荐
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {activeRecommendationName && recommendationQuery.isLoading && (
+                    <div className="rounded-md border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500">
+                      正在为“{activeRecommendationName}”生成推荐新名…
+                    </div>
+                  )}
+                  {activeRecommendationName && recommendationQuery.isError && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                      AI 推荐加载失败：{(recommendationQuery.error as Error).message}。你仍然可以手动填写新名字并继续预览替换。
+                    </div>
+                  )}
+                  {recommendation && (
+                    <div
+                      className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700"
+                      data-testid="character-name-recommendation"
+                    >
+                      AI 推荐：{recommendation.recommended_name} · {recommendation.reason}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMappings((prev) =>
+                            prev.map((row) =>
+                              row.old_name === recommendation.old_name
+                                ? { ...row, new_name: recommendation.recommended_name }
+                                : row,
+                            ),
+                          )
+                          setActiveRecommendationName('')
+                        }}
+                        className="ml-3 rounded-md border border-blue-200 bg-white px-2 py-1 text-[11px] text-blue-700 hover:bg-blue-50"
+                        data-testid="character-name-use-recommendation"
+                      >
+                        用推荐名
+                      </button>
+                    </div>
+                  )}
+                  {detected && (
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => previewMutation.mutate()}
+                      disabled={!mappings.some((item) => item.new_name.trim()) || previewMutation.isPending}
+                      className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                      data-testid="character-name-preview-btn"
+                    >
+                      预览替换
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: '确认全项目替换角色名称？',
+                          description: '会把角色设定、README、大纲、正文、发布稿中的同名内容统一替换并保存新版本。',
+                          confirmText: '确认替换',
+                        })
+                        if (!ok) return
+                        applyMutation.mutate()
+                      }}
+                      disabled={!preview || preview.items.length === 0 || applyMutation.isPending}
+                      className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                      data-testid="character-name-apply-btn"
+                    >
+                      确认保存
+                    </button>
+                  </div>
+                  )}
+                  {previewMutation.isError && (
+                    <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                      预览失败：{(previewMutation.error as Error).message}
+                    </div>
+                  )}
+                  {applyMutation.isError && (
+                    <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                      保存失败：{(applyMutation.error as Error).message}
+                    </div>
+                  )}
+                  {preview && (
+                    <CharacterReplacementPreviewPanel preview={preview} />
+                  )}
+                </div>
+              )}
+            </div>
+          <div className="flex flex-wrap items-center gap-2">
           <span
             className={`rounded-full px-2 py-1 ${
               characterSetupConfirmed
@@ -925,9 +1210,61 @@ function CharacterSetupCard({
             </button>
           )}
         </div>
+        </div>
       }
     />
   )
+}
+
+function CharacterReplacementPreviewPanel({
+  preview,
+}: {
+  preview: CharacterReplacementPreview
+}) {
+  return (
+    <div
+      className="rounded-lg border border-gray-200 bg-white p-3"
+      data-testid="character-name-preview-panel"
+    >
+      <div className="text-xs font-medium text-gray-900">
+        预览：{preview.old_name} → {preview.new_name}
+      </div>
+      <ul className="mt-2 space-y-2">
+        {preview.items.map((item) => (
+          <li key={`${item.scope}-${item.label}`} className="rounded-md bg-gray-50 px-3 py-2">
+            <div className="text-[11px] font-medium text-gray-700">
+              {item.label} · 命中 {item.hits} 处
+            </div>
+            <div className="mt-1 text-[11px] text-gray-500">
+              替换前：{item.before_excerpt}
+            </div>
+            <div className="mt-1 text-[11px] text-emerald-700">
+              替换后：{item.after_excerpt}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function summarizeImpacts(
+  oldName: string,
+  inputs: {
+    readme?: ProjectArtifact
+    characterSetup?: ProjectArtifact
+    outline?: ProjectArtifact
+    publishPost?: ProjectArtifact
+    chapters?: Chapter[]
+  },
+): string[] {
+  const hits: string[] = []
+  if (inputs.readme?.content.includes(oldName)) hits.push('README')
+  if (inputs.characterSetup?.content.includes(oldName)) hits.push('角色设定')
+  if (inputs.outline?.content.includes(oldName)) hits.push('大纲')
+  if (inputs.publishPost?.content.includes(oldName)) hits.push('发布稿')
+  if (inputs.chapters?.some((chapter) => chapter.body.includes(oldName))) hits.push('正文')
+  return hits
 }
 
 interface OutlineCardProps {

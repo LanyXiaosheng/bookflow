@@ -3,6 +3,8 @@ import { Link, NavLink, Outlet } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, ChevronDown, Languages, LogOut, Pencil, User } from 'lucide-react'
 import { authApi } from './api/auth'
+import NotificationPanel from './components/NotificationPanel'
+import { useNotifications } from './hooks/useNotifications'
 
 const NAV: Array<{ to: string; label: string }> = [
   { to: '/', label: '看板' },
@@ -17,24 +19,32 @@ const NAV: Array<{ to: string; label: string }> = [
 
 export default function Shell() {
   const qc = useQueryClient()
+  const [notificationOpen, setNotificationOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const userMenuRef = useRef<HTMLDivElement | null>(null)
+  const notificationRef = useRef<HTMLDivElement | null>(null)
   const auth = useQuery({
     queryKey: ['auth', 'me'],
     queryFn: () => authApi.me(),
     retry: false,
   })
+  const notifications = useNotifications(false)
+  const unreadCount = notifications.data?.unread_count ?? 0
 
   useEffect(() => {
-    if (!userMenuOpen) return
+    if (!userMenuOpen && !notificationOpen) return
     const close = (event: MouseEvent) => {
-      if (!userMenuRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node
+      if (!userMenuRef.current?.contains(target)) {
         setUserMenuOpen(false)
+      }
+      if (!notificationRef.current?.contains(target)) {
+        setNotificationOpen(false)
       }
     }
     document.addEventListener('mousedown', close)
     return () => document.removeEventListener('mousedown', close)
-  }, [userMenuOpen])
+  }, [notificationOpen, userMenuOpen])
 
   const renameUser = async () => {
     if (!auth.data) return
@@ -77,14 +87,32 @@ export default function Shell() {
             ))}
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-2 lg:gap-3">
-            <button
-              type="button"
-              className="relative hidden h-9 w-9 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 sm:inline-flex"
-              aria-label="通知"
-            >
-              <Bell className="h-5 w-5" />
-              <span className="absolute top-1.5 right-1.5 inline-flex h-2 w-2 rounded-full bg-red-500" />
-            </button>
+            <div className="relative hidden sm:block" ref={notificationRef}>
+              <button
+                type="button"
+                className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100"
+                aria-label="通知"
+                aria-expanded={notificationOpen}
+                onClick={() => {
+                  setNotificationOpen((open) => !open)
+                  setUserMenuOpen(false)
+                }}
+                data-testid="notification-trigger"
+              >
+                <Bell className="h-5 w-5" />
+                {unreadCount > 0 && (
+                  <>
+                    <span className="absolute top-1.5 right-1.5 inline-flex h-2 w-2 rounded-full bg-red-500" />
+                    <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-red-600 px-1 text-[10px] font-semibold leading-[18px] text-white">
+                      {unreadCount > 99 ? '99+' : unreadCount}
+                    </span>
+                  </>
+                )}
+              </button>
+              {notificationOpen && (
+                <NotificationPanel onNavigate={() => setNotificationOpen(false)} />
+              )}
+            </div>
             <div className="hidden md:flex items-center rounded-lg border border-gray-200 bg-white px-2 py-1 shadow-sm">
               <Languages className="w-4 h-4 text-gray-400 mr-1.5" />
               <select

@@ -13,6 +13,55 @@ test.beforeEach(async ({ page }) => {
       },
     })
   })
+  await page.route('**/api/notifications**', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        json: {
+          unread_count: 2,
+          items: [
+            {
+              id: 'notif-1',
+              user_id: 'test-user',
+              category: 'production',
+              level: 'warning',
+              status: 'unread',
+              title: '待复盘项目 2 篇',
+              body: '当前有 2 个项目等待补录复盘数据。',
+              action_label: '去复盘',
+              action_href: '/review',
+              source_type: 'review_pending',
+              source_id: null,
+              fingerprint: 'pending-reviews',
+              read_at: null,
+              resolved_at: null,
+              created_at: '2026-06-08T10:00:00Z',
+              updated_at: '2026-06-08T10:00:00Z',
+            },
+            {
+              id: 'notif-2',
+              user_id: 'test-user',
+              category: 'system',
+              level: 'error',
+              status: 'read',
+              title: 'AI 设置未配置完整',
+              body: '当前 AI API 的 base_url 或 api_key 缺失。',
+              action_label: '去设置',
+              action_href: '/settings',
+              source_type: 'settings',
+              source_id: null,
+              fingerprint: 'settings-ai-missing',
+              read_at: '2026-06-08T10:01:00Z',
+              resolved_at: null,
+              created_at: '2026-06-08T10:00:00Z',
+              updated_at: '2026-06-08T10:01:00Z',
+            },
+          ],
+        },
+      })
+      return
+    }
+    await route.fulfill({ status: 204 })
+  })
 })
 
 const dashboardMainProject = {
@@ -452,4 +501,74 @@ test('Dashboard 复盘入口：通过催复盘卡进入真实 /review 页面并�
     title_result: '标题钩子有效',
     next_action: '下一篇继续做身份反转强钩子',
   })
+})
+
+test('通知铃铛会展示真实通知面板', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/')
+  await expect(page.getByTestId('notification-trigger')).toBeVisible()
+  await expect(page.getByTestId('notification-trigger')).toContainText('2')
+
+  await page.getByTestId('notification-trigger').click()
+  await expect(page.getByTestId('notification-panel')).toBeVisible()
+  await expect(page.getByTestId('notification-panel')).toContainText('待复盘项目 2 篇')
+  await expect(page.getByTestId('notification-panel')).toContainText('AI 设置未配置完整')
+  await expect(page.getByTestId('notifications-read-all')).toBeVisible()
+  await expect(page.getByTestId('notifications-clear-resolved')).toBeVisible()
+})
+
+test('项目详情复制会输出预览文本而不是 markdown 源码', async ({ page }) => {
+  const projectId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+  await page.route('**/api/projects/cccccccc-cccc-4ccc-8ccc-cccccccccccc', async (route) => {
+    await route.fulfill({
+      json: {
+        id: projectId,
+        seed_id: 'seed-copy-0000-4000-8000-000000000000',
+        title: '复制测试项目',
+        track: '现言婚恋火葬场',
+        status: 'ready',
+        created_at: '2026-06-08T10:00:00Z',
+        updated_at: '2026-06-08T10:00:00Z',
+      },
+    })
+  })
+  await page.route('**/api/projects/cccccccc-cccc-4ccc-8ccc-cccccccccccc/artifacts', async (route) => {
+    await route.fulfill({
+      json: [
+        {
+          id: 'artifact-copy-1',
+          project_id: projectId,
+          kind: 'publish_post',
+          version: 1,
+          content: '# 第一章\n\n这是正文。\n\n---\n\n**第二段**继续。',
+          created_at: '2026-06-08T10:00:00Z',
+        },
+      ],
+    })
+  })
+  await page.route('**/api/projects/cccccccc-cccc-4ccc-8ccc-cccccccccccc/chapters', async (route) => {
+    await route.fulfill({ json: [] })
+  })
+
+  await page.addInitScript(() => {
+    ;(window as Window & { __copiedText?: string }).__copiedText = ''
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: async (text: string) => {
+          ;(window as Window & { __copiedText?: string }).__copiedText = text
+        },
+      },
+    })
+  })
+
+  await page.goto(`/projects/${projectId}`)
+  await page.getByTestId('copy-publish_post-btn').click()
+
+  const copied = await page.evaluate(() => (window as Window & { __copiedText?: string }).__copiedText)
+  expect(copied).toContain('第一章')
+  expect(copied).toContain('这是正文。')
+  expect(copied).toContain('第二段继续。')
+  expect(copied).not.toContain('# ')
+  expect(copied).not.toContain('---')
+  expect(copied).not.toContain('**')
 })

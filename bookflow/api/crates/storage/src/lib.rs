@@ -1,6 +1,7 @@
 use bookflow_domain::{
-    count_chars, Beat, Chapter, NewSeed, PendingProjectReview, Project, ProjectReview,
-    ProjectStatus, ReviewResult, ReviewStage, Score, Seed, Tier, User,
+    count_chars, Beat, Chapter, NewSeed, Notification, NotificationCategory, NotificationLevel,
+    NotificationStatus, PendingProjectReview, Project, ProjectReview, ProjectStatus, ReviewResult,
+    ReviewStage, Score, Seed, Tier, User,
 };
 use sqlx::{
     postgres::{PgPoolOptions, PgRow},
@@ -184,6 +185,218 @@ impl UserRepo {
             display_name: r.get("display_name"),
             created_at: r.get("created_at"),
         }))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UpsertNotification {
+    pub category: NotificationCategory,
+    pub level: NotificationLevel,
+    pub title: String,
+    pub body: String,
+    pub action_label: Option<String>,
+    pub action_href: Option<String>,
+    pub source_type: Option<String>,
+    pub source_id: Option<String>,
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct NotificationRepo {
+    pool: PgPool,
+}
+
+impl NotificationRepo {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn list(&self, user_id: Uuid, unread_only: bool) -> Result<Vec<Notification>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, user_id, category, level, status, title, body, action_label, action_href,
+                   source_type, source_id, fingerprint, read_at, resolved_at, created_at, updated_at
+            FROM notifications
+            WHERE user_id = $1
+              AND status != 'archived'
+              AND ($2::bool = FALSE OR status = 'unread')
+            ORDER BY
+              CASE status
+                WHEN 'unread' THEN 0
+                WHEN 'read' THEN 1
+                WHEN 'resolved' THEN 2
+                ELSE 9
+              END,
+              updated_at DESC,
+              created_at DESC
+            "#,
+        )
+        .bind(user_id)
+        .bind(unread_only)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(map_notification).collect()
+    }
+
+    pub async fn unread_count(&self, user_id: Uuid) -> Result<i64> {
+        let count = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM notifications
+            WHERE user_id = $1
+              AND status = 'unread'
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count)
+    }
+
+    pub async fn upsert_active(&self, user_id: Uuid, input: &UpsertNotification) -> Result<Notification> {
+        if let Some(fingerprint) = &input.fingerprint {
+            let row = sqlx::query(
+                r#"
+                INSERT INTO notifications (
+                    user_id, category, level, status, title, body, action_label, action_href,
+                    source_type, source_id, fingerprint
+                )
+                VALUES ($1,$2,$3,'unread',$4,$5,$6,$7,$8,$9,$10)
+                ON CONFLICT (user_id, fingerprint)
+                WHERE fingerprint IS NOT NULL AND status IN ('unread', 'read')
+                DO UPDATE SET
+                    category = EXCLUDED.category,
+                    level = EXCLUDED.level,
+                    title = EXCLUDED.title,
+                    body = EXCLUDED.body,
+                    action_label = EXCLUDED.action_label,
+                    action_href = EXCLUDED.action_href,
+                    source_type = EXCLUDED.source_type,
+                    source_id = EXCLUDED.source_id,
+                    status = CASE
+                        WHEN notifications.status = 'resolved' THEN 'resolved'
+                        ELSE notifications.status
+                    END,
+                    updated_at = NOW()
+                RETURNING id, user_id, category, level, status, title, body, action_label, action_href,
+                          source_type, source_id, fingerprint, read_at, resolved_at, created_at, updated_at
+                "#,
+            )
+            .bind(user_id)
+            .bind(input.category.as_str())
+            .bind(input.level.as_str())
+            .bind(&input.title)
+            .bind(&input.body)
+            .bind(&input.action_label)
+            .bind(&input.action_href)
+            .bind(&input.source_type)
+            .bind(&input.source_id)
+            .bind(fingerprint)
+            .fetch_one(&self.pool)
+            .await?;
+            return map_notification(row);
+        }
+
+        let row = sqlx::query(
+            r#"
+            INSERT INTO notifications (
+                user_id, category, level, status, title, body, action_label, action_href,
+                source_type, source_id, fingerprint
+            )
+            VALUES ($1,$2,$3,'unread',$4,$5,$6,$7,$8,$9,NULL)
+            RETURNING id, user_id, category, level, status, title, body, action_label, action_href,
+                      source_type, source_id, fingerprint, read_at, resolved_at, created_at, updated_at
+            "#,
+        )
+        .bind(user_id)
+        .bind(input.category.as_str())
+        .bind(input.level.as_str())
+        .bind(&input.title)
+        .bind(&input.body)
+        .bind(&input.action_label)
+        .bind(&input.action_href)
+        .bind(&input.source_type)
+        .bind(&input.source_id)
+        .fetch_one(&self.pool)
+        .await?;
+        map_notification(row)
+    }
+
+    pub async fn resolve_by_fingerprint(&self, user_id: Uuid, fingerprint: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE notifications
+            SET status = 'resolved',
+                resolved_at = COALESCE(resolved_at, NOW()),
+                updated_at = NOW()
+            WHERE user_id = $1
+              AND fingerprint = $2
+              AND status IN ('unread', 'read')
+            "#,
+        )
+        .bind(user_id)
+        .bind(fingerprint)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn mark_read(&self, user_id: Uuid, id: Uuid) -> Result<()> {
+        let affected = sqlx::query(
+            r#"
+            UPDATE notifications
+            SET status = CASE WHEN status = 'unread' THEN 'read' ELSE status END,
+                read_at = COALESCE(read_at, NOW()),
+                updated_at = NOW()
+            WHERE user_id = $1
+              AND id = $2
+              AND status != 'archived'
+            "#,
+        )
+        .bind(user_id)
+        .bind(id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected == 0 {
+            return Err(StorageError::NotFound(format!("notification {id}")));
+        }
+        Ok(())
+    }
+
+    pub async fn mark_all_read(&self, user_id: Uuid) -> Result<u64> {
+        let affected = sqlx::query(
+            r#"
+            UPDATE notifications
+            SET status = 'read',
+                read_at = COALESCE(read_at, NOW()),
+                updated_at = NOW()
+            WHERE user_id = $1
+              AND status = 'unread'
+            "#,
+        )
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(affected)
+    }
+
+    pub async fn archive_resolved(&self, user_id: Uuid) -> Result<u64> {
+        let affected = sqlx::query(
+            r#"
+            UPDATE notifications
+            SET status = 'archived',
+                updated_at = NOW()
+            WHERE user_id = $1
+              AND status IN ('read', 'resolved')
+            "#,
+        )
+        .bind(user_id)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(affected)
     }
 }
 
@@ -1178,6 +1391,42 @@ fn parse_review_result(result: Option<&str>) -> Result<Option<ReviewResult>> {
         .transpose()
 }
 
+fn map_notification(row: PgRow) -> Result<Notification> {
+    Ok(Notification {
+        id: row.get("id"),
+        user_id: row.get("user_id"),
+        category: NotificationCategory::parse(row.get::<&str, _>("category")).ok_or_else(|| {
+            StorageError::Conflict(format!(
+                "invalid persisted notification category: {}",
+                row.get::<&str, _>("category")
+            ))
+        })?,
+        level: NotificationLevel::parse(row.get::<&str, _>("level")).ok_or_else(|| {
+            StorageError::Conflict(format!(
+                "invalid persisted notification level: {}",
+                row.get::<&str, _>("level")
+            ))
+        })?,
+        status: NotificationStatus::parse(row.get::<&str, _>("status")).ok_or_else(|| {
+            StorageError::Conflict(format!(
+                "invalid persisted notification status: {}",
+                row.get::<&str, _>("status")
+            ))
+        })?,
+        title: row.get("title"),
+        body: row.get("body"),
+        action_label: row.get("action_label"),
+        action_href: row.get("action_href"),
+        source_type: row.get("source_type"),
+        source_id: row.get("source_id"),
+        fingerprint: row.get("fingerprint"),
+        read_at: row.get("read_at"),
+        resolved_at: row.get("resolved_at"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    })
+}
+
 #[cfg(test)]
 fn review_stage_recency_rank(stage: &str) -> i32 {
     match stage {
@@ -1264,6 +1513,9 @@ impl ArtifactRepo {
 #[cfg(test)]
 mod tests {
     use super::ArtifactKind;
+    use super::NotificationCategory;
+    use super::NotificationLevel;
+    use super::NotificationStatus;
     use super::ReviewResult;
     use super::ReviewStage;
     use super::{parse_review_result, parse_review_stage, review_stage_recency_rank};
@@ -1325,5 +1577,15 @@ mod tests {
     fn latest_review_result_prefers_stage_recency_over_update_time() {
         assert!(review_stage_recency_rank("7d") < review_stage_recency_rank("72h"));
         assert!(review_stage_recency_rank("72h") < review_stage_recency_rank("24h"));
+    }
+
+    #[test]
+    fn notification_enums_roundtrip() {
+        assert_eq!(NotificationCategory::parse("production"), Some(NotificationCategory::Production));
+        assert_eq!(NotificationCategory::Ai.as_str(), "ai");
+        assert_eq!(NotificationLevel::parse("warning"), Some(NotificationLevel::Warning));
+        assert_eq!(NotificationLevel::Error.as_str(), "error");
+        assert_eq!(NotificationStatus::parse("resolved"), Some(NotificationStatus::Resolved));
+        assert_eq!(NotificationStatus::Archived.as_str(), "archived");
     }
 }

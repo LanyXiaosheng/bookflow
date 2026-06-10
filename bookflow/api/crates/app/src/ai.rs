@@ -675,6 +675,15 @@ const PUBLISH_SYSTEM: &str = include_str!("ai_prompts/project_publish.system.md"
 const SIDE_DISHES_SYSTEM: &str = include_str!("ai_prompts/project_side_dishes.system.md");
 const BOOK_SUMMARY_SYSTEM: &str = include_str!("ai_prompts/project_book_summary.system.md");
 const BOOK_POLISH_SYSTEM: &str = include_str!("ai_prompts/project_book_polish.system.md");
+const CHARACTER_RENAME_SYSTEM: &str = r#"你是番茄短篇的人名编辑。根据赛道和时代背景，为旧角色名生成一个新的、自然的、非高频 AI 味中文姓名。
+
+要求：
+1. 只返回 JSON。
+2. JSON schema:
+{"recommended_name":"<新姓名>","reason":"<一句理由>"}
+3. 新名字必须是 2-4 个中文字符。
+4. 避免这类高频 AI 味名字：沈知微、顾景深、陆沉舟、苏晚、江念、林清欢、温知夏。
+5. 结合赛道气质输出，不要解释太多。"#;
 
 pub async fn stream_readme(
     client: &AiClient,
@@ -769,6 +778,33 @@ pub async fn stream_book_polish(
     client
         .stream_text(BOOK_POLISH_SYSTEM.to_string(), user, 12000)
         .await
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CharacterRenameRecommendation {
+    pub old_name: String,
+    pub recommended_name: String,
+    pub reason: String,
+}
+
+pub async fn recommend_character_name(
+    client: &AiClient,
+    track: &str,
+    old_name: &str,
+    character_setup_md: &str,
+) -> Result<CharacterRenameRecommendation> {
+    let user = format!(
+        "赛道：{track}\n旧角色名：{old_name}\n角色设定节选：\n{character_setup_md}\n\n请输出推荐新名 JSON。"
+    );
+    let raw = client.complete_json(CHARACTER_RENAME_SYSTEM, &user).await?;
+    let json_str = extract_json(&raw).with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
+    let parsed: CharacterRenameRecommendation = serde_json::from_str(json_str)
+        .with_context(|| format!("角色改名 JSON 解析失败：{json_str}"))?;
+    Ok(CharacterRenameRecommendation {
+        old_name: old_name.to_string(),
+        recommended_name: parsed.recommended_name,
+        reason: parsed.reason,
+    })
 }
 
 // === 章节 AI 拆 beats ===
