@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use base64::Engine;
 use bookflow_domain::{Beat, Score};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,7 @@ pub struct AiConfig {
     pub api_key: String,
     pub model: String,
     pub image_model: String,
+    pub duomiapi_key: String,
     pub timeout: Duration,
 }
 
@@ -30,7 +32,9 @@ pub enum Provider {
 impl Provider {
     pub fn parse(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
-            "openai" => Provider::Openai,
+            "openai" | "azure" | "google" => Provider::Openai,
+            // deepseek ccswitch 走 Anthropic Messages 协议
+            "deepseek" => Provider::Anthropic,
             _ => Provider::Anthropic,
         }
     }
@@ -50,6 +54,7 @@ impl AiConfig {
         let api_key = std::env::var("AI_API_KEY").context("AI_API_KEY 未设置")?;
         let model = std::env::var("AI_MODEL").context("AI_MODEL 未设置")?;
         let image_model = std::env::var("AI_IMAGE_MODEL").unwrap_or_else(|_| "gpt-image-2".into());
+        let duomiapi_key = std::env::var("DOMIAPI_KEY").unwrap_or_default();
         let timeout = Duration::from_secs(
             std::env::var("AI_TIMEOUT_SECS")
                 .ok()
@@ -62,6 +67,7 @@ impl AiConfig {
             api_key,
             model,
             image_model,
+            duomiapi_key,
             timeout,
         })
     }
@@ -109,12 +115,19 @@ impl AiClient {
         quality: &str,
     ) -> Result<GeneratedImage> {
         let cfg = self.cfg.read().await.clone();
+        // 优先走多米 API（如果 key 已配置）
+        if !cfg.duomiapi_key.is_empty() {
+            let duomi = DuoMiClient::new(cfg.duomiapi_key.clone());
+            return duomi
+                .blocking_generate_image(&cfg.image_model, prompt, size, quality)
+                .await;
+        }
         match cfg.provider {
             Provider::Openai => {
                 self.generate_openai_image(&cfg, prompt, size, quality)
                     .await
             }
-            Provider::Anthropic => Err(anyhow!("当前 provider 不支持生图，请切到 OpenAI")),
+            Provider::Anthropic => Err(anyhow!("当前 provider 不支持生图，请切到 OpenAI 或在设置中配置多米 API Key")),
         }
     }
 
@@ -129,44 +142,75 @@ impl AiClient {
 
     async fn complete_anthropic(&self, cfg: &AiConfig, system: &str, user: &str) -> Result<String> {
         let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
-        let body = json!({
-            "model": cfg.model,
-            "max_tokens": 1024,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-        });
-        let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", cfg.api_key))
-            .header("x-api-key", &cfg.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&body)
-            .send()
-            .await
-            .context("调 anthropic 失败（连接/超时）")?;
-        let status = resp.status();
-        let text = resp.text().await.context("读 anthropic 响应失败")?;
-        if !status.is_success() {
-            return Err(anyhow!("anthropic {} : {}", status, text));
+        for attempt in 1..=MAX_AI_ATTEMPTS {
+            let body = json!({
+                "model": cfg.model,
+                "max_tokens": 1024,
+                "system": system,
+                "messages": [{"role": "user", "content": user}],
+            });
+            let send = self
+                .http
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", cfg.api_key))
+                .header("x-api-key", &cfg.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .json(&body)
+                .send()
+                .await;
+            match send {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let text = resp.text().await.context("读 anthropic 响应失败")?;
+                    if status.is_success() {
+                        let parsed: AnthropicResp = serde_json::from_str(&text)
+                            .with_context(|| format!("解析 anthropic 响应失败: {text}"))?;
+                        let out = parsed
+                            .content
+                            .into_iter()
+                            .filter_map(|b| match b {
+                                AnthropicBlock::Text { text } => Some(text),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("");
+                        return Ok(out);
+                    }
+
+                    let retryable = should_retry_status(status) || body_is_retryable(&text);
+                    if retryable && attempt < MAX_AI_ATTEMPTS {
+                        warn!(
+                            attempt,
+                            max_attempts = MAX_AI_ATTEMPTS,
+                            %status,
+                            "anthropic completion failed with retryable response, retrying"
+                        );
+                        sleep(retry_delay(attempt)).await;
+                        continue;
+                    }
+                    return Err(anyhow!("anthropic {} : {}", status, text));
+                }
+                Err(err) => {
+                    if should_retry_transport(&err) && attempt < MAX_AI_ATTEMPTS {
+                        warn!(
+                            attempt,
+                            max_attempts = MAX_AI_ATTEMPTS,
+                            err = %err,
+                            "anthropic completion transport failed, retrying"
+                        );
+                        sleep(retry_delay(attempt)).await;
+                        continue;
+                    }
+                    return Err(anyhow::Error::new(err).context("调 anthropic 失败（连接/超时）"));
+                }
+            }
         }
-        let parsed: AnthropicResp = serde_json::from_str(&text)
-            .with_context(|| format!("解析 anthropic 响应失败: {text}"))?;
-        let out = parsed
-            .content
-            .into_iter()
-            .filter_map(|b| match b {
-                AnthropicBlock::Text { text } => Some(text),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("");
-        Ok(out)
+        unreachable!("anthropic completion retry loop must return")
     }
 
     async fn complete_openai(&self, cfg: &AiConfig, system: &str, user: &str) -> Result<String> {
         let url = format!("{}/v1/chat/completions", cfg.base_url.trim_end_matches('/'));
-        for attempt in 1..=OPENAI_MAX_ATTEMPTS {
+        for attempt in 1..=MAX_AI_ATTEMPTS {
             let body = json!({
                 "model": cfg.model,
                 "temperature": 0.4,
@@ -199,14 +243,14 @@ impl AiClient {
                         return Ok(out);
                     }
 
-                    if should_retry_openai_status(status) && attempt < OPENAI_MAX_ATTEMPTS {
+                    if should_retry_status(status) && attempt < MAX_AI_ATTEMPTS {
                         warn!(
                             attempt,
-                            max_attempts = OPENAI_MAX_ATTEMPTS,
+                            max_attempts = MAX_AI_ATTEMPTS,
                             %status,
                             "openai completion failed with retryable status"
                         );
-                        sleep(openai_retry_delay(attempt)).await;
+                        sleep(retry_delay(attempt)).await;
                         continue;
                     }
 
@@ -219,14 +263,14 @@ impl AiClient {
                     return Err(anyhow!(openai_status_user_message(status)));
                 }
                 Err(err) => {
-                    if should_retry_openai_transport(&err) && attempt < OPENAI_MAX_ATTEMPTS {
+                    if should_retry_transport(&err) && attempt < MAX_AI_ATTEMPTS {
                         warn!(
                             attempt,
-                            max_attempts = OPENAI_MAX_ATTEMPTS,
+                            max_attempts = MAX_AI_ATTEMPTS,
                             err = %err,
                             "openai completion transport failed, retrying"
                         );
-                        sleep(openai_retry_delay(attempt)).await;
+                        sleep(retry_delay(attempt)).await;
                         continue;
                     }
 
@@ -258,7 +302,7 @@ impl AiClient {
             "{}/v1/images/generations",
             cfg.base_url.trim_end_matches('/')
         );
-        for attempt in 1..=OPENAI_MAX_ATTEMPTS {
+        for attempt in 1..=MAX_AI_ATTEMPTS {
             let body = json!({
                 "model": cfg.image_model,
                 "prompt": prompt,
@@ -294,14 +338,14 @@ impl AiClient {
                         });
                     }
 
-                    if should_retry_openai_status(status) && attempt < OPENAI_MAX_ATTEMPTS {
+                    if should_retry_status(status) && attempt < MAX_AI_ATTEMPTS {
                         warn!(
                             attempt,
-                            max_attempts = OPENAI_MAX_ATTEMPTS,
+                            max_attempts = MAX_AI_ATTEMPTS,
                             %status,
                             "openai image generation failed with retryable status"
                         );
-                        sleep(openai_retry_delay(attempt)).await;
+                        sleep(retry_delay(attempt)).await;
                         continue;
                     }
 
@@ -314,14 +358,14 @@ impl AiClient {
                     return Err(anyhow!(openai_status_user_message(status)));
                 }
                 Err(err) => {
-                    if should_retry_openai_transport(&err) && attempt < OPENAI_MAX_ATTEMPTS {
+                    if should_retry_transport(&err) && attempt < MAX_AI_ATTEMPTS {
                         warn!(
                             attempt,
-                            max_attempts = OPENAI_MAX_ATTEMPTS,
+                            max_attempts = MAX_AI_ATTEMPTS,
                             err = %err,
                             "openai image generation transport failed, retrying"
                         );
-                        sleep(openai_retry_delay(attempt)).await;
+                        sleep(retry_delay(attempt)).await;
                         continue;
                     }
 
@@ -366,6 +410,8 @@ impl AiClient {
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
     Delta(String),
+    /// 上游繁忙、后端正在退避重试。attempt 是即将开始的第几次尝试，max 是总次数。
+    Retry { attempt: usize, max: usize },
     Done,
     Error(String),
 }
@@ -374,22 +420,48 @@ fn stream_timeout(cfg: &AiConfig) -> Duration {
     cfg.timeout.max(Duration::from_secs(600))
 }
 
-const OPENAI_MAX_ATTEMPTS: usize = 3;
+const MAX_AI_ATTEMPTS: usize = 5;
 
-fn should_retry_openai_status(status: reqwest::StatusCode) -> bool {
+fn should_retry_status(status: reqwest::StatusCode) -> bool {
     matches!(status.as_u16(), 429 | 502 | 503 | 504)
 }
 
-fn should_retry_openai_transport(err: &reqwest::Error) -> bool {
+fn should_retry_transport(err: &reqwest::Error) -> bool {
     err.is_timeout() || err.is_connect()
 }
 
-fn openai_retry_delay(attempt: usize) -> Duration {
-    match attempt {
-        1 => Duration::from_millis(400),
-        2 => Duration::from_millis(1200),
-        _ => Duration::from_millis(2500),
+/// 指数退避 + 抖动。代理账号池空窗常持续几秒到十几秒，
+/// 总退避（1+2+4+8≈15s）能盖住大多数空窗，让请求自愈，不必用户手动重试。
+/// 抖动避免多个并发请求在同一时刻一起重试，反而再次打满池子。
+fn retry_delay(attempt: usize) -> Duration {
+    let base_ms: u64 = match attempt {
+        1 => 1000,
+        2 => 2000,
+        3 => 4000,
+        _ => 8000,
+    };
+    // 0..=base/2 的伪随机抖动，无需引第三方 rng
+    let jitter = pseudo_jitter(base_ms / 2);
+    Duration::from_millis(base_ms + jitter)
+}
+
+/// 基于系统纳秒时钟的轻量抖动，范围 0..=max_ms。
+fn pseudo_jitter(max_ms: u64) -> u64 {
+    if max_ms == 0 {
+        return 0;
     }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    nanos % (max_ms + 1)
+}
+
+/// 上游代理共享账号池，账号被占满 / 过载时会以非标准状态码 + 文案返回，
+/// 这类是瞬时错误，值得重试（区别于 401 鉴权失败这种永久错误）。
+fn body_is_retryable(body: &str) -> bool {
+    let b = body.to_ascii_lowercase();
+    b.contains("no available accounts") || b.contains("overloaded") || b.contains("rate_limit")
 }
 
 fn openai_status_user_message(status: reqwest::StatusCode) -> &'static str {
@@ -417,28 +489,76 @@ async fn stream_anthropic(
     tx: mpsc::Sender<StreamEvent>,
 ) -> Result<()> {
     let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
-    let body = json!({
-        "model": cfg.model,
-        "max_tokens": max_tokens,
-        "stream": true,
-        "system": system,
-        "messages": [{"role": "user", "content": user}],
-    });
-    let resp = http
-        .post(&url)
-        .header("x-api-key", &cfg.api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("accept", "text/event-stream")
-        .timeout(stream_timeout(cfg))
-        .json(&body)
-        .send()
-        .await
-        .context("调 anthropic stream 失败（连接/超时）")?;
-    let status = resp.status();
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(anyhow!("anthropic stream {} : {}", status, text));
+    // 只在「建连 + 拿状态码」阶段重试：一旦开始读流、吐出 delta 就不能重试（否则重复内容）。
+    let mut resp = None;
+    for attempt in 1..=MAX_AI_ATTEMPTS {
+        let body = json!({
+            "model": cfg.model,
+            "max_tokens": max_tokens,
+            "stream": true,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+        });
+        let send = http
+            .post(&url)
+            .header("x-api-key", &cfg.api_key)
+            .header("Authorization", format!("Bearer {}", cfg.api_key))
+            .header("anthropic-version", "2023-06-01")
+            .header("accept", "text/event-stream")
+            .timeout(stream_timeout(cfg))
+            .json(&body)
+            .send()
+            .await;
+        match send {
+            Ok(candidate) => {
+                let status = candidate.status();
+                if status.is_success() {
+                    resp = Some(candidate);
+                    break;
+                }
+                let text = candidate.text().await.unwrap_or_default();
+                let retryable = should_retry_status(status) || body_is_retryable(&text);
+                if retryable && attempt < MAX_AI_ATTEMPTS {
+                    warn!(
+                        attempt,
+                        max_attempts = MAX_AI_ATTEMPTS,
+                        %status,
+                        "anthropic stream failed with retryable response, retrying"
+                    );
+                    tx.send(StreamEvent::Retry {
+                        attempt: attempt + 1,
+                        max: MAX_AI_ATTEMPTS,
+                    })
+                    .await
+                    .ok();
+                    sleep(retry_delay(attempt)).await;
+                    continue;
+                }
+                error!(attempt, %status, body = %text, "anthropic stream failed");
+                return Err(anyhow!("anthropic stream {} : {}", status, text));
+            }
+            Err(err) => {
+                if should_retry_transport(&err) && attempt < MAX_AI_ATTEMPTS {
+                    warn!(
+                        attempt,
+                        max_attempts = MAX_AI_ATTEMPTS,
+                        err = %err,
+                        "anthropic stream transport failed, retrying"
+                    );
+                    tx.send(StreamEvent::Retry {
+                        attempt: attempt + 1,
+                        max: MAX_AI_ATTEMPTS,
+                    })
+                    .await
+                    .ok();
+                    sleep(retry_delay(attempt)).await;
+                    continue;
+                }
+                return Err(anyhow::Error::new(err).context("调 anthropic stream 失败（连接/超时）"));
+            }
+        }
     }
+    let resp = resp.expect("anthropic stream retry loop must produce a response");
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
     while let Some(chunk) = stream.next().await {
@@ -493,7 +613,7 @@ async fn stream_openai(
 ) -> Result<()> {
     let url = format!("{}/v1/chat/completions", cfg.base_url.trim_end_matches('/'));
     let mut resp = None;
-    for attempt in 1..=OPENAI_MAX_ATTEMPTS {
+    for attempt in 1..=MAX_AI_ATTEMPTS {
         let body = json!({
             "model": cfg.model,
             "temperature": 0.4,
@@ -520,28 +640,40 @@ async fn stream_openai(
                     break;
                 }
                 let text = candidate.text().await.unwrap_or_default();
-                if should_retry_openai_status(status) && attempt < OPENAI_MAX_ATTEMPTS {
+                if should_retry_status(status) && attempt < MAX_AI_ATTEMPTS {
                     warn!(
                         attempt,
-                        max_attempts = OPENAI_MAX_ATTEMPTS,
+                        max_attempts = MAX_AI_ATTEMPTS,
                         %status,
                         "openai stream failed with retryable status"
                     );
-                    sleep(openai_retry_delay(attempt)).await;
+                    tx.send(StreamEvent::Retry {
+                        attempt: attempt + 1,
+                        max: MAX_AI_ATTEMPTS,
+                    })
+                    .await
+                    .ok();
+                    sleep(retry_delay(attempt)).await;
                     continue;
                 }
                 error!(attempt, %status, body = %text, "openai stream failed");
                 return Err(anyhow!(openai_status_user_message(status)));
             }
             Err(err) => {
-                if should_retry_openai_transport(&err) && attempt < OPENAI_MAX_ATTEMPTS {
+                if should_retry_transport(&err) && attempt < MAX_AI_ATTEMPTS {
                     warn!(
                         attempt,
-                        max_attempts = OPENAI_MAX_ATTEMPTS,
+                        max_attempts = MAX_AI_ATTEMPTS,
                         err = %err,
                         "openai stream transport failed, retrying"
                     );
-                    sleep(openai_retry_delay(attempt)).await;
+                    tx.send(StreamEvent::Retry {
+                        attempt: attempt + 1,
+                        max: MAX_AI_ATTEMPTS,
+                    })
+                    .await
+                    .ok();
+                    sleep(retry_delay(attempt)).await;
                     continue;
                 }
                 error!(attempt, err = %err, "openai stream transport failed");
@@ -646,6 +778,7 @@ pub async fn score_seed(client: &AiClient, req: &AiScoreRequest<'_>) -> Result<A
         ("twist", s.twist),
         ("hook", s.hook),
         ("finish", s.finish),
+        ("tagfit", s.tagfit),
     ] {
         if !(1..=5).contains(&v) {
             return Err(anyhow!("AI 给出 {} = {} 越界", name, v));
@@ -673,17 +806,9 @@ const CHARACTER_SETUP_SYSTEM: &str = include_str!("ai_prompts/project_character_
 const OUTLINE_SYSTEM: &str = include_str!("ai_prompts/project_outline.system.md");
 const PUBLISH_SYSTEM: &str = include_str!("ai_prompts/project_publish.system.md");
 const SIDE_DISHES_SYSTEM: &str = include_str!("ai_prompts/project_side_dishes.system.md");
+const BLURB_SYSTEM: &str = include_str!("ai_prompts/project_blurb.system.md");
 const BOOK_SUMMARY_SYSTEM: &str = include_str!("ai_prompts/project_book_summary.system.md");
 const BOOK_POLISH_SYSTEM: &str = include_str!("ai_prompts/project_book_polish.system.md");
-const CHARACTER_RENAME_SYSTEM: &str = r#"你是番茄短篇的人名编辑。根据赛道和时代背景，为旧角色名生成一个新的、自然的、非高频 AI 味中文姓名。
-
-要求：
-1. 只返回 JSON。
-2. JSON schema:
-{"recommended_name":"<新姓名>","reason":"<一句理由>"}
-3. 新名字必须是 2-4 个中文字符。
-4. 避免这类高频 AI 味名字：沈知微、顾景深、陆沉舟、苏晚、江念、林清欢、温知夏。
-5. 结合赛道气质输出，不要解释太多。"#;
 
 pub async fn stream_readme(
     client: &AiClient,
@@ -757,16 +882,80 @@ pub async fn stream_side_dishes(
         .await
 }
 
-pub async fn stream_book_summary(
+pub async fn stream_blurb(
     client: &AiClient,
-    full_book_source: &str,
+    readme_md: &str,
+    outline_md: &str,
+    body_excerpt: &str,
 ) -> mpsc::Receiver<StreamEvent> {
     let user = format!(
-        "下面是按章节整理的全书原稿，章节标题已经写在正文里：\n\n{full_book_source}\n\n请保留「第N章 标题」这种显式分章结构输出全书汇总稿。总字数至少 6000 字，目标 8000 - 10000 字；如果原稿细节不足，可以在不改变剧情事实的前提下补足场景、动作、情绪、对话和转场细节，把内容充实到目标区间。"
+        "README:\n{readme_md}\n\n大纲:\n{outline_md}\n\n正文节选:\n{body_excerpt}\n\n请输出 100-200 字叙事导语。"
     );
     client
-        .stream_text(BOOK_SUMMARY_SYSTEM.to_string(), user, 12000)
+        .stream_text(BLURB_SYSTEM.to_string(), user, 800)
         .await
+}
+
+/// 整合单章正文。逐章调用、再在上层拼成全书，避免一次性整本请求过重导致代理超时。
+pub async fn stream_book_summary_chapter(
+    client: &AiClient,
+    chapter_source: &str,
+) -> mpsc::Receiver<StreamEvent> {
+    let user = format!(
+        "下面是某一章的正文原稿，章节标题写在开头：\n\n{chapter_source}\n\n请保留「# 第N章 标题」这个开头，把这一章整合成连贯顺滑的正文。以整合、去重、修顺为主，篇幅与原稿大致相当，不要刻意扩写或注水。只输出这一章。"
+    );
+    // 单章远小于整本，6000 token 足够覆盖一章正文，请求轻、快、几乎不超时。
+    client
+        .stream_text(BOOK_SUMMARY_SYSTEM.to_string(), user, 6000)
+        .await
+}
+
+/// 全书汇总：逐章整合再拼（串行）。每章一个轻量请求（小、快、几乎不超时），
+/// 整章流式转发到同一个合并 channel，章节间插空行分隔。
+/// 支持断章续传：from 指定已完成的章数（≥1 时跳过前 from 章直接出全文）。
+///
+/// 说明：曾尝试 2-3 章并发提速，但实测这个上游代理在并发流式请求下会把连接挂住
+/// （流开着不吐字），按章序输出时被前面卡住的章拖死，首字延迟反而更长。
+/// 所以这里坚持串行 —— 慢但稳，零超时。
+pub fn stream_book_summary_chapters(
+    client: &AiClient,
+    chapter_sources: Vec<String>,
+    from: usize,
+) -> mpsc::Receiver<StreamEvent> {
+    let (tx, rx) = mpsc::channel::<StreamEvent>(64);
+    let client = client.clone();
+    tokio::spawn(async move {
+        if from > 0 && from <= chapter_sources.len() {
+            tx.send(StreamEvent::Delta(
+                format!("（续写模式：跳过前 {from} 章，从第 {} 章开始）\n\n", from + 1)
+            )).await.ok();
+        }
+        for (i, source) in chapter_sources.iter().enumerate().skip(from) {
+            if i > 0 {
+                if tx.send(StreamEvent::Delta("\n\n".to_string())).await.is_err() {
+                    return;
+                }
+            }
+            let mut chapter_rx = stream_book_summary_chapter(&client, source).await;
+            while let Some(ev) = chapter_rx.recv().await {
+                match ev {
+                    StreamEvent::Delta(_) | StreamEvent::Retry { .. } => {
+                        if tx.send(ev).await.is_err() {
+                            return;
+                        }
+                    }
+                    StreamEvent::Error(e) => {
+                        let _ = tx.send(StreamEvent::Error(e)).await;
+                        let _ = tx.send(StreamEvent::Done).await;
+                        return;
+                    }
+                    StreamEvent::Done => break,
+                }
+            }
+        }
+        let _ = tx.send(StreamEvent::Done).await;
+    });
+    rx
 }
 
 pub async fn stream_book_polish(
@@ -778,33 +967,6 @@ pub async fn stream_book_polish(
     client
         .stream_text(BOOK_POLISH_SYSTEM.to_string(), user, 12000)
         .await
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CharacterRenameRecommendation {
-    pub old_name: String,
-    pub recommended_name: String,
-    pub reason: String,
-}
-
-pub async fn recommend_character_name(
-    client: &AiClient,
-    track: &str,
-    old_name: &str,
-    character_setup_md: &str,
-) -> Result<CharacterRenameRecommendation> {
-    let user = format!(
-        "赛道：{track}\n旧角色名：{old_name}\n角色设定节选：\n{character_setup_md}\n\n请输出推荐新名 JSON。"
-    );
-    let raw = client.complete_json(CHARACTER_RENAME_SYSTEM, &user).await?;
-    let json_str = extract_json(&raw).with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
-    let parsed: CharacterRenameRecommendation = serde_json::from_str(json_str)
-        .with_context(|| format!("角色改名 JSON 解析失败：{json_str}"))?;
-    Ok(CharacterRenameRecommendation {
-        old_name: old_name.to_string(),
-        recommended_name: parsed.recommended_name,
-        reason: parsed.reason,
-    })
 }
 
 // === 章节 AI 拆 beats ===
@@ -858,14 +1020,26 @@ pub async fn write_paragraph(
     chapter_title: &str,
     beat: &Beat,
     prev_tail: &str,
+    character_setup: &str,
 ) -> Result<String> {
     let prev = if prev_tail.trim().is_empty() {
         "（这是章节第一段，无上文）".to_string()
     } else {
         format!("上一段结尾（衔接用，别复述）：\n{}", prev_tail.trim())
     };
+    let setup = character_setup.trim();
+    let setup_section = if setup.is_empty() {
+        String::new()
+    } else {
+        format!("\n角色设定（严格按这个写，包括人称、姓名、关系）：\n{}",
+            if setup.chars().count() > 1500 {
+                format!("{}…（下略）", setup.chars().take(1500).collect::<String>())
+            } else {
+                setup.to_string()
+            })
+    };
     let user = format!(
-        "项目：{project_title}\n赛道：{track}\n章节：{chapter_title}\n\n本段 beat：{} — {}\n\n{prev}\n\n直接写正文段落。",
+        "项目：{project_title}\n赛道：{track}\n章节：{chapter_title}\n\n本段 beat：{} — {}\n{prev}{setup_section}\n\n直接写正文段落。",
         beat.label, beat.note,
     );
     let text = client.complete_json(WRITE_SYSTEM, &user).await?;
@@ -879,18 +1053,30 @@ pub async fn stream_write_paragraph(
     chapter_title: &str,
     beat: &Beat,
     prev_tail: &str,
+    character_setup: &str,
 ) -> mpsc::Receiver<StreamEvent> {
     let prev = if prev_tail.trim().is_empty() {
         "（这是章节第一段，无上文）".to_string()
     } else {
         format!("上一段结尾（衔接用，别复述）：\n{}", prev_tail.trim())
     };
+    let setup = character_setup.trim();
+    let setup_section = if setup.is_empty() {
+        String::new()
+    } else {
+        format!("\n角色设定（严格按这个写，包括人称、姓名、关系）：\n{}",
+            if setup.chars().count() > 1500 {
+                format!("{}…（下略）", setup.chars().take(1500).collect::<String>())
+            } else {
+                setup.to_string()
+            })
+    };
     let user = format!(
-        "项目：{project_title}\n赛道：{track}\n章节：{chapter_title}\n\n本段 beat：{} — {}\n\n{prev}\n\n直接写正文段落。",
+        "项目：{project_title}\n赛道：{track}\n章节：{chapter_title}\n\n本段 beat：{} — {}\n{prev}{setup_section}\n\n直接写正文段落。",
         beat.label, beat.note,
     );
     client
-        .stream_text(WRITE_SYSTEM.to_string(), user, 1600)
+        .stream_text(WRITE_SYSTEM.to_string(), user, 1200)
         .await
 }
 
@@ -903,6 +1089,11 @@ pub struct AiSeedCandidate {
     pub title: String,
     pub score: Score,
     pub why_buy: String,
+    #[serde(default)]
+    #[serde(rename = "type")]
+    pub title_type: String,
+    #[serde(default)]
+    pub blurb_hint: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -943,6 +1134,7 @@ pub async fn generate_seeds(client: &AiClient, track: &str) -> Result<AiSeedGene
             ("twist", s.twist),
             ("hook", s.hook),
             ("finish", s.finish),
+            ("tagfit", s.tagfit),
         ] {
             if !(1..=5).contains(&v) {
                 return Err(anyhow!("AI 给出 {} = {} 越界 (标题: {})", name, v, c.title));
@@ -950,6 +1142,295 @@ pub async fn generate_seeds(client: &AiClient, track: &str) -> Result<AiSeedGene
         }
     }
     Ok(parsed)
+}
+
+// === 多米 API（文生图 / 图生图 / 文生视频） ===
+
+const DOMIAPI_BASE: &str = "https://duomiapi.com";
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DuoMiTaskResult {
+    pub id: String,
+    pub state: String,
+    pub progress: i64,
+    pub create_time: i64,
+    pub update_time: i64,
+    pub action: String,
+    pub data: Option<DuoMiTaskData>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DuoMiTaskData {
+    pub images: Option<Vec<DuoMiImage>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DuoMiImage {
+    pub url: String,
+    pub file_name: String,
+}
+
+/// 用于 pix/kling video feed 的返回格式
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DuoMiVideoFeedResp {
+    pub code: i32,
+    pub msg: String,
+    pub data: Option<DuoMiVideoData>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DuoMiVideoData {
+    pub task_id: String,
+    pub state: String,
+    pub status: String,
+    pub prompt: Option<String>,
+    pub video_url: Option<String>,
+    pub image_url: Option<String>,
+    pub poster: Option<String>,
+}
+
+/// 多米 API 客户端
+#[derive(Clone)]
+pub struct DuoMiClient {
+    key: String,
+    http: reqwest::Client,
+}
+
+impl DuoMiClient {
+    pub fn new(key: String) -> Self {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(240))
+            .build()
+            .expect("构建 DuoMiClient http 失败");
+        Self { key, http }
+    }
+
+    /// 文生图（gpt-image-2 / nano-banana）
+    pub async fn create_image(
+        &self,
+        model: &str,
+        prompt: &str,
+        size: &str,
+        quality: &str,
+    ) -> Result<String> {
+        if model.starts_with("gemini") || model == "nano-banana" {
+            // nano-banana 专用端点
+            let body = json!({
+                "model": model,
+                "prompt": prompt,
+                "key": self.key,
+            });
+            let resp = self
+                .http
+                .post(format!("{}/api/gemini/nano-banana", DOMIAPI_BASE))
+                
+                .json(&body)
+                .send()
+                .await
+                .context("nano-banana 请求失败")?;
+            let text = resp.text().await.context("读 nano-banana 响应失败")?;
+            let parsed: serde_json::Value =
+                serde_json::from_str(&text).context("解析 nano-banana 响应失败")?;
+            let task_id = parsed["data"]["task_id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("nano-banana 无 task_id: {text}"))?;
+            Ok(task_id.to_string())
+        } else {
+            // gpt-image-2 统一入口
+            let body = json!({
+                "model": model,
+                "prompt": prompt,
+                "size": size,
+                "quality": quality,
+                "key": self.key,
+            });
+            tracing::warn!(key_len = %self.key.len(), key_prefix = %self.key.chars().take(4).collect::<String>(), "duomi create_image");
+            let resp = self
+                .http
+                .post(format!(
+                    "{}/v1/images/generations?async=true",
+                    DOMIAPI_BASE
+                ))
+                
+                .json(&body)
+                .send()
+                .await
+                .context("gpt-image-2 请求失败")?;
+            let text = resp.text().await.context("读 gpt-image-2 响应失败")?;
+            let parsed: serde_json::Value =
+                serde_json::from_str(&text).context("解析 gpt-image-2 响应失败")?;
+            let task_id = parsed["id"]
+                .as_str()
+                .ok_or_else(|| anyhow!("gpt-image-2 无 id: {text}"))?;
+            Ok(task_id.to_string())
+        }
+    }
+
+    /// 图生图（nano-banana-edit）
+    pub async fn create_image_edit(
+        &self,
+        model: &str,
+        prompt: &str,
+        image_url: &str,
+    ) -> Result<String> {
+        let body = json!({
+            "model": model,
+            "prompt": prompt,
+            "image": image_url,
+            "key": self.key,
+        });
+        let resp = self
+            .http
+            .post(format!("{}/api/gemini/nano-banana-edit", DOMIAPI_BASE))
+            .json(&body)
+            .send()
+            .await
+            .context("nano-banana-edit 请求失败")?;
+        let text = resp.text().await.context("读 nano-banana-edit 响应失败")?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).context("解析 nano-banana-edit 响应失败")?;
+        let task_id = parsed["data"]["task_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("nano-banana-edit 无 task_id: {text}"))?;
+        Ok(task_id.to_string())
+    }
+
+    /// 文生视频（pix）
+    pub async fn create_video(
+        &self,
+        model: &str,
+        prompt: &str,
+        image_url: &str,
+        duration: i32,
+    ) -> Result<String> {
+        let body = json!({
+            "model": model,
+            "prompt": prompt,
+            "image": image_url,
+            "duration": duration,
+            "key": self.key,
+        });
+        let resp = self
+            .http
+            .post(format!("{}/api/video/pix/pro/generate", DOMIAPI_BASE))
+            .json(&body)
+            .send()
+            .await
+            .context("pix 视频请求失败")?;
+        let text = resp.text().await.context("读 pix 视频响应失败")?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).context("解析 pix 视频响应失败")?;
+        let task_id = parsed["data"]["task_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("pix 视频无 task_id: {text}"))?;
+        Ok(task_id.to_string())
+    }
+
+    /// 查询任务状态（统一 /v1/tasks/{id}，适用于 gpt-image-2 / nano-banana 图片任务）
+    pub async fn query_task(&self, task_id: &str) -> Result<DuoMiTaskResult> {
+        let url = format!("{}/v1/tasks/{}?key={}", DOMIAPI_BASE, task_id, self.key);
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("查询任务失败")?;
+        let text = resp.text().await.context("读查询任务响应失败")?;
+        serde_json::from_str(&text)
+            .with_context(|| format!("解析查询任务响应失败: {text}"))
+    }
+
+    /// 查询视频任务（pix feed）
+    pub async fn query_video(&self, task_id: &str) -> Result<DuoMiVideoFeedResp> {
+        let url = format!(
+            "{}/api/video/pix/feed?task_id={}&key={}",
+            DOMIAPI_BASE, task_id, self.key
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .context("查询视频任务失败")?;
+        let text = resp.text().await.context("读查询视频响应失败")?;
+        serde_json::from_str(&text)
+            .with_context(|| format!("解析查询视频响应失败: {text}"))
+    }
+
+    /// 提交 → 轮询 → 下载 → 返回 data:image/png;base64,...
+    /// 阻塞直到生成完成。最多等 300 秒（多米排队高峰可达 2-3 分钟）。
+    pub async fn blocking_generate_image(
+        &self,
+        model: &str,
+        prompt: &str,
+        size: &str,
+        quality: &str,
+    ) -> Result<GeneratedImage> {
+        // 把像素尺寸（如 1024x1536）转多米比例格式（如 2:3），米模型不认像素尺寸
+        let duomi_size = match size {
+            "1024x1024" | "1:1" => "1:1",
+            "1024x1536" | "1024x1792" | "2:3" => "2:3",
+            "1536x1024" | "1792x1024" | "3:2" => "3:2",
+            "16:9" => "16:9",
+            "9:16" => "9:16",
+            "1:2" => "1:2",
+            "2:1" => "2:1",
+            "4:3" => "4:3",
+            "3:4" => "3:4",
+            "5:4" => "5:4",
+            "4:5" => "4:5",
+            other => other, // 已经是比例格式或自定义像素尺寸（如 1792x1024）
+        };
+        let task_id = self.create_image(model, prompt, duomi_size, quality).await?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
+        let mut last_progress = 0i64;
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(anyhow!("多米生图超时（300s），task_id={task_id}"));
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let task = self.query_task(&task_id).await?;
+            match task.state.as_str() {
+                "completed" | "success" | "succeeded" => {
+                    let images = task
+                        .data
+                        .and_then(|d| d.images)
+                        .ok_or_else(|| anyhow!("多米任务完成但无图片: task_id={task_id}"))?;
+                    let first = images
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| anyhow!("多米图片列表为空: task_id={task_id}"))?;
+                    // 下载图片
+                    let bytes = self
+                        .http
+                        .get(&first.url)
+                        .send()
+                        .await
+                        .context("下载多米图片失败")?
+                        .bytes()
+                        .await
+                        .context("读多米图片字节流失败")?;
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                    return Ok(GeneratedImage {
+                        model: model.to_string(),
+                        prompt: prompt.to_string(),
+                        mime_type: "image/png".into(),
+                        data_url: format!("data:image/png;base64,{b64}"),
+                    });
+                }
+                "failed" | "error" => {
+                    return Err(anyhow!("多米生图失败: task_id={task_id}"));
+                }
+                _ => {
+                    if task.progress > last_progress {
+                        last_progress = task.progress;
+                        tracing::info!(%task_id, progress = task.progress, "多米生图进度");
+                    }
+                    // 继续轮询。gpt-image-2 可能全程 progress=0 然后直接 completed
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -965,12 +1446,39 @@ mod tests {
     }
 
     #[test]
+    fn body_is_retryable_catches_proxy_transient_errors() {
+        // 上游代理共享账号池耗尽 / 过载 / 限流 → 瞬时错误，应重试
+        assert!(body_is_retryable(
+            r#"{"error":{"message":"No available accounts: no available accounts"}}"#
+        ));
+        assert!(body_is_retryable(
+            r#"{"error":{"message":"Upstream rate limit exceeded","type":"rate_limit_error"}}"#
+        ));
+        assert!(body_is_retryable(r#"{"error":{"type":"overloaded_error"}}"#));
+        // 鉴权失败是永久错误，不该重试
+        assert!(!body_is_retryable(
+            r#"{"code":"INVALID_API_KEY","message":"Invalid API key"}"#
+        ));
+    }
+
+    #[test]
+    fn status_retry_matches_gateway_errors() {
+        use reqwest::StatusCode;
+        assert!(should_retry_status(StatusCode::TOO_MANY_REQUESTS)); // 429
+        assert!(should_retry_status(StatusCode::BAD_GATEWAY)); // 502
+        assert!(should_retry_status(StatusCode::SERVICE_UNAVAILABLE)); // 503
+        assert!(!should_retry_status(StatusCode::UNAUTHORIZED)); // 401 不重试
+        assert!(!should_retry_status(StatusCode::OK));
+    }
+
+    #[test]
     fn summary_prompt_mentions_full_book_rewrite() {
         let system = BOOK_SUMMARY_SYSTEM;
         assert!(system.contains("连贯"));
         assert!(system.contains("第N章 标题"));
-        assert!(system.contains("至少 6000 字"));
-        assert!(system.contains("8000 - 10000 字"));
+        // 清洗式整合：篇幅跟随原稿，不再强行扩写到固定字数
+        assert!(system.contains("不刻意扩写"));
+        assert!(system.contains("整合"));
     }
 
     #[test]

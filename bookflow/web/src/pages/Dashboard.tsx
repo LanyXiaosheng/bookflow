@@ -1,5 +1,7 @@
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from 'react-router-dom'
+import { looksLikeTestData } from '../lib/looksLikeTestData'
 import {
   AlarmClock,
   Archive,
@@ -734,6 +736,7 @@ function RecentOutput({
   const now = Date.now()
   const rows: Row[] = []
   for (const p of recentProjects) {
+    if (looksLikeTestData(p.title)) continue
     const t = new Date(p.updated_at).getTime()
     rows.push({
       id: `p:${p.id}`,
@@ -747,6 +750,7 @@ function RecentOutput({
   }
   for (const s of recentSeeds) {
     if (recentProjects.some((p) => p.seed_id === s.id)) continue
+    if (looksLikeTestData(s.title)) continue
     const t = new Date(s.created_at).getTime()
     rows.push({
       id: `s:${s.id}`,

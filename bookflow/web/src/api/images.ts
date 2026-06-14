@@ -13,7 +13,7 @@ export interface StoryImagePayload {
 }
 
 export interface GenerateStoryImageInput {
-  size?: '1024x1024' | '1024x1536' | '1536x1024'
+  size?: string
   quality?: 'low' | 'medium' | 'high'
   author_name?: string
   show_author?: boolean
@@ -24,7 +24,9 @@ export const imagesApi = {
     projectId: string,
     input?: GenerateStoryImageInput,
   ): Promise<ProjectArtifact> {
-    const { data } = await api.post<ProjectArtifact>(`/projects/${projectId}/ai-story-image`, input)
+    const { data } = await api.post<ProjectArtifact>(`/projects/${projectId}/ai-story-image`, input, {
+      timeout: 360000, // 多米轮询最多 300s + 余量
+    })
     return data
   },
 }

@@ -17,6 +17,7 @@ import {
   TRACK_PRIMARY_OPTIONS,
   type TrackPrimary,
 } from '../lib/tracks'
+import { looksLikeTestData } from '../lib/looksLikeTestData'
 
 const DIM_LABELS: Record<keyof Score, string> = {
   title: '标题张力',
@@ -45,8 +46,8 @@ function toneForIndex(index: number): string {
 }
 
 function tierOf(total: number): Tier {
-  if (total >= 28) return 'greenlight'
-  if (total >= 23) return 'backlog'
+  if (total >= 32) return 'greenlight'
+  if (total >= 26) return 'backlog'
   return 'reject'
 }
 
@@ -58,11 +59,6 @@ const TIER_BG: Record<Tier, string> = {
 }
 
 /** 测试垃圾启发式：以「测试 / e2e / smoke / playwright / test」开头 */
-const TEST_PREFIX_RE = /^(测试|e2e|smoke|playwright|test)/i
-function looksLikeTestData(title: string): boolean {
-  return TEST_PREFIX_RE.test(title.trim())
-}
-
 export default function Seeds() {
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -73,6 +69,19 @@ export default function Seeds() {
     const m = new Map<string, Project>()
     projectsList.data?.forEach((p) => m.set(p.seed_id, p))
     return m
+  }, [projectsList.data])
+
+  /** 已被立项且项目状态为 "已发" / "归档" 的标题集合，用于过滤历史候选。
+   * 直接用项目标题匹配 draft 标题，不绕 seed_title→draft_title 间接关联。 */
+  const finishedDraftTitles = useMemo(() => {
+    if (!projectsList.data) return new Set<string>()
+    const finished = new Set<string>()
+    for (const p of projectsList.data) {
+      if (p.status === 'published' || p.status === 'archived') {
+        finished.add(p.title)
+      }
+    }
+    return finished
   }, [projectsList.data])
 
   const create = useMutation({
@@ -134,10 +143,10 @@ export default function Seeds() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-drafts'] }),
   })
 
-  /** 候选历史：跟随当前 track */
+  /** 候选历史：全部赛道、按时间倒序，跨刷新和换标签都在 */
   const drafts = useQuery({
-    queryKey: ['ai-drafts', track],
-    queryFn: () => seedsApi.aiDrafts(track, 30),
+    queryKey: ['ai-drafts'],
+    queryFn: () => seedsApi.aiDrafts(undefined, 200),
   })
 
   /** AI 一键立项：评分卡上的紫色主推按钮 */
@@ -407,22 +416,31 @@ export default function Seeds() {
             </div>
           )}
 
-          {/* 历史候选：跨刷新都在，按 track 分组只看当前 */}
+          {/* 历史候选：全部赛道、按时间倒序，跨刷新和换标签都在。
+              已被立项为「已发」/「归档」的标题会被隐藏，不占列表空间。 */}
           {drafts.data && drafts.data.length > 0 && (
             <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50/60 p-4">
               <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                <History className="h-3.5 w-3.5" /> 历史候选 · {track}（{drafts.data.length}）
+                <History className="h-3.5 w-3.5" /> 历史候选 · 全部赛道（{
+                  drafts.data.filter((d) =>
+                    !aiGen.data?.candidates.some((c) => c.title === d.title) &&
+                    !finishedDraftTitles.has(d.title)
+                  ).length
+                }）
               </div>
               <ul className="grid gap-3 lg:grid-cols-2" data-testid="drafts-list">
                 {drafts.data
-                  // 已经是「本次生成」批次的，避免重复
+                  // 已经在「本次生成」批次的，避免重复
                   .filter((d) => !aiGen.data?.candidates.some((c) => c.title === d.title))
+                  // 已被立项为「已发」/「归档」项目的候选不再展示
+                  .filter((d) => !finishedDraftTitles.has(d.title))
                   .map((d, i) => (
                     <CandidateCard
                       key={d.id}
                       title={d.title}
                       score={d.score}
                       why_buy={d.why_buy}
+                      track={d.track}
                       testIdPrefix="draft"
                       index={i}
                       muted
@@ -453,7 +471,7 @@ export default function Seeds() {
             <Sparkles className="h-5 w-5 text-violet-600" />
             <h1 className="text-lg font-semibold">选题评分卡</h1>
             <span className="hidden rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-500 sm:inline-flex">
-              7 维 · 每维 1-5 · 立项 ≥28 / 备选 ≥23
+              8 维 · 每维 1-5 · 立项 ≥32 / 备选 ≥26
             </span>
             <button
               type="button"
@@ -911,6 +929,8 @@ interface CandidateCardProps {
   isLaunching: boolean
   disabled: boolean
   muted?: boolean
+  /** 历史候选展示自己的赛道，方便跨赛道一眼区分 */
+  track?: string
 }
 
 function CandidateCard({
@@ -924,6 +944,7 @@ function CandidateCard({
   isLaunching,
   disabled,
   muted,
+  track,
 }: CandidateCardProps) {
   const total = DIM_KEYS.reduce((a, k) => a + score[k], 0)
   const t = tierOf(total)
@@ -940,6 +961,11 @@ function CandidateCard({
           {TIER_LABEL[t]} · {total}
         </span>
       </div>
+      {track && (
+        <div className="mt-1.5" data-testid={`${testIdPrefix}-track-${index}`}>
+          <TrackPills track={track} compact />
+        </div>
+      )}
       <p className="mt-2 text-xs leading-6 text-slate-500 line-clamp-3">{why_buy}</p>
       <div className="mt-3 flex flex-wrap gap-1">
         {DIM_KEYS.map((k) => (

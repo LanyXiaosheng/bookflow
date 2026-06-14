@@ -11,8 +11,6 @@ node_modules
 dist
 dist-ssr
 *.local
-test-results/
-.tmp-*.png
 
 # Editor directories and files
 .vscode/*

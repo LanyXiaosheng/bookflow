@@ -56,6 +56,8 @@ pub struct Score {
     pub twist: i16,
     pub hook: i16,
     pub finish: i16,
+    #[serde(default)]
+    pub tagfit: i16,
 }
 
 impl Score {
@@ -67,6 +69,7 @@ impl Score {
             + self.twist as i32
             + self.hook as i32
             + self.finish as i32
+            + self.tagfit as i32
     }
 
     /// 每维 1-5，超出范围拒收

@@ -2,10 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 export type SSEStatus = 'idle' | 'streaming' | 'done' | 'error'
 
+export interface SSERetry {
+  attempt: number
+  max: number
+}
+
 export interface SSEState {
   status: SSEStatus
   text: string
   error: string | null
+  /** 后端正在退避重试上游时设置；首个 delta 到达后清空 */
+  retry: SSERetry | null
 }
 
 export interface UseSSEOptions {
@@ -13,6 +20,7 @@ export interface UseSSEOptions {
   onDelta?: (full: string) => void
   onDone?: (full: string) => void
   onError?: (message: string) => void
+  onRetry?: (info: SSERetry) => void
   preserveOnUnmount?: boolean
 }
 
@@ -51,6 +59,7 @@ function parseSSEChunk(buffer: string): { events: ParsedEvent[]; rest: string } 
  *
  * 后端事件协议（与 main.rs::sse_from_stream 对齐）：
  * - event: delta, data: {"text": "..."}
+ * - event: retry, data: {"attempt": n, "max": m}
  * - event: error, data: {"message": "..."}
  * - event: done,  data: {}
  */
@@ -59,6 +68,7 @@ export function useSSE(opts: UseSSEOptions = {}) {
     status: 'idle',
     text: '',
     error: null,
+    retry: null,
   })
   const abortRef = useRef<AbortController | null>(null)
   const mountedRef = useRef(true)
@@ -70,7 +80,7 @@ export function useSSE(opts: UseSSEOptions = {}) {
     const ac = new AbortController()
     abortRef.current = ac
     if (mountedRef.current) {
-      setState({ status: 'streaming', text: '', error: null })
+      setState({ status: 'streaming', text: '', error: null, retry: null })
     }
     optsRef.current.onStart?.()
 
@@ -87,7 +97,7 @@ export function useSSE(opts: UseSSEOptions = {}) {
       if (!resp.ok || !resp.body) {
         const msg = `HTTP ${resp.status}`
         if (mountedRef.current) {
-          setState({ status: 'error', text: '', error: msg })
+          setState({ status: 'error', text: '', error: msg, retry: null })
         }
         optsRef.current.onError?.(msg)
         return
@@ -112,7 +122,18 @@ export function useSSE(opts: UseSSEOptions = {}) {
               acc += text
               optsRef.current.onDelta?.(acc)
               if (mountedRef.current) {
-                setState((s) => ({ ...s, text: acc }))
+                // 收到正文即清除重试提示
+                setState((s) => ({ ...s, text: acc, retry: null }))
+              }
+            } catch {
+              // 忽略坏帧
+            }
+          } else if (ev.event === 'retry') {
+            try {
+              const info = JSON.parse(ev.data) as SSERetry
+              optsRef.current.onRetry?.(info)
+              if (mountedRef.current) {
+                setState((s) => ({ ...s, retry: info }))
               }
             } catch {
               // 忽略坏帧
@@ -132,19 +153,19 @@ export function useSSE(opts: UseSSEOptions = {}) {
 
       if (errored) {
         if (mountedRef.current) {
-          setState({ status: 'error', text: acc, error: errored })
+          setState({ status: 'error', text: acc, error: errored, retry: null })
         }
         optsRef.current.onError?.(errored)
       } else {
         if (mountedRef.current) {
-          setState({ status: 'done', text: acc, error: null })
+          setState({ status: 'done', text: acc, error: null, retry: null })
         }
         optsRef.current.onDone?.(acc)
       }
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
         if (mountedRef.current) {
-          setState({ status: 'idle', text: '', error: null })
+          setState({ status: 'idle', text: '', error: null, retry: null })
         }
         return
       }
@@ -162,7 +183,7 @@ export function useSSE(opts: UseSSEOptions = {}) {
 
   const reset = useCallback(() => {
     abortRef.current?.abort()
-    setState({ status: 'idle', text: '', error: null })
+    setState({ status: 'idle', text: '', error: null, retry: null })
   }, [])
 
   useEffect(() => {

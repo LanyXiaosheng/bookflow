@@ -30,19 +30,19 @@ export const chaptersApi = {
     const { data } = await api.put<Chapter>(`/chapters/${id}`, { title, body })
     return data
   },
-  async aiBeats(id: string, chapter_title?: string): Promise<{ beats: Beat[] }> {
+  async aiBeats(id: string, chapter_title?: string, signal?: AbortSignal): Promise<{ beats: Beat[] }> {
     const { data } = await api.post<{ beats: Beat[] }>(
       `/chapters/${id}/ai-beats`,
       { chapter_title },
-      { timeout: 120_000 },
+      { timeout: 120_000, signal },
     )
     return data
   },
-  async aiWrite(id: string, beat: Beat, prev_tail = ''): Promise<{ text: string }> {
+  async aiWrite(id: string, beat: Beat, prev_tail = '', signal?: AbortSignal): Promise<{ text: string }> {
     const { data } = await api.post<{ text: string }>(
       `/chapters/${id}/ai-write`,
       { beat, prev_tail },
-      { timeout: 120_000 },
+      { timeout: 120_000, signal },
     )
     return data
   },

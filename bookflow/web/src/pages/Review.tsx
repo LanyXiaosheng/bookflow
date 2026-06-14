@@ -12,6 +12,7 @@ import {
 } from '../api/reviews'
 import type { ProjectStatus } from '../api/projects'
 import TrackPills from '../components/TrackPills'
+import { looksLikeTestData } from '../lib/looksLikeTestData'
 
 interface ReviewFormState {
   read_count: string
@@ -263,7 +264,9 @@ export default function Review() {
           {pending.isError && <p className="mt-4 text-sm text-rose-600">待复盘加载失败</p>}
           {!pending.isLoading && !pending.isError && (
             <ul className="mt-4 space-y-2" data-testid="review-pending-list">
-              {pending.data?.map((item) => {
+              {pending.data
+                ?.filter((item) => !looksLikeTestData(item.title))
+                .map((item) => {
                 const active = pendingKey(item) === selectedKey
                 return (
                   <li key={pendingKey(item)}>

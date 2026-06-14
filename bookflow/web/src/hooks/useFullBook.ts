@@ -31,6 +31,11 @@ export interface RunFullBookOpts {
   target: number
   /** 已存在正文 ≥ skipIfChars 字的章节直接跳过续写（默认 100） */
   skipIfChars?: number
+  /**
+   * 重新生成：忽略已有 beats 和正文，每章强制重拆段 + 清空重写。
+   * 用于「正文太长想重做」——配合后端已收紧的每章约 2000 字参数，重写后会更短。
+   */
+  forceRegenerate?: boolean
 }
 
 interface SSEEventDelta {
@@ -127,7 +132,12 @@ export function useFullBook() {
   }, [])
 
   const run = useCallback(
-    async ({ projectId, target, skipIfChars = 100 }: RunFullBookOpts): Promise<boolean> => {
+    async ({
+      projectId,
+      target,
+      skipIfChars = 100,
+      forceRegenerate = false,
+    }: RunFullBookOpts): Promise<boolean> => {
       if (progress.running) return false
       if (!Number.isFinite(target) || target < 1 || target > 20) {
         setProgress({ ...initial, error: '章节数得在 1 - 20 之间' })
@@ -178,7 +188,8 @@ export function useFullBook() {
           const ch = list[i]
           const title = ch.title?.trim() || `第${ch.idx}章`
 
-          let beats = ch.beats ?? []
+          // 重新生成：忽略旧 beats，强制重拆段
+          let beats = forceRegenerate ? [] : (ch.beats ?? [])
           if (beats.length === 0) {
             const r = await chaptersApi.aiBeats(ch.id, title)
             beats = r.beats
@@ -192,8 +203,9 @@ export function useFullBook() {
             chars: 0,
           })
 
-          let body = ch.body ?? ''
-          if (Array.from(body).length < skipIfChars) {
+          // 重新生成：清空旧正文，从头重写；否则保留已有正文做续写判断
+          let body = forceRegenerate ? '' : (ch.body ?? '')
+          if (forceRegenerate || Array.from(body).length < skipIfChars) {
             for (let j = 0; j < beats.length; j++) {
               if (ac.signal.aborted) throw new Error('已中断')
               const tail = body.slice(-200)

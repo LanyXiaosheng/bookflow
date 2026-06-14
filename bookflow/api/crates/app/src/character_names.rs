@@ -22,6 +22,13 @@ pub struct CharacterReplacementPreview {
     pub items: Vec<CharacterReplacementPreviewItem>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LocalCharacterRenameRecommendation {
+    pub old_name: String,
+    pub recommended_name: String,
+    pub reason: String,
+}
+
 pub fn extract_candidate_names(markdown: &str) -> Vec<CharacterNameCandidate> {
     let mut out = BTreeSet::new();
     for line in markdown.lines() {
@@ -96,6 +103,23 @@ pub fn fallback_recommended_name(track: &str, old_name: &str) -> String {
         .to_string()
 }
 
+pub fn local_recommended_name(track: &str, old_name: &str) -> LocalCharacterRenameRecommendation {
+    let primary = track_primary(track);
+    let plots = track_plots(track);
+    let family = track_name_family(&primary, &plots);
+    let recommended_name = deterministic_name(track, old_name, family);
+    let plot_label = if plots.is_empty() {
+        "默认情节".to_string()
+    } else {
+        plots.join(" / ")
+    };
+    LocalCharacterRenameRecommendation {
+        old_name: old_name.to_string(),
+        recommended_name,
+        reason: format!("按主分类“{primary}”和情节分类“{plot_label}”本地生成，无需远程 AI。"),
+    }
+}
+
 fn clean_markdown_line(line: &str) -> String {
     line.trim()
         .trim_start_matches('#')
@@ -103,6 +127,115 @@ fn clean_markdown_line(line: &str) -> String {
         .trim_start_matches('*')
         .trim()
         .replace("**", "")
+}
+
+fn track_primary(track: &str) -> String {
+    let normalized = track.trim();
+    if normalized.is_empty() {
+        return "婚姻家庭".to_string();
+    }
+    let pair_separators = ["·", " / ", "/", "-", "｜", "|"];
+    for separator in pair_separators {
+        if let Some(idx) = normalized.find(separator) {
+            if idx > 0 {
+                let primary = normalized[..idx].trim();
+                if !primary.is_empty() {
+                    return primary.to_string();
+                }
+            }
+        }
+    }
+    match normalized {
+        "现言婚恋火葬场" => "婚姻家庭".to_string(),
+        "古言重生打脸" => "历史古代".to_string(),
+        "古言替嫁冲喜" => "古言甜宠".to_string(),
+        "悬疑规则怪谈" => "悬疑惊悚".to_string(),
+        _ => normalized.to_string(),
+    }
+}
+
+fn track_plots(track: &str) -> Vec<String> {
+    let normalized = track.trim();
+    if normalized.is_empty() {
+        return vec!["追妻火葬场".to_string()];
+    }
+    let pair_separators = ["·", " / ", "/", "-", "｜", "|"];
+    for separator in pair_separators {
+        if let Some(idx) = normalized.find(separator) {
+            if idx > 0 {
+                let plots = normalized[idx + separator.len()..]
+                    .split('/')
+                    .map(|item| item.trim())
+                    .filter(|item| !item.is_empty())
+                    .map(|item| item.to_string())
+                    .collect::<Vec<_>>();
+                if !plots.is_empty() {
+                    return plots;
+                }
+            }
+        }
+    }
+    match normalized {
+        "现言婚恋火葬场" => vec!["追妻火葬场".to_string()],
+        "古言重生打脸" => vec!["重生".to_string()],
+        "古言替嫁冲喜" => vec!["先婚后爱".to_string()],
+        "悬疑规则怪谈" => vec!["规则怪谈".to_string()],
+        _ => vec!["追妻火葬场".to_string()],
+    }
+}
+
+type NameFamily = (&'static [&'static str], &'static [&'static str]);
+
+fn track_name_family(primary: &str, plots: &[String]) -> NameFamily {
+    let plot_text = plots.join("/");
+    if primary.contains("悬疑")
+        || plot_text.contains("规则怪谈")
+        || plot_text.contains("推理")
+        || plot_text.contains("无限流")
+    {
+        return (
+            &["林", "周", "程", "许", "苏", "沈"],
+            &["折夏", "既安", "见鹿", "照微", "闻星", "知序"],
+        );
+    }
+    if primary.contains("古")
+        || primary.contains("宫斗")
+        || primary.contains("历史")
+        || plot_text.contains("权谋")
+        || plot_text.contains("重生")
+    {
+        return (
+            &["姜", "谢", "温", "宋", "陆", "顾"],
+            &["栖月", "听岚", "照雪", "挽禾", "惊棠", "书意"],
+        );
+    }
+    if primary.contains("女性成长") || primary.contains("女生生活") || plot_text.contains("大女主") {
+        return (
+            &["江", "许", "乔", "沈", "陈", "林"],
+            &["听禾", "昭宁", "予安", "知意", "砚秋", "晚晴"],
+        );
+    }
+    (
+        &["林", "周", "许", "江", "陈", "沈"],
+        &["晚晴", "既白", "昭宁", "听禾", "砚秋", "知微"],
+    )
+}
+
+fn deterministic_name(track: &str, old_name: &str, family: NameFamily) -> String {
+    let (surnames, givens) = family;
+    let mut seed: usize = 0;
+    for ch in track.chars().chain(old_name.chars()) {
+        seed = seed.wrapping_mul(131).wrapping_add(ch as usize);
+    }
+    for offset in 0..(surnames.len() * givens.len()).max(1) {
+        let surname = surnames[(seed + offset) % surnames.len()];
+        let given = givens[((seed / surnames.len()).wrapping_add(offset)) % givens.len()];
+        let candidate = format!("{surname}{given}");
+        if candidate != old_name {
+            return candidate;
+        }
+    }
+    fallback_recommended_name(track, old_name)
 }
 
 fn extract_name_from_labeled_line(line: &str) -> Option<String> {
@@ -319,5 +452,22 @@ mod tests {
     fn fallback_recommendation_never_returns_same_name() {
         let recommended = fallback_recommended_name("现言婚恋火葬场", "林晚晴");
         assert_ne!(recommended, "林晚晴");
+    }
+
+    #[test]
+    fn local_recommendation_uses_track_categories_without_ai() {
+        let recommendation = local_recommended_name("悬疑惊悚·规则怪谈/推理", "陆承川");
+        assert_eq!(recommendation.old_name, "陆承川");
+        assert_ne!(recommendation.recommended_name, "陆承川");
+        assert!(recommendation.reason.contains("悬疑惊悚"));
+        assert!(recommendation.reason.contains("规则怪谈 / 推理"));
+    }
+
+    #[test]
+    fn local_recommendation_handles_legacy_track_aliases() {
+        let recommendation = local_recommended_name("古言重生打脸", "沈栀宁");
+        assert_ne!(recommendation.recommended_name, "沈栀宁");
+        assert!(recommendation.reason.contains("历史古代"));
+        assert!(recommendation.reason.contains("重生"));
     }
 }
