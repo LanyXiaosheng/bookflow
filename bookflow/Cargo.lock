@@ -200,6 +200,7 @@ dependencies = [
  "argon2",
  "async-stream",
  "axum",
+ "base64",
  "bookflow-domain",
  "bookflow-storage",
  "chrono",

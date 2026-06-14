@@ -19,6 +19,7 @@ services:
   app:
     image: bookflow:latest
     container_name: bookflow-app
+    profiles: ["deploy"]
     ports:
       - "5174:5174"
     environment:
