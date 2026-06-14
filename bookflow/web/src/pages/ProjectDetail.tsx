@@ -701,6 +701,7 @@ async function downloadCompositedCover(
   options?: {
     format?: 'png' | 'jpg' | 'jpeg'
     quality?: number
+    fit?: 'stretch' | 'cover'
   },
 ): Promise<void> {
   const img = new Image()
@@ -711,15 +712,39 @@ async function downloadCompositedCover(
   img.src = dataUrl
   await imageReady
 
-  const targetWidth = 600
-  const targetHeight = 800
   const canvas = document.createElement('canvas')
-  canvas.width = targetWidth
-  canvas.height = targetHeight
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('封面导出失败：canvas 不可用')
 
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+  const fit = options?.fit ?? 'stretch'
+  if (fit === 'cover') {
+    // 保持原图像素，按 3:4 比例裁剪：水平居中、顶部对齐（保留画面上部主体）
+    const srcW = img.naturalWidth || img.width
+    const srcH = img.naturalHeight || img.height
+    const ratio = 3 / 4 // 宽 : 高
+    let cropW: number
+    let cropH: number
+    if (srcW / srcH > ratio) {
+      // 原图偏宽：保留全高，按 3:4 裁掉左右
+      cropH = srcH
+      cropW = Math.round(srcH * ratio)
+    } else {
+      // 原图偏高：保留全宽，按 3:4 裁掉底部
+      cropW = srcW
+      cropH = Math.min(srcH, Math.round(srcW / ratio))
+    }
+    const sx = Math.round((srcW - cropW) / 2) // 水平居中
+    const sy = 0 // 顶部对齐
+    canvas.width = cropW
+    canvas.height = cropH
+    ctx.drawImage(img, sx, sy, cropW, cropH, 0, 0, cropW, cropH)
+  } else {
+    const targetWidth = 600
+    const targetHeight = 800
+    canvas.width = targetWidth
+    canvas.height = targetHeight
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+  }
 
   if (showAuthor && authorName?.trim()) {
     const text = authorName.trim()
@@ -1723,6 +1748,31 @@ function StoryImageCard({
               data-testid="download-story-image-btn"
             >
               {downloading ? '导出中…' : `下载${exportFormat.toUpperCase()}`}
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  setDownloading(true)
+                  await downloadCompositedCover(
+                    payload.data_url,
+                    storyImageFilename(projectId, exportFormat),
+                    payload.title_text,
+                    payload.author_name,
+                    payload.show_author,
+                    { format: exportFormat, quality: exportQuality / 100, fit: 'cover' },
+                  )
+                } catch (e) {
+                  setError(extractErrorMessage(e))
+                } finally {
+                  setDownloading(false)
+                }
+              }}
+              className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs text-sky-700 hover:bg-sky-100"
+              data-testid="crop-story-image-btn"
+              title="保持原图像素，按 3:4 比例裁剪（水平居中、顶部对齐）后下载"
+            >
+              {downloading ? '处理中…' : '快速裁剪 3:4'}
             </button>
             <span className="rounded-full bg-sky-50 px-2 py-1 text-[11px] text-sky-700">
               {payload.model}

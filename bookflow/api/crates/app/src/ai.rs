@@ -145,7 +145,7 @@ impl AiClient {
         for attempt in 1..=MAX_AI_ATTEMPTS {
             let body = json!({
                 "model": cfg.model,
-                "max_tokens": 1024,
+                "max_tokens": 4096,
                 "system": system,
                 "messages": [{"role": "user", "content": user}],
             });
@@ -165,6 +165,7 @@ impl AiClient {
                     if status.is_success() {
                         let parsed: AnthropicResp = serde_json::from_str(&text)
                             .with_context(|| format!("解析 anthropic 响应失败: {text}"))?;
+                        let truncated = parsed.stop_reason.as_deref() == Some("max_tokens");
                         let out = parsed
                             .content
                             .into_iter()
@@ -174,6 +175,12 @@ impl AiClient {
                             })
                             .collect::<Vec<_>>()
                             .join("");
+                        if truncated {
+                            // 输出被 max_tokens 截断，JSON 必然不完整，提前给出可读错误
+                            return Err(anyhow!(
+                                "AI 输出超长被截断（stop_reason=max_tokens），请缩短章节或重试"
+                            ));
+                        }
                         return Ok(out);
                     }
 
@@ -715,6 +722,8 @@ async fn stream_openai(
 #[derive(Deserialize)]
 struct AnthropicResp {
     content: Vec<AnthropicBlock>,
+    #[serde(default)]
+    stop_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
