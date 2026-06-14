@@ -695,7 +695,7 @@ function copyDisplayText(kind: ArtifactKind, display: string): string {
 async function downloadCompositedCover(
   dataUrl: string,
   filename: string,
-  titleText?: string | null,
+  _titleText?: string | null,
   authorName?: string | null,
   showAuthor?: boolean,
   options?: {

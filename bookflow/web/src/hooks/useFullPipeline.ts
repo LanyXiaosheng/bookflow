@@ -224,6 +224,7 @@ export function useFullPipeline() {
         total: ALL_STEPS.length,
         chars: 0,
         skipped,
+        retry: null,
       })
 
       try {
