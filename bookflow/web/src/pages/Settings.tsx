@@ -15,16 +15,19 @@ import { settingsApi, type SettingsPatch, type SettingsView } from '../api/setti
 const PROVIDERS: Array<{ value: string; label: string; hint: string }> = [
   { value: 'anthropic', label: 'Anthropic（Claude）', hint: '官方 / 兼容 /v1/messages' },
   { value: 'openai', label: 'OpenAI（兼容）', hint: '走 /v1/chat/completions，response_format=json_object' },
+  { value: 'deepseek', label: 'DeepSeek（ccswitch 中转）', hint: '走 Anthropic Messages 协议 /v1/messages，适合 ccswitch 类中转' },
 ]
 
 const MODEL_HINTS: Record<string, string[]> = {
   anthropic: ['claude-sonnet-4-6', 'claude-opus-4-8', 'claude-haiku-4-5-20251001'],
   openai: ['gpt-5.5', 'gpt-5.4', 'gpt-4o-mini', 'gpt-4.1', 'o4-mini'],
+  deepseek: ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat'],
 }
 
 const IMAGE_MODEL_HINTS: Record<string, string[]> = {
   anthropic: ['当前 provider 不支持生图'],
   openai: ['gpt-image-2', 'gpt-image-1.5', 'gpt-image-1-mini'],
+  deepseek: ['配置多米 API Key 后由多米生图'],
 }
 
 export default function Settings() {
@@ -107,6 +110,7 @@ function SettingsForm({
   const [baseUrl, setBaseUrl] = useState(initial.base_url)
   const [model, setModel] = useState(initial.model)
   const [imageModel, setImageModel] = useState(initial.image_model)
+  const [duomiapiKey, setDuomiapiKey] = useState('')
   const [timeoutSecs, setTimeoutSecs] = useState(initial.timeout_secs)
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
@@ -133,8 +137,9 @@ function SettingsForm({
     if (imageModel !== initial.image_model) return true
     if (timeoutSecs !== initial.timeout_secs) return true
     if (apiKey.length > 0) return true
+    if (duomiapiKey.length > 0) return true
     return false
-  }, [provider, baseUrl, model, imageModel, timeoutSecs, apiKey, initial])
+  }, [provider, baseUrl, model, imageModel, timeoutSecs, apiKey, duomiapiKey, initial])
 
   const handleSave = () => {
     const patch: SettingsPatch = {
@@ -144,6 +149,7 @@ function SettingsForm({
       image_model: imageModel !== initial.image_model ? imageModel : undefined,
       timeout_secs: timeoutSecs !== initial.timeout_secs ? timeoutSecs : undefined,
       api_key: apiKey || undefined,
+      duomiapi_key: duomiapiKey || undefined,
     }
     save.mutate(patch)
   }
@@ -254,7 +260,27 @@ function SettingsForm({
           ))}
         </datalist>
         <p className="mt-1 text-xs text-gray-500">
-          小说配图使用的模型。推荐 `gpt-image-2` 作为主模型；若更重成本控制可用 `gpt-image-1-mini`。当前实现仅在 OpenAI provider 下生效。
+          小说配图使用的模型。若配置了多米 API Key，此处填多米支持的模型（如 gpt-image-2、nano-banana）；否则走 OpenAI image 端点，仅在 OpenAI provider 下生效。
+        </p>
+      </Field>
+
+      <Field label="多米 API Key" htmlFor="duomiapi_key">
+        {initial.duomiapi_key_set && (
+          <div className="mb-2 inline-flex max-w-full items-center gap-2 rounded-md bg-gray-50 px-2.5 py-1 font-mono text-xs text-gray-600 ring-1 ring-gray-200">
+            <Check className="h-3.5 w-3.5 text-emerald-600" />
+            当前已配置
+          </div>
+        )}
+        <input
+          id="duomiapi_key"
+          type="password"
+          placeholder={initial.duomiapi_key_set ? '留空 = 不变；粘贴新值覆盖' : '粘贴多米 API Key'}
+          value={duomiapiKey}
+          onChange={(e) => setDuomiapiKey(e.target.value)}
+          className="block min-w-0 w-full max-w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+        <p className="mt-1 text-xs text-gray-500">
+          配置后生图走<a href="https://duomiapi.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">多米 API</a>，不受 provider 限制。key 仅以「已配置」状态回显，不能查看明文。
         </p>
       </Field>
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
@@ -17,6 +17,13 @@ import { chaptersApi, type Beat, type Chapter } from '../api/chapters'
 import { useSSE } from '../hooks/useSSE'
 import { useFullBook } from '../hooks/useFullBook'
 import { useConfirm } from '../components/ConfirmDialog'
+
+/** axios 用 AbortSignal 取消时抛 CanceledError（code=ERR_CANCELED）；原生 fetch 抛 AbortError */
+function isAbortError(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null) return false
+  const err = e as { name?: string; code?: string }
+  return err.name === 'AbortError' || err.name === 'CanceledError' || err.code === 'ERR_CANCELED'
+}
 
 export default function Write() {
   const { id } = useParams<{ id: string }>()
@@ -94,7 +101,7 @@ export default function Write() {
         <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 h-12 flex items-center gap-3 text-sm">
           <button
             type="button"
-            onClick={() => navigate('/projects')}
+            onClick={() => navigate(`/projects/${projectId}`)}
             className="text-gray-500 hover:text-gray-800 inline-flex items-center gap-1"
           >
             <ChevronLeft className="h-4 w-4" /> 返回
@@ -395,11 +402,20 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
     onDone: (full) => setDraft(full),
   })
   const writing = writeStream.status === 'streaming'
+  /** AI 一键全章的中断控制器：点「停止」时 abort，已写好的段落会落库保留 */
+  const fullChapterAbort = useRef<AbortController | null>(null)
 
   useEffect(() => {
     setBeats(chapter.beats ?? [])
     setActiveBeatId(null)
     setDraft('')
+  }, [chapter.id])
+
+  // 切章 / 卸载时中断仍在跑的全章生成
+  useEffect(() => {
+    return () => {
+      fullChapterAbort.current?.abort()
+    }
   }, [chapter.id])
 
   const aiBeats = useMutation({
@@ -441,40 +457,66 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
     if (fullChapter.running) return
     if (!chapter.title.trim()) return
     setFullChapter({ running: true, current: 0, total: 0 })
-    try {
-      let workingBeats = beats
-      if (workingBeats.length === 0) {
-        const r = await chaptersApi.aiBeats(chapter.id, chapter.title)
-        workingBeats = r.beats
-        setBeats(workingBeats)
-      }
-      setFullChapter({ running: true, current: 0, total: workingBeats.length })
-
-      let body = chapter.body
-      for (let i = 0; i < workingBeats.length; i++) {
-        const b = workingBeats[i]
-        setFullChapter({ running: true, current: i + 1, total: workingBeats.length })
-        setActiveBeatId(b.id)
-        const tail = body.slice(-200)
-        const r = await chaptersApi.aiWrite(chapter.id, b, tail)
-        const sep = body && !body.endsWith('\n') ? '\n\n' : body ? '\n' : ''
-        body = body + sep + r.text
-      }
+    const ac = new AbortController()
+    fullChapterAbort.current = ac
+    const aborted = () => ac.signal.aborted
+    let body = chapter.body
+    /** 把当前已生成的正文落库（中断 / 跑完都用它，保住已写好的段落） */
+    const persist = async () => {
+      if (body === chapter.body) return
       const updated = await chaptersApi.update(chapter.id, chapter.title, body)
       qc.setQueryData<Chapter[]>(['chapters', updated.project_id], (prev) =>
         prev ? prev.map((x) => (x.id === updated.id ? updated : x)) : prev,
       )
       qc.invalidateQueries({ queryKey: ['chapters', updated.project_id] })
+    }
+    try {
+      let workingBeats = beats
+      if (workingBeats.length === 0) {
+        const r = await chaptersApi.aiBeats(chapter.id, chapter.title, ac.signal)
+        workingBeats = r.beats
+        setBeats(workingBeats)
+      }
+      setFullChapter({ running: true, current: 0, total: workingBeats.length })
+
+      for (let i = 0; i < workingBeats.length; i++) {
+        if (aborted()) break
+        const b = workingBeats[i]
+        setFullChapter({ running: true, current: i + 1, total: workingBeats.length })
+        setActiveBeatId(b.id)
+        const tail = body.slice(-200)
+        const r = await chaptersApi.aiWrite(chapter.id, b, tail, ac.signal)
+        const sep = body && !body.endsWith('\n') ? '\n\n' : body ? '\n' : ''
+        body = body + sep + r.text
+      }
+      await persist()
       setActiveBeatId(null)
       setFullChapter({ running: false, current: 0, total: 0 })
     } catch (e) {
+      // 用户主动中断不算错误：把已写好的段落落库后静默收尾
+      if (isAbortError(e) || aborted()) {
+        try {
+          await persist()
+        } catch {
+          // 落库失败就算了，正文还在内存里，用户可手动重试
+        }
+        setActiveBeatId(null)
+        setFullChapter({ running: false, current: 0, total: 0 })
+        return
+      }
       setFullChapter({
         running: false,
         current: 0,
         total: 0,
         error: e instanceof Error ? e.message : '未知错误',
       })
+    } finally {
+      fullChapterAbort.current = null
     }
+  }
+
+  function stopFullChapter() {
+    fullChapterAbort.current?.abort()
   }
 
   return (
@@ -495,27 +537,47 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
         {beats.length > 0 ? '重新拆段（覆盖）' : 'AI 拆段（5-7 个 beat）'}
       </button>
 
-      {/* AI 全章生成：拆段 + 逐节奏续写 + 落库一气呵成 */}
-      <button
-        type="button"
-        onClick={generateFullChapter}
-        disabled={disabled || aiBeats.isPending || fullChapter.running || !chapter.title.trim()}
-        className="inline-flex items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-        data-testid="ai-full-chapter-btn"
-        title="基于章节标题：AI 拆 5-7 个 beat → 逐 beat 写一段 → 直接拼到正文末"
-      >
-        {fullChapter.running ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : (
+      {/* AI 全章生成：拆段 + 逐节奏续写 + 落库一气呵成；运行中可点「停止」中断，已写好的段落会保留 */}
+      {fullChapter.running ? (
+        <button
+          type="button"
+          onClick={stopFullChapter}
+          className="inline-flex items-center justify-center gap-1 rounded-md bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700"
+          data-testid="ai-full-chapter-stop-btn"
+          title="停止全章生成，已写好的段落会保留并落库"
+        >
+          <TriangleAlert className="h-3 w-3" />
+          停止（已写 {fullChapter.current}/{fullChapter.total} 段）
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={generateFullChapter}
+          disabled={disabled || aiBeats.isPending || !chapter.title.trim()}
+          className="inline-flex items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+          data-testid="ai-full-chapter-btn"
+          title="基于章节标题：AI 拆 5-7 个 beat → 逐 beat 写一段 → 直接拼到正文末"
+        >
           <Rocket className="h-3 w-3" />
-        )}
-        {fullChapter.running
-          ? `AI 写第 ${fullChapter.current}/${fullChapter.total} 段…`
-          : 'AI 一键全章'}
-      </button>
+          AI 一键全章
+        </button>
+      )}
+      {fullChapter.running && (
+        <p className="text-xs text-emerald-700 inline-flex items-center gap-1" data-testid="ai-full-chapter-progress">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {fullChapter.total > 0
+            ? `AI 写第 ${fullChapter.current}/${fullChapter.total} 段…`
+            : 'AI 拆段中…'}
+        </p>
+      )}
       {fullChapter.error && (
         <p className="text-xs text-rose-600 inline-flex items-center gap-1">
           <TriangleAlert className="h-3 w-3" /> 全章生成失败：{fullChapter.error}
+        </p>
+      )}
+      {writing && writeStream.retry && (
+        <p className="text-xs text-amber-600 inline-flex items-center gap-1" data-testid="write-retry-status">
+          <Loader2 className="h-3 w-3 animate-spin" /> 上游繁忙，正在重试（{writeStream.retry.attempt}/{writeStream.retry.max}）…
         </p>
       )}
       {writeStream.status === 'error' && (
@@ -550,7 +612,7 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
                 <button
                   type="button"
                   onClick={() => startWrite(b)}
-                  disabled={disabled || writing}
+                  disabled={disabled || writing || fullChapter.running}
                   className="shrink-0 inline-flex items-center gap-1 rounded border border-violet-200 bg-white px-2 py-1 text-[10px] font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50"
                   data-testid={`ai-write-${b.id}`}
                 >

@@ -11,6 +11,7 @@ pub struct Settings {
     pub api_key: String,
     pub model: String,
     pub image_model: String,
+    pub duomiapi_key: String,
     pub timeout_secs: i32,
 }
 
@@ -21,6 +22,7 @@ pub struct SettingsPatch {
     pub api_key: Option<String>,
     pub model: Option<String>,
     pub image_model: Option<String>,
+    pub duomiapi_key: Option<String>,
     pub timeout_secs: Option<i32>,
 }
 
@@ -32,6 +34,7 @@ impl Settings {
             api_key: self.api_key.clone(),
             model: self.model.clone(),
             image_model: self.image_model.clone(),
+            duomiapi_key: self.duomiapi_key.clone(),
             timeout: std::time::Duration::from_secs(self.timeout_secs.max(1) as u64),
         }
     }
@@ -43,6 +46,7 @@ impl Settings {
             api_key: cfg.api_key.clone(),
             model: cfg.model.clone(),
             image_model: cfg.image_model.clone(),
+            duomiapi_key: cfg.duomiapi_key.clone(),
             timeout_secs: cfg.timeout.as_secs() as i32,
         }
     }
@@ -61,14 +65,17 @@ impl SettingsRepo {
     /// 读 DB 单行；DB 字段全空时返回 None，外面用 .env 兜底
     pub async fn read(&self) -> Result<Option<Settings>> {
         self.ensure_image_model_column().await?;
-        let row = sqlx::query_as::<_, (String, String, String, String, String, i32)>(
-            "SELECT provider, base_url, api_key, model, COALESCE(image_model, 'gpt-image-2') AS image_model, timeout_secs FROM app_settings WHERE id = TRUE",
+        self.ensure_duomiapi_key_column().await?;
+        let row = sqlx::query_as::<_, (String, String, String, String, String, String, i32)>(
+            "SELECT provider, base_url, api_key, model, COALESCE(image_model, 'gpt-image-2') AS image_model, COALESCE(duomiapi_key, '') AS duomiapi_key, timeout_secs FROM app_settings WHERE id = TRUE",
         )
         .fetch_optional(&self.pool)
         .await
         .context("读 app_settings 失败")?;
 
-        let Some((provider, base_url, api_key, model, image_model, timeout_secs)) = row else {
+        let Some((provider, base_url, api_key, model, image_model, duomiapi_key, timeout_secs)) =
+            row
+        else {
             return Ok(None);
         };
 
@@ -82,18 +89,20 @@ impl SettingsRepo {
             api_key,
             model,
             image_model,
+            duomiapi_key,
             timeout_secs,
         }))
     }
 
     pub async fn upsert(&self, s: &Settings) -> Result<Settings> {
         self.ensure_image_model_column().await?;
-        let row = sqlx::query_as::<_, (String, String, String, String, String, i32)>(
+        self.ensure_duomiapi_key_column().await?;
+        let row = sqlx::query_as::<_, (String, String, String, String, String, String, i32)>(
             r#"
             UPDATE app_settings
-            SET provider = $1, base_url = $2, api_key = $3, model = $4, image_model = $5, timeout_secs = $6
+            SET provider = $1, base_url = $2, api_key = $3, model = $4, image_model = $5, duomiapi_key = $6, timeout_secs = $7
             WHERE id = TRUE
-            RETURNING provider, base_url, api_key, model, image_model, timeout_secs
+            RETURNING provider, base_url, api_key, model, image_model, duomiapi_key, timeout_secs
             "#,
         )
         .bind(&s.provider)
@@ -101,17 +110,19 @@ impl SettingsRepo {
         .bind(&s.api_key)
         .bind(&s.model)
         .bind(&s.image_model)
+        .bind(&s.duomiapi_key)
         .bind(s.timeout_secs)
         .fetch_one(&self.pool)
         .await
         .context("写 app_settings 失败")?;
-        let (provider, base_url, api_key, model, image_model, timeout_secs) = row;
+        let (provider, base_url, api_key, model, image_model, duomiapi_key, timeout_secs) = row;
         Ok(Settings {
             provider,
             base_url,
             api_key,
             model,
             image_model,
+            duomiapi_key,
             timeout_secs,
         })
     }
@@ -123,6 +134,16 @@ impl SettingsRepo {
         .execute(&self.pool)
         .await
         .context("补 image_model 列失败")?;
+        Ok(())
+    }
+
+    async fn ensure_duomiapi_key_column(&self) -> Result<()> {
+        sqlx::query(
+            "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS duomiapi_key TEXT NOT NULL DEFAULT ''",
+        )
+        .execute(&self.pool)
+        .await
+        .context("补 duomiapi_key 列失败")?;
         Ok(())
     }
 

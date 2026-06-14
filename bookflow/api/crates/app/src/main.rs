@@ -40,10 +40,11 @@ mod character_names;
 mod docs;
 mod settings;
 use ai::{
-    beats_for_chapter, generate_seeds, score_seed, stream_book_polish,
-    stream_book_summary, stream_character_setup, stream_outline, stream_publish_post,
+    beats_for_chapter, generate_seeds, score_seed, stream_blurb, stream_book_polish,
+    stream_book_summary_chapters, stream_character_setup, stream_outline, stream_publish_post,
     stream_readme, stream_side_dishes, stream_write_paragraph, write_paragraph, AiClient,
-    AiConfig, AiScoreRequest, AiScoreResponse, AiSeedGenerated, GeneratedImage, StreamEvent,
+    AiConfig, AiScoreRequest, AiScoreResponse, AiSeedGenerated, DuoMiClient, GeneratedImage,
+    StreamEvent,
 };
 use character_names::{
     apply_exact_replacement, build_preview_item, extract_candidate_names, local_recommended_name,
@@ -64,6 +65,7 @@ struct AppState {
     artifacts: ArtifactRepo,
     notifications: NotificationRepo,
     ai: AiClient,
+    duomi: DuoMiClient,
     settings: SettingsRepo,
     tracks: DocRoot,
     playbook: DocRoot,
@@ -82,6 +84,7 @@ impl Clone for AppState {
             artifacts: self.artifacts.clone(),
             notifications: self.notifications.clone(),
             ai: self.ai.clone(),
+            duomi: self.duomi.clone(),
             settings: self.settings.clone(),
             tracks: self.tracks.clone(),
             playbook: self.playbook.clone(),
@@ -128,6 +131,7 @@ async fn main() -> anyhow::Result<()> {
         .context("读 app_settings 失败")?
         .map(|s| s.to_ai_config())
         .unwrap_or(ai_cfg_env);
+    let duomi_key = active_cfg.duomiapi_key.clone();
     let ai = AiClient::new(active_cfg).context("AI client 构建失败")?;
 
     let state = AppState {
@@ -141,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         notifications: NotificationRepo::new(pool.clone()),
         pool,
         ai,
+        duomi: DuoMiClient::new(duomi_key),
         settings: settings_repo,
         tracks: DocRoot::discover("tracks"),
         playbook: DocRoot::discover("playbook"),
@@ -202,7 +207,23 @@ async fn main() -> anyhow::Result<()> {
             "/api/projects/:id/ai-side-dishes/stream",
             post(ai_side_dishes_stream),
         )
+        .route(
+            "/api/projects/:id/ai-blurb/stream",
+            post(ai_blurb_stream),
+        )
         .route("/api/projects/:id/ai-story-image", post(ai_story_image))
+        .route(
+            "/api/projects/:id/ai-duomi-image",
+            post(ai_duomi_image),
+        )
+        .route(
+            "/api/projects/:id/ai-duomi-image-edit",
+            post(ai_duomi_image_edit),
+        )
+        .route(
+            "/api/projects/:id/ai-duomi-video",
+            post(ai_duomi_video),
+        )
         .route(
             "/api/projects/:id/ai-book-summary/stream",
             post(ai_book_summary_stream),
@@ -210,6 +231,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/projects/:id/ai-book-polish/stream",
             post(ai_book_polish_stream),
+        )
+        .route(
+            "/api/duomi-task/:task_id",
+            get(ai_duomi_query_task),
         )
         .route(
             "/api/projects/:id/chapters",
@@ -716,6 +741,7 @@ async fn ai_chapter_write(
     Json(body): Json<AiWriteBody>,
 ) -> Result<Json<AiWriteResp>, AppError> {
     let (_, chapter, project) = require_chapter_project(&s, &headers, chapter_id).await?;
+    let character_setup = load_character_setup(&s, project.id).await;
     let started = std::time::Instant::now();
     let text = write_paragraph(
         &s.ai,
@@ -724,6 +750,7 @@ async fn ai_chapter_write(
         &chapter.title,
         &body.beat,
         &body.prev_tail,
+        &character_setup,
     )
     .await
     .map_err(AppError::Ai)?;
@@ -743,6 +770,7 @@ async fn ai_chapter_write_stream(
     Json(body): Json<AiWriteBody>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
     let (_, chapter, project) = require_chapter_project(&s, &headers, chapter_id).await?;
+    let character_setup = load_character_setup(&s, project.id).await;
     let rx = stream_write_paragraph(
         &s.ai,
         &project.title,
@@ -750,6 +778,7 @@ async fn ai_chapter_write_stream(
         &chapter.title,
         &body.beat,
         &body.prev_tail,
+        &character_setup,
     )
     .await;
     Ok(sse_from_stream(rx, |_full| async move { Ok(()) }))
@@ -1037,6 +1066,7 @@ struct SettingsView {
     has_api_key: bool,
     model: String,
     image_model: String,
+    duomiapi_key_set: bool,
     timeout_secs: i32,
 }
 
@@ -1101,12 +1131,13 @@ async fn get_settings(State(s): State<AppState>) -> Result<Json<SettingsView>, A
         has_api_key: !cfg.api_key.is_empty(),
         model: cfg.model.clone(),
         image_model: cfg.image_model.clone(),
+        duomiapi_key_set: !cfg.duomiapi_key.is_empty(),
         timeout_secs: cfg.timeout.as_secs() as i32,
     }))
 }
 
 async fn put_settings(
-    State(s): State<AppState>,
+    State(mut s): State<AppState>,
     Json(patch): Json<SettingsPatch>,
 ) -> Result<Json<SettingsView>, AppError> {
     let cur = s
@@ -1121,6 +1152,7 @@ async fn put_settings(
                 api_key: String::new(),
                 model: "claude-sonnet-4-6".into(),
                 image_model: "gpt-image-2".into(),
+                duomiapi_key: String::new(),
                 timeout: std::time::Duration::from_secs(60),
             })
         });
@@ -1133,11 +1165,14 @@ async fn put_settings(
             .unwrap_or(cur.api_key),
         model: patch.model.unwrap_or(cur.model),
         image_model: patch.image_model.unwrap_or(cur.image_model),
+        duomiapi_key: patch.duomiapi_key.unwrap_or(cur.duomiapi_key),
         timeout_secs: patch.timeout_secs.unwrap_or(cur.timeout_secs).max(1),
     };
     let saved = s.settings.upsert(&next).await.map_err(AppError::Ai)?;
     s.ai.reload(saved.to_ai_config()).await;
+    // 同步更新 duomi client 的 key
     let cfg = s.ai.snapshot().await;
+    s.duomi = DuoMiClient::new(cfg.duomiapi_key.clone());
     Ok(Json(SettingsView {
         provider: cfg.provider.as_str().into(),
         base_url: cfg.base_url.clone(),
@@ -1145,6 +1180,7 @@ async fn put_settings(
         has_api_key: !cfg.api_key.is_empty(),
         model: cfg.model.clone(),
         image_model: cfg.image_model.clone(),
+        duomiapi_key_set: !cfg.duomiapi_key.is_empty(),
         timeout_secs: cfg.timeout.as_secs() as i32,
     }))
 }
@@ -1956,6 +1992,10 @@ where
                     let payload = serde_json::json!({"text": text}).to_string();
                     yield Ok(Event::default().event("delta").data(payload));
                 }
+                StreamEvent::Retry { attempt, max } => {
+                    let payload = serde_json::json!({"attempt": attempt, "max": max}).to_string();
+                    yield Ok(Event::default().event("retry").data(payload));
+                }
                 StreamEvent::Error(e) => {
                     had_error = Some(e.clone());
                     let payload = serde_json::json!({"message": e}).to_string();
@@ -2240,6 +2280,169 @@ async fn ai_side_dishes_stream(
     }))
 }
 
+async fn ai_blurb_stream(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<Uuid>,
+) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
+    require_project(&s, &headers, project_id).await?;
+    let arts = s
+        .artifacts
+        .latest_all(project_id)
+        .await
+        .map_err(AppError::Storage)?;
+    let readme = arts
+        .iter()
+        .find(|a| a.kind == ArtifactKind::Readme)
+        .map(|a| a.content.clone())
+        .unwrap_or_default();
+    let outline = arts
+        .iter()
+        .find(|a| a.kind == ArtifactKind::Outline)
+        .map(|a| a.content.clone())
+        .unwrap_or_default();
+    if readme.trim().is_empty() || outline.trim().is_empty() {
+        return Err(AppError::Ai(anyhow::anyhow!(
+            "先生成 README + 大纲，再生成导语"
+        )));
+    }
+    let chapters = s
+        .chapters
+        .list_by_project(project_id)
+        .await
+        .map_err(AppError::Storage)?;
+    let body_excerpt: String = chapters
+        .into_iter()
+        .map(|c| c.body)
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let body_excerpt = take_chars(&body_excerpt, 4000);
+    let rx = stream_blurb(&s.ai, &readme, &outline, &body_excerpt).await;
+    let artifacts = s.artifacts.clone();
+    Ok(sse_from_stream(rx, move |full| async move {
+        artifacts
+            .save(project_id, ArtifactKind::Blurb, &full)
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("{e:#}"))
+    }))
+}
+
+#[derive(Serialize, Deserialize)]
+struct DuoMiImageBody {
+    model: String,
+    prompt: String,
+    #[serde(default = "default_duomi_size")]
+    size: String,
+    #[serde(default = "default_duomi_quality")]
+    quality: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DuoMiImageEditBody {
+    model: String,
+    prompt: String,
+    image_url: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DuoMiVideoBody {
+    model: String,
+    prompt: String,
+    #[serde(default)]
+    image_url: String,
+    #[serde(default = "default_duomi_duration")]
+    duration: i32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DuoMiTaskResp {
+    task_id: String,
+    model: String,
+    prompt: String,
+}
+
+fn default_duomi_size() -> String { "1024x1024".into() }
+fn default_duomi_quality() -> String { "medium".into() }
+fn default_duomi_duration() -> i32 { 5 }
+
+/// 文生图（多米 API）
+async fn ai_duomi_image(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<Uuid>,
+    Json(body): Json<DuoMiImageBody>,
+) -> Result<Json<DuoMiTaskResp>, AppError> {
+    require_project(&s, &headers, project_id).await?;
+    let task_id = s
+        .duomi
+        .create_image(&body.model, &body.prompt, &body.size, &body.quality)
+        .await
+        .map_err(|e| AppError::Ai(anyhow::anyhow!("{}", e)))?;
+    Ok(Json(DuoMiTaskResp {
+        task_id,
+        model: body.model,
+        prompt: body.prompt,
+    }))
+}
+
+/// 图生图（多米 API）
+async fn ai_duomi_image_edit(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<Uuid>,
+    Json(body): Json<DuoMiImageEditBody>,
+) -> Result<Json<DuoMiTaskResp>, AppError> {
+    require_project(&s, &headers, project_id).await?;
+    let task_id = s
+        .duomi
+        .create_image_edit(&body.model, &body.prompt, &body.image_url)
+        .await
+        .map_err(|e| AppError::Ai(anyhow::anyhow!("{}", e)))?;
+    Ok(Json(DuoMiTaskResp {
+        task_id,
+        model: body.model,
+        prompt: body.prompt,
+    }))
+}
+
+/// 文生视频（多米 API）
+async fn ai_duomi_video(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<Uuid>,
+    Json(body): Json<DuoMiVideoBody>,
+) -> Result<Json<DuoMiTaskResp>, AppError> {
+    require_project(&s, &headers, project_id).await?;
+    let task_id = s
+        .duomi
+        .create_video(&body.model, &body.prompt, &body.image_url, body.duration)
+        .await
+        .map_err(|e| AppError::Ai(anyhow::anyhow!("{}", e)))?;
+    Ok(Json(DuoMiTaskResp {
+        task_id,
+        model: body.model,
+        prompt: body.prompt,
+    }))
+}
+
+/// 查询多米任务（图片/视频）
+async fn ai_duomi_query_task(
+    State(s): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // 先尝试统一查询
+    match s.duomi.query_task(&task_id).await {
+        Ok(r) => return Ok(Json(serde_json::to_value(&r).unwrap_or_default())),
+        Err(_) => {}
+    }
+    // 降级到视频查询
+    match s.duomi.query_video(&task_id).await {
+        Ok(r) => Ok(Json(serde_json::to_value(&r).unwrap_or_default())),
+        Err(e) => Err(AppError::Ai(anyhow::anyhow!("查询任务失败: {}", e))),
+    }
+}
+
 async fn ai_story_image(
     State(s): State<AppState>,
     headers: HeaderMap,
@@ -2279,6 +2482,14 @@ async fn ai_story_image(
         )));
     }
 
+    let size = body.size.unwrap_or_else(|| "2:3".into());
+    let quality = body.quality.unwrap_or_else(|| "high".into());
+    let author_name = body
+        .author_name
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
+    let show_author = body.show_author.unwrap_or(false) && author_name.is_some();
+
     let prompt = build_story_image_prompt(
         &project.title,
         &project.track,
@@ -2286,14 +2497,8 @@ async fn ai_story_image(
         &character_setup,
         &outline,
         &side_dishes,
+        author_name.as_deref(),
     );
-    let size = body.size.unwrap_or_else(|| "1024x1536".into());
-    let quality = body.quality.unwrap_or_else(|| "high".into());
-    let author_name = body
-        .author_name
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty());
-    let show_author = body.show_author.unwrap_or(false) && author_name.is_some();
     let generated =
         s.ai.generate_image(&prompt, &size, &quality)
             .await
@@ -2318,22 +2523,22 @@ async fn ai_book_summary_stream(
     State(s): State<AppState>,
     headers: HeaderMap,
     Path(project_id): Path<Uuid>,
+    Query(q): Query<BookSummaryQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
-    const BOOK_SUMMARY_SOURCE_MAX_CHARS: usize = 12_000;
-
     require_project(&s, &headers, project_id).await?;
     let chapters = s
         .chapters
         .list_by_project(project_id)
         .await
         .map_err(AppError::Storage)?;
-    let full_book_source = build_full_book_source(chapters).ok_or_else(|| {
-        AppError::Storage(bookflow_storage::StorageError::Conflict(
-            "先生成至少一章正文，再汇总".into(),
-        ))
-    })?;
-    let full_book_source = take_chars(&full_book_source, BOOK_SUMMARY_SOURCE_MAX_CHARS);
-    let rx = stream_book_summary(&s.ai, &full_book_source).await;
+    let chapter_sources = build_chapter_sources(chapters);
+    if chapter_sources.is_empty() {
+        return Err(AppError::Storage(
+            bookflow_storage::StorageError::Conflict("先生成至少一章正文，再汇总".into()),
+        ));
+    }
+    let from = q.from.unwrap_or(0).min(chapter_sources.len());
+    let rx = stream_book_summary_chapters(&s.ai, chapter_sources, from);
     let artifacts = s.artifacts.clone();
     Ok(sse_from_stream(rx, move |full| async move {
         artifacts
@@ -2342,6 +2547,12 @@ async fn ai_book_summary_stream(
             .map(|_| ())
             .map_err(|e| format!("{e:#}"))
     }))
+}
+
+#[derive(Deserialize)]
+struct BookSummaryQuery {
+    #[serde(default)]
+    from: Option<usize>,
 }
 
 async fn ai_book_polish_stream(
@@ -2376,6 +2587,20 @@ async fn ai_book_polish_stream(
     }))
 }
 
+/// 从 artifacts 里取角色设定（最新版本）
+async fn load_character_setup(s: &AppState, project_id: Uuid) -> String {
+    s.artifacts
+        .latest_all(project_id)
+        .await
+        .ok()
+        .and_then(|list| {
+            list.into_iter()
+                .find(|a| a.kind == ArtifactKind::CharacterSetup)
+                .map(|a| a.content)
+        })
+        .unwrap_or_default()
+}
+
 fn take_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
@@ -2406,18 +2631,39 @@ fn build_story_image_prompt(
     character_setup: &str,
     outline: &str,
     side_dishes: &str,
+    author_name: Option<&str>,
 ) -> String {
+    // 多米 gpt-image-2 限制 prompt ≤ 5000 字符，各节截断保总长可控
+    let truncate = |s: &str, max: usize| -> String {
+        let s = s.trim();
+        if s.chars().count() > max {
+            format!("{}…（下略）", s.chars().take(max).collect::<String>())
+        } else {
+            s.to_string()
+        }
+    };
+    let author_line = author_name
+        .filter(|n| !n.trim().is_empty())
+        .map(|n| format!("\n作者署名：{n}（放在封面角落）"))
+        .unwrap_or_default();
     format!(
-        "你要为一篇中文短篇小说生成一张平台配图。\n\
-目标：小说封面感、强情绪、强戏剧冲突、移动端首屏抓人、适合女频短篇内容平台。\n\
-要求：单张竖版构图感、电影感光影、人物关系明确、避免英文水印和任何文字、不要拼贴感、不要低幼漫画感。\n\
+        "中文短篇小说封面配图：竖版构图、电影感光影、强情绪强冲突、人物关系明确。\
+书名「{title}」醒目放在画面上方三分之一处（大字），\
+画面聚焦最具戏剧性的一幕，突出主角表情和身份张力。\
+禁止：英文水印、中文书名以外的任何文字、拼贴风、低幼漫画。{author_line}\n\
 赛道：{track}\n\
-标题：{title}\n\n\
-项目README：\n{readme}\n\n\
-角色设定：\n{character_setup}\n\n\
-章节大纲：\n{outline}\n\n\
-配套素材：\n{side_dishes}\n\n\
-请据此输出最终画面：聚焦最强冲突的一幕，突出主角情绪、身份差、关系张力和故事钩子。"
+README：{readme}\n\
+角色：{character_setup}\n\
+大纲：{outline}\n\
+配套封面提示词：{side_dishes}\n\
+优先执行配套里的封面描述，否则聚焦最强冲突一幕。",
+        title = title,
+        author_line = author_line,
+        track = track,
+        readme = truncate(readme, 500),
+        character_setup = truncate(character_setup, 500),
+        outline = truncate(outline, 500),
+        side_dishes = truncate(side_dishes, 400),
     )
 }
 
@@ -2428,9 +2674,11 @@ fn looks_like_chapter_heading(title: &str) -> bool {
     matches!(title.find('章'), Some(pos) if pos > 0 && pos <= 8)
 }
 
-fn build_full_book_source(mut chapters: Vec<Chapter>) -> Option<String> {
+/// 按章构建整合源：每章一个独立字符串（含 `# 第N章 标题` 开头），跳过空正文章节，按 idx 排序。
+/// 全书汇总逐章处理时用，避免一次性整本请求过重。
+fn build_chapter_sources(mut chapters: Vec<Chapter>) -> Vec<String> {
     chapters.sort_by_key(|chapter| chapter.idx);
-    let parts = chapters
+    chapters
         .into_iter()
         .filter_map(|chapter| {
             let body = chapter.body.trim().to_string();
@@ -2448,7 +2696,11 @@ fn build_full_book_source(mut chapters: Vec<Chapter>) -> Option<String> {
                 Some(format!("{heading}\n\n{body}"))
             }
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+fn build_full_book_source(chapters: Vec<Chapter>) -> Option<String> {
+    let parts = build_chapter_sources(chapters);
     if parts.is_empty() {
         None
     } else {

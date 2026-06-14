@@ -9,6 +9,7 @@ import {
   Image as ImageIcon,
   Loader2,
   Pencil,
+  RefreshCw,
   Rocket,
   Sparkles,
   TriangleAlert,
@@ -34,6 +35,7 @@ import {
 } from '../hooks/useAiJobStore'
 import { useSSE } from '../hooks/useSSE'
 import { useFullBook } from '../hooks/useFullBook'
+import { useFullPipeline, PIPELINE_STEP_LABELS } from '../hooks/useFullPipeline'
 import { usePipeline } from '../hooks/usePipeline'
 import { renderedMarkdownToPlainText } from '../lib/copyRenderedMarkdown'
 import { extractCharacterNamesFromReadme } from '../lib/extractCharacterNames'
@@ -117,6 +119,10 @@ export default function ProjectDetail() {
     () => pickLatest(artifacts.data, 'side_dishes'),
     [artifacts.data],
   )
+  const blurb = useMemo(
+    () => pickLatest(artifacts.data, 'blurb'),
+    [artifacts.data],
+  )
   const storyImage = useMemo(
     () => pickLatest(artifacts.data, 'story_image'),
     [artifacts.data],
@@ -166,6 +172,8 @@ export default function ProjectDetail() {
 
   /** SOP 阶段 2 前期方案流：README → 角色设定（链式 SSE，自动落库） */
   const pipeline = usePipeline()
+  /** 一键全流程：README → 角色设定 → 大纲 → 正文 → 全书汇总 → 配套素材 */
+  const fullPipeline = useFullPipeline()
   const runProjectizeFlow = async () => {
     setPreflightDrafts(emptyPreflightDrafts())
     const ok = await pipeline.run([
@@ -213,10 +221,53 @@ export default function ProjectDetail() {
             {project.data?.track ? <TrackPills track={project.data.track} compact /> : null}
           </div>
           <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:justify-end">
+            {/* AI 一键全流程：README → 角色设定 → 大纲 → 正文 → 全书汇总 → 配套素材，已有产物的步骤会跳过 */}
+            <button
+              type="button"
+              onClick={() => fullPipeline.run({ projectId, target: 10 })}
+              disabled={
+                fullPipeline.progress.running ||
+                pipeline.progress.running ||
+                project.data?.status !== 'writing'
+              }
+              title="串行跑完 6 步：README → 角色设定 → 大纲 → 正文 → 全书汇总 → 配套素材。已有产物的步骤会跳过。"
+              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50 sm:flex-none"
+              data-testid="full-pipeline-btn"
+            >
+              {fullPipeline.progress.running ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Rocket className="h-3 w-3" />
+              )}
+              {fullPipeline.progress.running
+                ? `第 ${fullPipeline.progress.done + 1}/${fullPipeline.progress.total} · ${
+                    fullPipeline.progress.currentKey
+                      ? PIPELINE_STEP_LABELS[fullPipeline.progress.currentKey]
+                      : ''
+                  }${
+                    fullPipeline.progress.currentKey === 'body' &&
+                    fullPipeline.progress.bodyChapter
+                      ? ` ${fullPipeline.progress.bodyChapter}/${fullPipeline.progress.bodyTotalChapters}章`
+                      : fullPipeline.progress.chars > 0
+                        ? ` · ${fullPipeline.progress.chars}字`
+                        : ''
+                  }`
+                : 'AI 一键全流程'}
+            </button>
+            {fullPipeline.progress.running && (
+              <button
+                type="button"
+                onClick={fullPipeline.abort}
+                className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 sm:flex-none"
+                data-testid="full-pipeline-abort-btn"
+              >
+                中断
+              </button>
+            )}
             <button
               type="button"
               onClick={runProjectizeFlow}
-              disabled={pipeline.progress.running}
+              disabled={pipeline.progress.running || fullPipeline.progress.running}
               title="串行重新生成 README → 角色设定，确认后再生成大纲"
               className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50 sm:flex-none"
               data-testid="projectize-flow-btn"
@@ -254,6 +305,29 @@ export default function ProjectDetail() {
             前期方案流失败：{pipeline.progress.error}
           </div>
         )}
+        {fullPipeline.progress.error && (
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-600 inline-flex items-center gap-1">
+            <TriangleAlert className="h-3 w-3" />
+            一键全流程中断/失败：{fullPipeline.progress.error}
+            {fullPipeline.progress.skipped.length > 0 && (
+              <span className="ml-2 text-gray-400">
+                （已跳过：
+                {fullPipeline.progress.skipped
+                  .map((k) => PIPELINE_STEP_LABELS[k])
+                  .join(' / ')}
+                ）
+              </span>
+            )}
+          </div>
+        )}
+        {fullPipeline.progress.running && fullPipeline.progress.skipped.length > 0 && (
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-gray-500">
+            已跳过（产物已存在）：
+            {fullPipeline.progress.skipped
+              .map((k) => PIPELINE_STEP_LABELS[k])
+              .join(' / ')}
+          </div>
+        )}
       </header>
 
       <main className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -266,8 +340,9 @@ export default function ProjectDetail() {
             hasOutline={!!outline}
             chapterCount={chapters.data?.length ?? 0}
             totalWords={chapters.data?.reduce((a, c) => a + c.word_count, 0) ?? 0}
-            hasPublishPost={!!publishPost}
+            hasBookSummary={!!bookSummary}
             hasSideDishes={!!sideDishes}
+            hasBlurb={!!blurb}
           />
           <ReadmeCard
             projectId={projectId}
@@ -327,10 +402,11 @@ export default function ProjectDetail() {
             disabledHint={
               bodyChars === 0 ? '先生成至少一章正文，再汇总。' : '正文生成中，暂不能汇总。'
             }
-            emptyHint="AI 会基于全章节正文整合出一版连贯完整正文。"
+            emptyHint="AI 会基于全章节正文整合出一版连贯完整正文。断章可续。"
             onDone={refreshArtifacts}
             copyable
             globalJob={aiJob}
+            resumable
           />
           <ArtifactStreamCard
             projectId={projectId}
@@ -340,20 +416,7 @@ export default function ProjectDetail() {
             endpoint={`/api/projects/${projectId}/ai-book-polish/stream`}
             disabled={!bookSummary}
             disabledHint="先生成全书汇总，再做优化升华。"
-            emptyHint="基于全书汇总继续去 AI 味、增强代入感和爽点节奏。"
-            onDone={refreshArtifacts}
-            copyable
-            globalJob={aiJob}
-          />
-          <ArtifactStreamCard
-            projectId={projectId}
-            kind="publish_post"
-            title="发布稿"
-            artifact={publishPost}
-            endpoint={`/api/projects/${projectId}/ai-publish/stream`}
-            disabled={!outline}
-            disabledHint="先生成 README 和大纲，再生成发布稿。"
-            emptyHint="生成面向平台发布的标题、简介、卖点和正文引流文案。"
+            emptyHint="AI 会做去 AI 味、增强代入感、优化阅读节奏，不改剧情不走结局。"
             onDone={refreshArtifacts}
             copyable
             globalJob={aiJob}
@@ -366,7 +429,20 @@ export default function ProjectDetail() {
             endpoint={`/api/projects/${projectId}/ai-side-dishes/stream`}
             disabled={!readme || !outline}
             disabledHint="先生成 README 和大纲，再生成配套素材。"
-            emptyHint="生成配套.md：标题变体、短视频钩子、评论区话术、封面关键词等。"
+            emptyHint="生成配套.md：标题变体、平台简介、推送语、标签、选段引流、评论区埋线。"
+            onDone={refreshArtifacts}
+            copyable
+            globalJob={aiJob}
+          />
+          <ArtifactStreamCard
+            projectId={projectId}
+            kind="blurb"
+            title="导语"
+            artifact={blurb}
+            endpoint={`/api/projects/${projectId}/ai-blurb/stream`}
+            disabled={!readme || !outline}
+            disabledHint="先生成 README 和大纲，再生成导语。"
+            emptyHint="生成 100-200 字叙事导语（四要素：开篇即冲突、人设清晰、强钩子、贴故事主线）。"
             onDone={refreshArtifacts}
             copyable
             globalJob={aiJob}
@@ -427,8 +503,9 @@ interface WorkflowStripProps {
   hasOutline: boolean
   chapterCount: number
   totalWords: number
-  hasPublishPost: boolean
+  hasBookSummary: boolean
   hasSideDishes: boolean
+  hasBlurb: boolean
 }
 
 function WorkflowStrip({
@@ -439,8 +516,9 @@ function WorkflowStrip({
   hasOutline,
   chapterCount,
   totalWords,
-  hasPublishPost,
+  hasBookSummary,
   hasSideDishes,
+  hasBlurb,
 }: WorkflowStripProps) {
   const steps = [
     { label: 'README', done: hasReadme, hint: hasReadme ? '已生成' : '点击下方 AI 生成' },
@@ -483,20 +561,29 @@ function WorkflowStrip({
             : '大纲后写作',
     },
     {
-      label: '发布稿',
-      done: hasPublishPost,
-      hint: hasPublishPost ? '已生成' : hasOutline ? '可生成' : '先生成大纲',
+      label: '全书汇总',
+      done: hasBookSummary,
+      hint: hasBookSummary
+        ? '已生成'
+        : chapterCount > 0 && totalWords > 0
+          ? '可生成'
+          : '先写正文',
     },
     {
       label: '配套',
       done: hasSideDishes,
       hint: hasSideDishes ? '已生成' : hasOutline ? '可生成' : '先生成大纲',
     },
+    {
+      label: '导语',
+      done: hasBlurb,
+      hint: hasBlurb ? '已生成' : hasOutline ? '可生成' : '先生成大纲',
+    },
   ]
 
   return (
     <section className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-7">
         {steps.map((step, index) => (
           <div
             key={step.label}
@@ -596,6 +683,7 @@ function copyDisplayText(kind: ArtifactKind, display: string): string {
     case 'outline':
     case 'publish_post':
     case 'side_dishes':
+    case 'blurb':
     case 'book_summary':
     case 'book_polished':
       return renderedMarkdownToPlainText(display)
@@ -632,26 +720,6 @@ async function downloadCompositedCover(
   if (!ctx) throw new Error('封面导出失败：canvas 不可用')
 
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-
-  if (titleText?.trim()) {
-    const text = titleText.trim()
-    const maxWidth = canvas.width * 0.84
-    let fontSize = 42
-    ctx.fillStyle = '#ffffff'
-    ctx.strokeStyle = 'rgba(0,0,0,0.42)'
-    ctx.lineWidth = 8
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'top'
-    while (fontSize > 26) {
-      ctx.font = `800 ${fontSize}px sans-serif`
-      if (ctx.measureText(text).width <= maxWidth) break
-      fontSize -= 2
-    }
-    const x = canvas.width / 2
-    const y = Math.round(canvas.height * 0.08)
-    ctx.strokeText(text, x, y, maxWidth)
-    ctx.fillText(text, x, y, maxWidth)
-  }
 
   if (showAuthor && authorName?.trim()) {
     const text = authorName.trim()
@@ -719,6 +787,7 @@ interface ArtifactStreamCardProps {
   externalStreaming?: boolean
   notice?: React.ReactNode
   footer?: React.ReactNode
+  resumable?: boolean
 }
 
 function ArtifactStreamCard({
@@ -737,6 +806,7 @@ function ArtifactStreamCard({
   externalStreaming = false,
   notice,
   footer,
+  resumable = false,
 }: ArtifactStreamCardProps) {
   const activeJob = globalJob?.kind === kind ? globalJob : undefined
   const startedAtRef = useRef(0)
@@ -819,6 +889,21 @@ function ArtifactStreamCard({
           )}
           {artifact ? '重新生成' : `AI 生成${title}`}
         </button>
+        {resumable && sse.status === 'error' && artifact && (
+          <button
+            type="button"
+            onClick={() => {
+              // 统计已有内容的章节数（每章以 "# 第" 开头）
+              const existing = artifact?.content ?? ''
+              const chapterCount = (existing.match(/^# 第/gm) || []).length
+              sse.start(`${endpoint}?from=${chapterCount}`)
+            }}
+            disabled={disabled}
+            className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100"
+          >
+            中断续传
+          </button>
+        )}
       </header>
 
       {disabled && <p className="text-xs text-gray-400 mb-2">{disabledHint}</p>}
@@ -830,6 +915,15 @@ function ArtifactStreamCard({
           <Sparkles className="h-3 w-3 animate-pulse" />
           AI 生成中 · {statusTitle}
           {statusChars > 0 ? ` · ${statusChars}字` : ''}
+        </p>
+      )}
+      {streaming && sse.retry && (
+        <p
+          className="mb-2 inline-flex items-center gap-1 text-xs text-amber-600"
+          data-testid={`${kind}-retry-status`}
+        >
+          <Loader2 className="h-3 w-3 animate-spin" />
+          上游繁忙，正在重试（{sse.retry.attempt}/{sse.retry.max}）…
         </p>
       )}
       {sse.status === 'error' && (
@@ -1386,20 +1480,31 @@ function StoryImageCard({
   const [error, setError] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [downloading, setDownloading] = useState(false)
-  const [size, setSize] = useState<'1024x1024' | '1024x1536' | '1536x1024'>('1024x1536')
+  const [preset, setPreset] = useState<'cover' | 'square' | 'banner' | 'auto' | 'custom'>('cover')
+  const [customVal, setCustomVal] = useState('')
   const [showAuthor, setShowAuthor] = useState(false)
-  const [authorName, setAuthorName] = useState('作者名')
+  const [authorName, setAuthorName] = useState('')
   const [exportFormat, setExportFormat] = useState<'png' | 'jpg' | 'jpeg'>('png')
   const [exportQuality, setExportQuality] = useState(88)
   const payload = parseStoryImageArtifact(artifact)
   const activeJob = globalJob?.kind === 'story_image' ? globalJob : undefined
 
+  const sizeMap: Record<string, string> = {
+    cover: '2:3',
+    square: '1:1',
+    banner: '3:2',
+    auto: 'auto',
+  }
+  const currentSize = preset === 'custom' ? customVal : (sizeMap[preset] ?? '2:3')
+
   useEffect(() => {
     if (!payload) return
     setShowAuthor(payload.show_author)
-    setAuthorName(payload.author_name ?? '作者名')
-    if (payload.cover_size === '1024x1024' || payload.cover_size === '1024x1536' || payload.cover_size === '1536x1024') {
-      setSize(payload.cover_size)
+    if (payload.author_name) setAuthorName(payload.author_name)
+    if (payload.cover_size) {
+      const found = Object.entries(sizeMap).find(([, v]) => v === payload.cover_size)
+      if (found) setPreset(found[0] as typeof preset)
+      else { setPreset('custom'); setCustomVal(payload.cover_size) }
     }
   }, [payload])
 
@@ -1416,7 +1521,7 @@ function StoryImageCard({
     })
     try {
       await imagesApi.generateStoryImage(projectId, {
-        size,
+        size: currentSize,
         quality: 'high',
         author_name: authorName,
         show_author: showAuthor,
@@ -1457,37 +1562,70 @@ function StoryImageCard({
           {artifact ? '重新生成' : 'AI 生成小说配图'}
         </button>
       </header>
+
       {disabled && <p className="mb-2 text-xs text-gray-400">{disabledHint}</p>}
+
+      {/* 尺寸预设 */}
       <div className="mb-3 flex flex-wrap gap-2">
         {[
-          { value: '1024x1536', label: '番茄封面' },
-          { value: '1024x1024', label: '方图' },
-          { value: '1536x1024', label: '横版宣传图' },
-        ].map((option) => (
+          { key: 'cover', label: '番茄封面' },
+          { key: 'square', label: '方图' },
+          { key: 'banner', label: '横版宣传图' },
+          { key: 'auto', label: '自动' },
+        ].map((opt) => (
           <button
-            key={option.value}
+            key={opt.key}
             type="button"
-            onClick={() => setSize(option.value as typeof size)}
+            onClick={() => setPreset(opt.key as typeof preset)}
             className={`rounded-full px-3 py-1 text-[11px] ${
-              size === option.value
+              preset === opt.key
                 ? 'bg-sky-100 text-sky-700'
                 : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
             }`}
           >
-            {option.label}
+            {opt.label}
           </button>
         ))}
+        <button
+          type="button"
+          onClick={() => setPreset('custom')}
+          className={`rounded-full px-3 py-1 text-[11px] ${
+            preset === 'custom'
+              ? 'bg-sky-100 text-sky-700'
+              : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+          }`}
+        >
+          自定义
+        </button>
       </div>
+      {preset === 'custom' && (
+        <div className="mb-3 rounded-md border border-gray-200 bg-gray-50 p-3">
+          <label className="text-xs font-medium text-gray-700">
+            自定义尺寸
+            <input
+              type="text"
+              value={customVal}
+              onChange={(e) => setCustomVal(e.target.value)}
+              placeholder="2:3 或 1024x1792"
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-xs shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+            />
+          </label>
+          <p className="mt-1 text-[11px] text-gray-400">支持比例如 2:3 或像素如 1024x1792</p>
+        </div>
+      )}
+
+      {/* 作者署名 + 导出 */}
       <div className="mb-3 rounded-md border border-gray-200 bg-gray-50 p-3">
         <p className="mb-2 text-[11px] leading-5 text-gray-500">
-          默认按番茄小说封面导出：600×800 像素；预览和下载都会叠加清晰作品名称，作者署名可选。
+          默认按番茄小说封面尺寸 2:3 生成；预览和下载叠加作品名，作者署名可选。
         </p>
-        <label className="flex items-center gap-2 text-xs text-gray-700">
+
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-700 select-none">
           <input
             type="checkbox"
             checked={showAuthor}
-            onChange={(e) => setShowAuthor(e.target.checked)}
-            className="rounded border-gray-300"
+            onChange={(e) => { setShowAuthor(e.target.checked); setAuthorName(a => a || '作者名') }}
+            className="h-4 w-4 rounded border-gray-300 accent-sky-600"
           />
           封面带作者署名
         </label>
@@ -1500,13 +1638,14 @@ function StoryImageCard({
             className="mt-2 block w-full rounded-md border border-gray-300 px-3 py-2 text-xs shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
           />
         )}
-        <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
           <label className="text-[11px] font-medium text-gray-600">
             导出格式
             <select
               value={exportFormat}
               onChange={(e) => setExportFormat(e.target.value as typeof exportFormat)}
-              className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs text-gray-700 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+              className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
               data-testid="cover-export-format"
             >
               <option value="png">PNG 无损</option>
@@ -1518,9 +1657,9 @@ function StoryImageCard({
             JPEG 质量：{exportQuality}%
             <input
               type="range"
-              min="60"
-              max="95"
-              step="1"
+              min={60}
+              max={95}
+              step={1}
               value={exportQuality}
               disabled={exportFormat === 'png'}
               onChange={(e) => setExportQuality(Number(e.target.value))}
@@ -1529,14 +1668,15 @@ function StoryImageCard({
             />
           </label>
         </div>
-        <p className="mt-2 text-[11px] leading-5 text-gray-400">
-          平台要求小于 5MB 时优先选 JPG/JPEG；若仍超限，降低质量后重新下载。
+        <p className="mt-2 text-[11px] text-gray-400">
+          平台要求小于 5MB 时优先选 JPG/JPEG；仍超限则降低质量后重新下载。
         </p>
       </div>
+
       {(generating || activeJob) && (
         <p className="mb-2 inline-flex items-center gap-1 text-xs text-sky-700">
           <Sparkles className="h-3 w-3 animate-pulse" />
-          AI 生成中 · 小说配图 · {size}
+          AI 生成中 · {currentSize}
         </p>
       )}
       {error && (
@@ -1544,6 +1684,7 @@ function StoryImageCard({
           <TriangleAlert className="h-3 w-3" /> 生成失败：{error}
         </p>
       )}
+
       {payload ? (
         <div className="space-y-3">
           <div className="relative overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
@@ -1552,18 +1693,13 @@ function StoryImageCard({
               alt="小说配图"
               className="mx-auto block max-h-[520px] w-full object-contain"
             />
-            {payload.title_text && (
-              <div className="pointer-events-none absolute left-1/2 top-6 w-[84%] -translate-x-1/2 text-center text-lg font-extrabold leading-tight tracking-[0.04em] text-white drop-shadow-[0_3px_10px_rgba(0,0,0,0.85)] sm:text-2xl">
-                {payload.title_text}
-              </div>
-            )}
             {payload.show_author && payload.author_name && (
-              <div className="pointer-events-none absolute bottom-4 right-4 rounded-full bg-black/55 px-3 py-1.5 text-xs font-medium tracking-[0.08em] text-white shadow-lg backdrop-blur-sm">
+              <div className="pointer-events-none absolute bottom-4 right-4 rounded-full bg-black/55 px-3 py-1.5 text-xs font-medium text-white shadow-lg backdrop-blur-sm">
                 {payload.author_name}
               </div>
             )}
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={async () => {
@@ -1575,10 +1711,7 @@ function StoryImageCard({
                     payload.title_text,
                     payload.author_name,
                     payload.show_author,
-                    {
-                      format: exportFormat,
-                      quality: exportQuality / 100,
-                    },
+                    { format: exportFormat, quality: exportQuality / 100 },
                   )
                 } catch (e) {
                   setError(extractErrorMessage(e))
@@ -1606,7 +1739,7 @@ function StoryImageCard({
         </div>
       ) : (
         <p className="text-xs text-gray-400">
-          生成一张用于小说封面/首图的高情绪配图，优先吃 README、大纲和配套素材里的封面关键词。
+          生成一张小说封面配图，优先吃 README、大纲和配套素材里的封面关键词。
         </p>
       )}
     </section>
@@ -1636,6 +1769,7 @@ function BodyGenCard({
   bodyNeedsRefresh,
 }: BodyGenCardProps) {
   const { progress, run, abort } = useFullBook()
+  const confirm = useConfirm()
   const [target, setTarget] = useState(10)
   const chapterCount = chapters?.length ?? 0
   const totalWords = chapters?.reduce((a, c) => a + c.word_count, 0) ?? 0
@@ -1710,10 +1844,42 @@ function BodyGenCard({
                 ? '续写正文'
                 : 'AI 一键全篇'}
           </button>
-          {progress.running && (
+          {chapterCount > 0 && !activeProgress.running && (
             <button
               type="button"
-              onClick={abort}
+              onClick={async () => {
+                const ok = await confirm({
+                  title: '重新生成全部正文？',
+                  description: (
+                    <>
+                      会<span className="font-semibold text-rose-600">清空现有 {chapterCount} 章正文</span>
+                      （共 {totalWords} 字），重新拆段并按更短的篇幅（每章约 2000 字）重写全书。
+                      <span className="text-gray-500">此操作不可恢复</span>，建议先确认你不需要现有内容。
+                    </>
+                  ),
+                  confirmText: '清空并重写',
+                  tone: 'danger',
+                })
+                if (ok) run({ projectId, target, forceRegenerate: true })
+              }}
+              disabled={blocked}
+              title={blocked ? blockedHint : '清空现有正文，每章约 2000 字重写全书（更短，便于全书汇总）'}
+              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50 sm:flex-none"
+              data-testid="ai-body-regen-btn"
+            >
+              <RefreshCw className="h-3 w-3" />
+              重新生成
+            </button>
+          )}
+          {activeProgress.running && (
+            <button
+              type="button"
+              onClick={() => {
+                // 本页真在跑就中断它；若只是 localStorage 残留的幽灵任务（页面曾被刷新/关闭，
+                // 清除逻辑没跑完），abort 是空操作，靠 clearAiJob 把它清掉解锁 UI。
+                abort()
+                clearAiJob(projectId)
+              }}
               className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 sm:flex-none"
               data-testid="ai-body-abort-btn"
               title="中断后已写入的段不会回滚"

@@ -18,6 +18,7 @@ export type ArtifactKind =
   | 'outline'
   | 'publish_post'
   | 'side_dishes'
+  | 'blurb'
   | 'story_image'
   | 'book_summary'
   | 'book_polished'

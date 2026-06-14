@@ -7,6 +7,7 @@ import { chaptersApi } from '../api/chapters'
 import { aiJobKindLabel, useAllAiJobs, type AiJob } from '../hooks/useAiJobStore'
 import { useConfirm } from './ConfirmDialog'
 import TrackPills from './TrackPills'
+import { looksLikeTestData } from '../lib/looksLikeTestData'
 
 type FilterStatus = ProjectStatus | 'all'
 
@@ -31,11 +32,6 @@ const NEXT_LABEL: Record<ProjectStatus, string | null> = {
   archived: null,
 }
 
-/** 跟 Seeds 同款启发式：「测试 / e2e / smoke / playwright / test」前缀 */
-const TEST_PREFIX_RE = /^(测试|e2e|smoke|playwright|test)/i
-function looksLikeTestData(title: string): boolean {
-  return TEST_PREFIX_RE.test(title.trim())
-}
 
 interface ProjectListProps {
   /** 'all' = 显示所有状态，并展示状态 tab 切换 */

@@ -7,6 +7,7 @@ export interface SettingsView {
   has_api_key: boolean
   model: string
   image_model: string
+  duomiapi_key_set: boolean
   timeout_secs: number
 }
 
@@ -16,6 +17,7 @@ export interface SettingsPatch {
   api_key?: string
   model?: string
   image_model?: string
+  duomiapi_key?: string
   timeout_secs?: number
 }
 
