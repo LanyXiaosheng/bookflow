@@ -41,6 +41,11 @@ import { useFullPipeline, PIPELINE_STEP_LABELS } from '../hooks/useFullPipeline'
 import { usePipeline } from '../hooks/usePipeline'
 import { renderedMarkdownToPlainText } from '../lib/copyRenderedMarkdown'
 import { extractCharacterNamesFromReadme } from '../lib/extractCharacterNames'
+import {
+  readConfirmedCharacterSetupVersion,
+  writeConfirmedCharacterSetupVersion,
+} from '../lib/characterSetupConfirm'
+import { readStoryImageAuthor, writeStoryImageAuthor } from '../lib/storyImageAuthor'
 
 type PreflightDrafts = Record<'readme' | 'character_setup', string>
 
@@ -48,35 +53,6 @@ function emptyPreflightDrafts(): PreflightDrafts {
   return { readme: '', character_setup: '' }
 }
 
-function confirmedCharacterSetupKey(projectId: string): string {
-  return `bookflow.character-setup-confirmed:${projectId}`
-}
-
-function readConfirmedCharacterSetupVersion(projectId: string): number | null {
-  try {
-    const raw = localStorage.getItem(confirmedCharacterSetupKey(projectId))
-    if (!raw) return null
-    const version = Number.parseInt(raw, 10)
-    return Number.isFinite(version) ? version : null
-  } catch {
-    return null
-  }
-}
-
-function writeConfirmedCharacterSetupVersion(
-  projectId: string,
-  version: number | null,
-) {
-  try {
-    if (version === null) {
-      localStorage.removeItem(confirmedCharacterSetupKey(projectId))
-      return
-    }
-    localStorage.setItem(confirmedCharacterSetupKey(projectId), String(version))
-  } catch {
-    // ignore storage write errors
-  }
-}
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>()
@@ -195,6 +171,18 @@ export default function ProjectDetail() {
     if (ok) await refreshArtifacts()
     setPreflightDrafts(emptyPreflightDrafts())
   }
+
+  // 一键全流程跑过角色设定后自动确认当前版本：流程会一路跑到大纲/正文，
+  // 用户无需手动点「确认」，避免跑完还卡在「待确认」。
+  useEffect(() => {
+    if (
+      fullPipeline.progress.running &&
+      characterSetup &&
+      confirmedCharacterSetupVersion !== characterSetup.version
+    ) {
+      setConfirmedCharacterSetupVersion(characterSetup.version)
+    }
+  }, [fullPipeline.progress.running, characterSetup, confirmedCharacterSetupVersion])
 
   return (
     <div className="bg-gray-50">
@@ -426,6 +414,8 @@ export default function ProjectDetail() {
             emptyHint="AI 会做去 AI 味、增强代入感、优化阅读节奏，不改剧情不走结局。"
             onDone={refreshArtifacts}
             copyable
+            downloadable
+            projectTitle={project.data?.title}
             globalJob={aiJob}
           />
           <ArtifactStreamCard
@@ -439,6 +429,8 @@ export default function ProjectDetail() {
             emptyHint="生成配套.md：标题变体、平台简介、推送语、标签、选段引流、评论区埋线。"
             onDone={refreshArtifacts}
             copyable
+            downloadable
+            projectTitle={project.data?.title}
             globalJob={aiJob}
           />
           <StoryImageCard
@@ -663,6 +655,20 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
+/** 把文本下载成 txt（带 BOM，Windows 记事本不乱码）。文件名做基本清洗。 */
+function downloadTextFile(content: string, filename: string) {
+  const safe = filename.replace(/[\\/:*?"<>|]/g, '_').slice(0, 120)
+  const blob = new Blob(['﻿', content], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = safe.endsWith('.txt') ? safe : `${safe}.txt`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 function copyDisplayText(kind: ArtifactKind, display: string): string {
   switch (kind) {
     case 'readme':
@@ -682,9 +688,6 @@ function copyDisplayText(kind: ArtifactKind, display: string): string {
 async function downloadCompositedCover(
   dataUrl: string,
   filename: string,
-  _titleText?: string | null,
-  authorName?: string | null,
-  showAuthor?: boolean,
   options?: {
     format?: 'png' | 'jpg' | 'jpeg'
     quality?: number
@@ -733,34 +736,8 @@ async function downloadCompositedCover(
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
   }
 
-  if (showAuthor && authorName?.trim()) {
-    const text = authorName.trim()
-    // 底部居中、大字、白字描边 + 阴影；3:4 裁剪保留顶部切底部，但底部仍留安全边
-    const fontSize = Math.max(34, Math.round(canvas.width * 0.072))
-    ctx.font = `700 ${fontSize}px sans-serif`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'alphabetic'
-    const cx = canvas.width / 2
-    const baseline = canvas.height - Math.round(canvas.height * 0.05)
-
-    // 阴影让浅底图也能看清
-    ctx.save()
-    ctx.shadowColor = 'rgba(0,0,0,0.55)'
-    ctx.shadowBlur = Math.round(fontSize * 0.4)
-    ctx.shadowOffsetY = Math.round(fontSize * 0.06)
-    // 深色描边
-    ctx.lineWidth = Math.max(3, Math.round(fontSize * 0.14))
-    ctx.lineJoin = 'round'
-    ctx.strokeStyle = 'rgba(0,0,0,0.65)'
-    ctx.strokeText(text, cx, baseline)
-    ctx.restore()
-    // 白色字面
-    ctx.fillStyle = '#ffffff'
-    ctx.fillText(text, cx, baseline)
-    // 复位，避免影响后续绘制
-    ctx.textAlign = 'left'
-    ctx.textBaseline = 'alphabetic'
-  }
+  // 注意：作者署名由生图提示词烘进图里（后端 build_story_image_prompt），
+  // 这里不再做后处理叠字，避免出现两个作者名。
 
   const format = options?.format ?? 'png'
   const mimeType = format === 'png' ? 'image/png' : 'image/jpeg'
@@ -791,6 +768,10 @@ interface ArtifactStreamCardProps {
   emptyHint: string
   onDone: () => void
   copyable?: boolean
+  /** 显示「下载 txt」按钮，文件名 = 书名-模块.txt */
+  downloadable?: boolean
+  /** 书名，用于下载文件名 */
+  projectTitle?: string
   globalJob?: AiJob
   externalText?: string
   externalStreaming?: boolean
@@ -810,6 +791,8 @@ function ArtifactStreamCard({
   emptyHint,
   onDone,
   copyable = false,
+  downloadable = false,
+  projectTitle,
   globalJob,
   externalText,
   externalStreaming = false,
@@ -881,6 +864,23 @@ function ArtifactStreamCard({
             data-testid={`copy-${kind}-btn`}
           >
             {copyState === 'done' ? '已复制' : copyState === 'error' ? '复制失败' : '复制'}
+          </button>
+        )}
+        {display && downloadable && (
+          <button
+            type="button"
+            onClick={() =>
+              downloadTextFile(
+                copyDisplayText(kind, display),
+                `${projectTitle?.trim() || '未命名'}-${title}`,
+              )
+            }
+            className={`${copyable ? '' : 'ml-auto '}inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50`}
+            data-testid={`download-${kind}-btn`}
+            title={`下载 ${projectTitle?.trim() || '未命名'}-${title}.txt`}
+          >
+            <Download className="h-3 w-3" />
+            下载
           </button>
         )}
         <button
@@ -1491,8 +1491,12 @@ function StoryImageCard({
   const [downloading, setDownloading] = useState(false)
   const [preset, setPreset] = useState<'cover' | 'square' | 'banner' | 'auto' | 'custom'>('cover')
   const [customVal, setCustomVal] = useState('')
-  const [showAuthor, setShowAuthor] = useState(false)
-  const [authorName, setAuthorName] = useState('')
+  const [showAuthor, setShowAuthor] = useState(
+    () => readStoryImageAuthor(projectId)?.showAuthor ?? false,
+  )
+  const [authorName, setAuthorName] = useState(
+    () => readStoryImageAuthor(projectId)?.authorName ?? '',
+  )
   const [exportFormat, setExportFormat] = useState<'png' | 'jpg' | 'jpeg'>('png')
   const [exportQuality, setExportQuality] = useState(88)
   const payload = parseStoryImageArtifact(artifact)
@@ -1508,14 +1512,23 @@ function StoryImageCard({
 
   useEffect(() => {
     if (!payload) return
-    setShowAuthor(payload.show_author)
-    if (payload.author_name) setAuthorName(payload.author_name)
+    // 优先尊重本地已保存的署名设置；仅当本地没有时才用产物里的值回填
+    const stored = readStoryImageAuthor(projectId)
+    if (!stored) {
+      setShowAuthor(payload.show_author)
+      if (payload.author_name) setAuthorName(payload.author_name)
+    }
     if (payload.cover_size) {
       const found = Object.entries(sizeMap).find(([, v]) => v === payload.cover_size)
       if (found) setPreset(found[0] as typeof preset)
       else { setPreset('custom'); setCustomVal(payload.cover_size) }
     }
-  }, [payload])
+  }, [payload, projectId])
+
+  // 作者署名设置变化即持久化，离开页面再回来不丢
+  useEffect(() => {
+    writeStoryImageAuthor(projectId, { authorName, showAuthor })
+  }, [projectId, authorName, showAuthor])
 
   const start = async () => {
     setError(null)
@@ -1552,9 +1565,6 @@ function StoryImageCard({
       await downloadCompositedCover(
         payload.data_url,
         storyImageFilename(projectId, exportFormat),
-        payload.title_text,
-        payload.author_name,
-        payload.show_author,
         { format: exportFormat, quality: exportQuality / 100, fit },
       )
     } catch (e) {
@@ -1695,19 +1705,6 @@ function StoryImageCard({
               alt="小说配图"
               className="mx-auto block max-h-[520px] w-full object-contain"
             />
-            {payload.show_author && payload.author_name && (
-              <div className="pointer-events-none absolute inset-x-0 bottom-[5%] flex justify-center">
-                <span
-                  className="text-center text-2xl font-bold text-white sm:text-3xl"
-                  style={{
-                    textShadow:
-                      '0 2px 8px rgba(0,0,0,0.6), -1.5px -1.5px 0 rgba(0,0,0,0.65), 1.5px -1.5px 0 rgba(0,0,0,0.65), -1.5px 1.5px 0 rgba(0,0,0,0.65), 1.5px 1.5px 0 rgba(0,0,0,0.65)',
-                  }}
-                >
-                  {payload.author_name}
-                </span>
-              </div>
-            )}
           </div>
           {/* 导出选项 */}
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">

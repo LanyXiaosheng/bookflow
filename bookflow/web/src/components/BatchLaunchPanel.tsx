@@ -30,9 +30,10 @@ interface Props {
   state: BatchState
   onAbort: () => void
   onClose: () => void
+  onRetryFailed?: () => void
 }
 
-export default function BatchLaunchPanel({ state, onAbort, onClose }: Props) {
+export default function BatchLaunchPanel({ state, onAbort, onClose, onRetryFailed }: Props) {
   if (state.items.length === 0) return null
   const done = state.items.filter((i) => i.status === 'done').length
   const failed = state.items.filter((i) => i.status === 'failed').length
@@ -58,22 +59,35 @@ export default function BatchLaunchPanel({ state, onAbort, onClose }: Props) {
             中断全部
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={onClose}
-            className="ml-auto inline-flex items-center gap-1 rounded-md p-1 text-gray-400 hover:bg-white hover:text-gray-600"
-            aria-label="关闭"
-            data-testid="batch-close-btn"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            {failed > 0 && onRetryFailed && (
+              <button
+                type="button"
+                onClick={onRetryFailed}
+                className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                data-testid="batch-retry-failed-btn"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                重试失败（{failed}）
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex items-center gap-1 rounded-md p-1 text-gray-400 hover:bg-white hover:text-gray-600"
+              aria-label="关闭"
+              data-testid="batch-close-btn"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         )}
       </header>
       <ul className="divide-y divide-slate-100" data-testid="batch-items">
         {state.items.map((it) => {
           const meta = STATUS_META[it.status]
           return (
-            <li key={it.seedId} className="flex items-center gap-3 px-5 py-2.5 text-sm">
+            <li key={it.key} className="flex items-center gap-3 px-5 py-2.5 text-sm">
               <span className="shrink-0">
                 {it.status === 'running' || it.status === 'launching' ? (
                   <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
@@ -102,6 +116,9 @@ export default function BatchLaunchPanel({ state, onAbort, onClose }: Props) {
                   <div className="mt-0.5 flex items-center gap-2 text-[11px] text-violet-600">
                     <span>
                       {(it.stepIndex ?? 0) + 1}/{it.stepTotal} · {STEP_LABEL[it.step] ?? it.step}
+                      {it.step === 'body' && it.bodyChapter
+                        ? ` ${it.bodyChapter}/${it.bodyTotalChapters}章`
+                        : ''}
                     </span>
                     {it.retry && (
                       <span className="inline-flex items-center gap-0.5 text-amber-600">

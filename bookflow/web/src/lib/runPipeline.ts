@@ -39,6 +39,8 @@ export interface RunPipelineOpts {
   onStep?: (step: PipelineStepKey, index: number, total: number) => void
   /** 该步骤失败、即将自动重跑时回调 */
   onStepRetry?: (step: PipelineStepKey, attempt: number, max: number) => void
+  /** 正文步骤逐章进度回调 */
+  onBodyProgress?: (chapter: number, totalChapters: number) => void
 }
 
 const ARTIFACT_KIND_BY_STEP: Partial<Record<PipelineStepKey, ArtifactKind>> = {
@@ -189,6 +191,7 @@ async function runBody(
   projectId: string,
   target: number,
   signal: AbortSignal,
+  onChapter?: (chapter: number, total: number) => void,
   skipIfChars = 100,
 ): Promise<void> {
   let list = await chaptersApi.listByProject(projectId)
@@ -198,6 +201,7 @@ async function runBody(
   }
   for (let i = 0; i < target; i++) {
     if (signal.aborted) throw new Error('已中断')
+    onChapter?.(i + 1, target)
     const ch: Chapter = list[i]
     const title = ch.title?.trim() || `第${ch.idx}章`
     let beats = ch.beats ?? []
@@ -260,7 +264,9 @@ export async function runProjectPipeline(
         if (signal.aborted) throw new Error('已中断')
         try {
           if (step === 'body') {
-            await runBody(projectId, target, signal)
+            await runBody(projectId, target, signal, (ch, tot) =>
+              opts.onBodyProgress?.(ch, tot),
+            )
           } else {
             await runSseStep(endpointForStep(projectId, step), signal)
           }

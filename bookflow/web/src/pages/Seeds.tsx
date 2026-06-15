@@ -6,7 +6,7 @@ import { seedsApi, type AiScoreResponse, type AiSeedCandidate, type Score, type 
 import { projectsApi, type Project } from '../api/projects'
 import { extractErrorMessage } from '../api/errors'
 import { useConfirm } from '../components/ConfirmDialog'
-import { useBatchLaunch } from '../hooks/useBatchLaunch'
+import { useBatchLaunch, type BatchInput } from '../hooks/useBatchLaunch'
 import BatchLaunchPanel from '../components/BatchLaunchPanel'
 import TrackPills from '../components/TrackPills'
 import {
@@ -140,6 +140,15 @@ export default function Seeds() {
       else next.add(id)
       return next
     })
+  // 历史候选批量选择（draftId）
+  const [selectedDrafts, setSelectedDrafts] = useState<Set<string>>(new Set())
+  const toggleSelectDraft = (id: string) =>
+    setSelectedDrafts((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   /** 应用「隐藏测试」过滤后的种子列表 */
   const visibleSeeds = useMemo(() => {
@@ -168,12 +177,29 @@ export default function Seeds() {
     })
 
   const runBatch = () => {
-    const picks = launchableSeeds
+    const picks: BatchInput[] = launchableSeeds
       .filter((s) => selected.has(s.id))
-      .map((s) => ({ seedId: s.id, title: s.title }))
+      .map((s) => ({ kind: 'seed' as const, key: s.id, title: s.title, seedId: s.id }))
     if (picks.length === 0) return
     batch.run(picks, batchTarget)
     setSelected(new Set())
+  }
+
+  /** 历史候选批量：先建种子→立项→跑全流程。已立项为「已发/归档」的候选不可选。 */
+  const runBatchDrafts = () => {
+    const byTitle = drafts.data ?? []
+    const picks: BatchInput[] = byTitle
+      .filter((d) => selectedDrafts.has(d.id) && d.total_score >= 23)
+      .map((d) => ({
+        kind: 'draft' as const,
+        key: d.id,
+        title: d.title,
+        track: d.track,
+        score: d.score,
+      }))
+    if (picks.length === 0) return
+    batch.run(picks, batchTarget)
+    setSelectedDrafts(new Set())
   }
 
   const aiScore = useMutation<AiScoreResponse, Error, { title: string; track: string }>({
@@ -254,7 +280,12 @@ export default function Seeds() {
   return (
     <>
     <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-      <BatchLaunchPanel state={batch.state} onAbort={batch.abort} onClose={batch.reset} />
+      <BatchLaunchPanel
+        state={batch.state}
+        onAbort={batch.abort}
+        onClose={batch.reset}
+        onRetryFailed={batch.retryFailed}
+      />
       {/* AI 批量生成选题（紧凑可折叠） */}
       <section
         className="mb-5 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200"
@@ -463,13 +494,42 @@ export default function Seeds() {
               已被立项为「已发」/「归档」的标题会被隐藏，不占列表空间。 */}
           {drafts.data && drafts.data.length > 0 && (
             <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50/60 p-4">
-              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                 <History className="h-3.5 w-3.5" /> 历史候选 · 全部赛道（{
                   drafts.data.filter((d) =>
                     !aiGen.data?.candidates.some((c) => c.title === d.title) &&
                     !finishedDraftTitles.has(d.title)
                   ).length
                 }）
+                {selectedDrafts.size > 0 && (
+                  <span className="ml-2 inline-flex items-center gap-2 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 normal-case tracking-normal">
+                    <span className="text-[11px] font-medium text-violet-700">
+                      已选 {selectedDrafts.size}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={runBatchDrafts}
+                      disabled={batch.state.running}
+                      className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+                      data-testid="batch-launch-drafts-btn"
+                      title="对选中候选先建种子再立项，并发跑全流程"
+                    >
+                      {batch.state.running ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Rocket className="h-3 w-3" />
+                      )}
+                      批量立项 + 全流程
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDrafts(new Set())}
+                      className="text-[11px] text-violet-500 hover:text-violet-700"
+                    >
+                      清空
+                    </button>
+                  </span>
+                )}
               </div>
               <ul className="grid gap-3 lg:grid-cols-2" data-testid="drafts-list">
                 {drafts.data
@@ -499,6 +559,9 @@ export default function Seeds() {
                       }
                       isLaunching={false}
                       disabled={adoptAndCreate.isPending || projectize.isPending}
+                      selectable={d.total_score >= 23}
+                      selected={selectedDrafts.has(d.id)}
+                      onToggleSelect={() => toggleSelectDraft(d.id)}
                     />
                   ))}
               </ul>
@@ -764,7 +827,7 @@ export default function Seeds() {
                   disabled={selected.size === 0 || batch.state.running}
                   className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
                   data-testid="batch-launch-btn"
-                  title="并发 3 个跑全流程，带失败自动重试"
+                  title="并发跑全流程，带失败自动重试"
                 >
                   {batch.state.running ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1030,6 +1093,10 @@ interface CandidateCardProps {
   muted?: boolean
   /** 历史候选展示自己的赛道，方便跨赛道一眼区分 */
   track?: string
+  /** 批量选择（仅历史候选用）；传了才渲染勾选框 */
+  selectable?: boolean
+  selected?: boolean
+  onToggleSelect?: () => void
 }
 
 function CandidateCard({
@@ -1044,6 +1111,9 @@ function CandidateCard({
   disabled,
   muted,
   track,
+  selectable,
+  selected,
+  onToggleSelect,
 }: CandidateCardProps) {
   const total = DIM_KEYS.reduce((a, k) => a + score[k], 0)
   const t = tierOf(total)
@@ -1053,7 +1123,19 @@ function CandidateCard({
       className={`rounded-2xl border border-slate-200 p-4 ${muted ? 'bg-white' : 'bg-slate-50/70'}`}
     >
       <div className="flex items-start justify-between gap-3">
-        <h3 className="text-sm font-semibold text-gray-900 leading-6">{title}</h3>
+        <div className="flex min-w-0 items-start gap-2">
+          {selectable && (
+            <input
+              type="checkbox"
+              checked={!!selected}
+              onChange={onToggleSelect}
+              className="mt-1 h-3.5 w-3.5 shrink-0 accent-violet-600"
+              data-testid={`${testIdPrefix}-select-${index}`}
+              aria-label={`选择 ${title}`}
+            />
+          )}
+          <h3 className="text-sm font-semibold text-gray-900 leading-6">{title}</h3>
+        </div>
         <span
           className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${TIER_BG[t]}`}
         >

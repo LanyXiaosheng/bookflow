@@ -1,16 +1,22 @@
 /**
  * 批量立项 + 批量跑「AI 一键全流程」。
  *
- * 对选中的每个 seed：createFromSeed → runProjectPipeline（带步骤重试）。
- * 并发上限 BATCH_CONCURRENCY（账号池小，3 并发，底层还有退避重试兜底）。
+ * 支持三种输入：
+ *  - seed：已有种子 → createFromSeed → 跑流程
+ *  - draft：历史候选 → 先 create 建种子 → createFromSeed → 跑流程
+ *  - project：已有项目 → 跳过立项，直接跑流程
+ *
+ * 并发上限 BATCH_CONCURRENCY；底层每步还有退避重试 + AI 调用级重试兜底 429。
  * 每个条目的状态对外暴露，UI 实时展示。
  */
 import { useCallback, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { projectsApi } from '../api/projects'
+import { seedsApi, type Score } from '../api/seeds'
+import { extractErrorMessage } from '../api/errors'
 import { runProjectPipeline, type PipelineStepKey } from '../lib/runPipeline'
 
-export const BATCH_CONCURRENCY = 3
+export const BATCH_CONCURRENCY = 20
 
 export type BatchItemStatus =
   | 'pending'
@@ -21,13 +27,16 @@ export type BatchItemStatus =
   | 'aborted'
 
 export interface BatchItem {
-  seedId: string
+  /** 稳定 key（seedId / draftId / projectId），用于状态定位 */
+  key: string
   title: string
   status: BatchItemStatus
   projectId?: string
   step?: PipelineStepKey
   stepIndex?: number
   stepTotal?: number
+  bodyChapter?: number
+  bodyTotalChapters?: number
   retry?: { attempt: number; max: number }
   error?: string
 }
@@ -37,20 +46,30 @@ export interface BatchState {
   items: BatchItem[]
 }
 
-export interface BatchSeedInput {
-  seedId: string
-  title: string
-}
+/** 三种批量输入 */
+export type BatchInput =
+  | { kind: 'seed'; key: string; title: string; seedId: string }
+  | {
+      kind: 'draft'
+      key: string
+      title: string
+      track: string
+      score: Score
+    }
+  | { kind: 'project'; key: string; title: string; projectId: string }
 
 export function useBatchLaunch() {
   const qc = useQueryClient()
   const [state, setState] = useState<BatchState>({ running: false, items: [] })
   const abortRef = useRef<AbortController | null>(null)
+  // 记住本轮所有输入，供「重试失败项」复用
+  const inputsRef = useRef<BatchInput[]>([])
+  const targetRef = useRef(10)
 
-  const update = useCallback((seedId: string, patch: Partial<BatchItem>) => {
+  const update = useCallback((key: string, patch: Partial<BatchItem>) => {
     setState((s) => ({
       ...s,
-      items: s.items.map((it) => (it.seedId === seedId ? { ...it, ...patch } : it)),
+      items: s.items.map((it) => (it.key === key ? { ...it, ...patch } : it)),
     }))
   }, [])
 
@@ -61,34 +80,52 @@ export function useBatchLaunch() {
   const reset = useCallback(() => setState({ running: false, items: [] }), [])
 
   const run = useCallback(
-    async (seeds: BatchSeedInput[], target: number): Promise<void> => {
-      if (state.running || seeds.length === 0) return
+    async (inputs: BatchInput[], target: number): Promise<void> => {
+      if (state.running || inputs.length === 0) return
       const ac = new AbortController()
       abortRef.current = ac
+      inputsRef.current = inputs
+      targetRef.current = target
 
       setState({
         running: true,
-        items: seeds.map((s) => ({ seedId: s.seedId, title: s.title, status: 'pending' })),
+        items: inputs.map((i) => ({ key: i.key, title: i.title, status: 'pending' })),
       })
 
-      const runOne = async (seed: BatchSeedInput): Promise<void> => {
+      /** 把输入解析成 projectId（建种子 / 立项 / 直接用），失败 throw */
+      const resolveProjectId = async (input: BatchInput): Promise<string> => {
+        if (input.kind === 'project') return input.projectId
+        if (input.kind === 'seed') {
+          const proj = await projectsApi.createFromSeed(input.seedId)
+          return proj.id
+        }
+        // draft：先建种子，再立项
+        const seed = await seedsApi.create({
+          title: input.title,
+          track: input.track,
+          score: input.score,
+        })
+        const proj = await projectsApi.createFromSeed(seed.id)
+        return proj.id
+      }
+
+      const runOne = async (input: BatchInput): Promise<void> => {
         if (ac.signal.aborted) {
-          update(seed.seedId, { status: 'aborted' })
+          update(input.key, { status: 'aborted' })
           return
         }
-        // 1. 立项
-        update(seed.seedId, { status: 'launching' })
+        // 1. 解析/立项（已有项目则瞬时完成）
         let projectId: string
         try {
-          const proj = await projectsApi.createFromSeed(seed.seedId)
-          projectId = proj.id
-          update(seed.seedId, { projectId, status: 'running' })
+          if (input.kind !== 'project') update(input.key, { status: 'launching' })
+          projectId = await resolveProjectId(input)
+          update(input.key, { projectId, status: 'running' })
           qc.invalidateQueries({ queryKey: ['projects'] })
           qc.invalidateQueries({ queryKey: ['seeds'] })
         } catch (e) {
-          update(seed.seedId, {
+          update(input.key, {
             status: 'failed',
-            error: e instanceof Error ? e.message : '立项失败',
+            error: extractErrorMessage(e),
           })
           return
         }
@@ -98,21 +135,25 @@ export function useBatchLaunch() {
             target,
             signal: ac.signal,
             onStep: (step, idx, total) =>
-              update(seed.seedId, {
+              update(input.key, {
                 step,
                 stepIndex: idx,
                 stepTotal: total,
                 retry: undefined,
+                bodyChapter: undefined,
+                bodyTotalChapters: undefined,
               }),
             onStepRetry: (_step, attempt, max) =>
-              update(seed.seedId, { retry: { attempt, max } }),
+              update(input.key, { retry: { attempt, max } }),
+            onBodyProgress: (chapter, totalChapters) =>
+              update(input.key, { bodyChapter: chapter, bodyTotalChapters: totalChapters }),
           })
-          update(seed.seedId, { status: 'done', retry: undefined })
+          update(input.key, { status: 'done', retry: undefined })
         } catch (e) {
           const aborted =
             ac.signal.aborted ||
             (e instanceof Error && (/已中断/.test(e.message) || e.name === 'AbortError'))
-          update(seed.seedId, {
+          update(input.key, {
             status: aborted ? 'aborted' : 'failed',
             error: aborted ? undefined : e instanceof Error ? e.message : '全流程失败',
             retry: undefined,
@@ -123,13 +164,12 @@ export function useBatchLaunch() {
       }
 
       // 并发限流：维持 BATCH_CONCURRENCY 个 worker 从队列取活
-      const queue = [...seeds]
+      const queue = [...inputs]
       const worker = async (): Promise<void> => {
         while (queue.length > 0) {
           if (ac.signal.aborted) {
-            // 剩余未开工的标记中断
             const rest = queue.splice(0)
-            rest.forEach((s) => update(s.seedId, { status: 'aborted' }))
+            rest.forEach((i) => update(i.key, { status: 'aborted' }))
             break
           }
           const next = queue.shift()
@@ -138,7 +178,7 @@ export function useBatchLaunch() {
         }
       }
       await Promise.all(
-        Array.from({ length: Math.min(BATCH_CONCURRENCY, seeds.length) }, () => worker()),
+        Array.from({ length: Math.min(BATCH_CONCURRENCY, inputs.length) }, () => worker()),
       )
 
       setState((s) => ({ ...s, running: false }))
@@ -149,5 +189,16 @@ export function useBatchLaunch() {
     [state.running, qc, update],
   )
 
-  return { state, run, abort, reset }
+  /** 仅重跑失败的条目（复用本轮输入）。项目已建好的，重跑只补缺步骤。 */
+  const retryFailed = useCallback(() => {
+    if (state.running) return
+    const failedKeys = new Set(
+      state.items.filter((i) => i.status === 'failed').map((i) => i.key),
+    )
+    if (failedKeys.size === 0) return
+    const picks = inputsRef.current.filter((i) => failedKeys.has(i.key))
+    if (picks.length > 0) run(picks, targetRef.current)
+  }, [state.running, state.items, run])
+
+  return { state, run, abort, reset, retryFailed }
 }
