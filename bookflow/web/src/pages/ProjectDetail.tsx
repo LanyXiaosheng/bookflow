@@ -5,6 +5,8 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   ChevronLeft,
+  Crop,
+  Download,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -117,10 +119,6 @@ export default function ProjectDetail() {
   )
   const sideDishes = useMemo(
     () => pickLatest(artifacts.data, 'side_dishes'),
-    [artifacts.data],
-  )
-  const blurb = useMemo(
-    () => pickLatest(artifacts.data, 'blurb'),
     [artifacts.data],
   )
   const storyImage = useMemo(
@@ -328,6 +326,16 @@ export default function ProjectDetail() {
               .join(' / ')}
           </div>
         )}
+        {fullPipeline.progress.running && fullPipeline.progress.stepRetry && (
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-amber-600 inline-flex items-center gap-1">
+            <RefreshCw className="h-3 w-3 animate-spin" />
+            {fullPipeline.progress.currentKey
+              ? PIPELINE_STEP_LABELS[fullPipeline.progress.currentKey]
+              : '当前步骤'}
+            失败，自动重试（{fullPipeline.progress.stepRetry.attempt}/
+            {fullPipeline.progress.stepRetry.max}）…
+          </div>
+        )}
       </header>
 
       <main className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -342,7 +350,6 @@ export default function ProjectDetail() {
             totalWords={chapters.data?.reduce((a, c) => a + c.word_count, 0) ?? 0}
             hasBookSummary={!!bookSummary}
             hasSideDishes={!!sideDishes}
-            hasBlurb={!!blurb}
           />
           <ReadmeCard
             projectId={projectId}
@@ -434,19 +441,6 @@ export default function ProjectDetail() {
             copyable
             globalJob={aiJob}
           />
-          <ArtifactStreamCard
-            projectId={projectId}
-            kind="blurb"
-            title="导语"
-            artifact={blurb}
-            endpoint={`/api/projects/${projectId}/ai-blurb/stream`}
-            disabled={!readme || !outline}
-            disabledHint="先生成 README 和大纲，再生成导语。"
-            emptyHint="生成 100-200 字叙事导语（四要素：开篇即冲突、人设清晰、强钩子、贴故事主线）。"
-            onDone={refreshArtifacts}
-            copyable
-            globalJob={aiJob}
-          />
           <StoryImageCard
             projectId={projectId}
             artifact={storyImage}
@@ -505,7 +499,6 @@ interface WorkflowStripProps {
   totalWords: number
   hasBookSummary: boolean
   hasSideDishes: boolean
-  hasBlurb: boolean
 }
 
 function WorkflowStrip({
@@ -518,7 +511,6 @@ function WorkflowStrip({
   totalWords,
   hasBookSummary,
   hasSideDishes,
-  hasBlurb,
 }: WorkflowStripProps) {
   const steps = [
     { label: 'README', done: hasReadme, hint: hasReadme ? '已生成' : '点击下方 AI 生成' },
@@ -574,16 +566,11 @@ function WorkflowStrip({
       done: hasSideDishes,
       hint: hasSideDishes ? '已生成' : hasOutline ? '可生成' : '先生成大纲',
     },
-    {
-      label: '导语',
-      done: hasBlurb,
-      hint: hasBlurb ? '已生成' : hasOutline ? '可生成' : '先生成大纲',
-    },
   ]
 
   return (
     <section className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-7">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-6">
         {steps.map((step, index) => (
           <div
             key={step.label}
@@ -748,34 +735,31 @@ async function downloadCompositedCover(
 
   if (showAuthor && authorName?.trim()) {
     const text = authorName.trim()
-    const fontSize = Math.max(24, Math.round(canvas.width * 0.045))
-    const padX = Math.round(fontSize * 0.9)
-    const padY = Math.round(fontSize * 0.55)
-    ctx.font = `600 ${fontSize}px sans-serif`
-    const textWidth = ctx.measureText(text).width
-    const badgeWidth = textWidth + padX * 2
-    const badgeHeight = fontSize + padY * 2
-    const x = canvas.width - badgeWidth - Math.round(canvas.width * 0.04)
-    const y = canvas.height - badgeHeight - Math.round(canvas.height * 0.04)
-    const radius = badgeHeight / 2
+    // 底部居中、大字、白字描边 + 阴影；3:4 裁剪保留顶部切底部，但底部仍留安全边
+    const fontSize = Math.max(34, Math.round(canvas.width * 0.072))
+    ctx.font = `700 ${fontSize}px sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'alphabetic'
+    const cx = canvas.width / 2
+    const baseline = canvas.height - Math.round(canvas.height * 0.05)
 
-    ctx.fillStyle = 'rgba(0,0,0,0.58)'
-    ctx.beginPath()
-    ctx.moveTo(x + radius, y)
-    ctx.lineTo(x + badgeWidth - radius, y)
-    ctx.quadraticCurveTo(x + badgeWidth, y, x + badgeWidth, y + radius)
-    ctx.lineTo(x + badgeWidth, y + badgeHeight - radius)
-    ctx.quadraticCurveTo(x + badgeWidth, y + badgeHeight, x + badgeWidth - radius, y + badgeHeight)
-    ctx.lineTo(x + radius, y + badgeHeight)
-    ctx.quadraticCurveTo(x, y + badgeHeight, x, y + badgeHeight - radius)
-    ctx.lineTo(x, y + radius)
-    ctx.quadraticCurveTo(x, y, x + radius, y)
-    ctx.closePath()
-    ctx.fill()
-
+    // 阴影让浅底图也能看清
+    ctx.save()
+    ctx.shadowColor = 'rgba(0,0,0,0.55)'
+    ctx.shadowBlur = Math.round(fontSize * 0.4)
+    ctx.shadowOffsetY = Math.round(fontSize * 0.06)
+    // 深色描边
+    ctx.lineWidth = Math.max(3, Math.round(fontSize * 0.14))
+    ctx.lineJoin = 'round'
+    ctx.strokeStyle = 'rgba(0,0,0,0.65)'
+    ctx.strokeText(text, cx, baseline)
+    ctx.restore()
+    // 白色字面
     ctx.fillStyle = '#ffffff'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(text, x + padX, y + badgeHeight / 2 + 1)
+    ctx.fillText(text, cx, baseline)
+    // 复位，避免影响后续绘制
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'alphabetic'
   }
 
   const format = options?.format ?? 'png'
@@ -1560,6 +1544,26 @@ function StoryImageCard({
     }
   }
 
+  const handleDownload = async (fit?: 'cover') => {
+    if (!payload) return
+    try {
+      setDownloading(true)
+      setError(null)
+      await downloadCompositedCover(
+        payload.data_url,
+        storyImageFilename(projectId, exportFormat),
+        payload.title_text,
+        payload.author_name,
+        payload.show_author,
+        { format: exportFormat, quality: exportQuality / 100, fit },
+      )
+    } catch (e) {
+      setError(extractErrorMessage(e))
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   return (
     <section
       className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4"
@@ -1591,32 +1595,38 @@ function StoryImageCard({
       {disabled && <p className="mb-2 text-xs text-gray-400">{disabledHint}</p>}
 
       {/* 尺寸预设 */}
+      <p className="mb-1.5 text-[11px] font-medium text-gray-500">封面尺寸</p>
       <div className="mb-3 flex flex-wrap gap-2">
         {[
-          { key: 'cover', label: '番茄封面' },
-          { key: 'square', label: '方图' },
-          { key: 'banner', label: '横版宣传图' },
-          { key: 'auto', label: '自动' },
+          { key: 'cover', label: '番茄封面', ratio: '2:3' },
+          { key: 'square', label: '方图', ratio: '1:1' },
+          { key: 'banner', label: '横版宣传图', ratio: '3:2' },
+          { key: 'auto', label: '自动', ratio: '' },
         ].map((opt) => (
           <button
             key={opt.key}
             type="button"
             onClick={() => setPreset(opt.key as typeof preset)}
-            className={`rounded-full px-3 py-1 text-[11px] ${
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] transition ${
               preset === opt.key
-                ? 'bg-sky-100 text-sky-700'
+                ? 'bg-sky-100 text-sky-700 ring-1 ring-sky-200'
                 : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
             }`}
           >
             {opt.label}
+            {opt.ratio && (
+              <span className={preset === opt.key ? 'text-[10px] text-sky-500' : 'text-[10px] text-gray-400'}>
+                {opt.ratio}
+              </span>
+            )}
           </button>
         ))}
         <button
           type="button"
           onClick={() => setPreset('custom')}
-          className={`rounded-full px-3 py-1 text-[11px] ${
+          className={`rounded-full px-3 py-1 text-[11px] transition ${
             preset === 'custom'
-              ? 'bg-sky-100 text-sky-700'
+              ? 'bg-sky-100 text-sky-700 ring-1 ring-sky-200'
               : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
           }`}
         >
@@ -1639,7 +1649,7 @@ function StoryImageCard({
         </div>
       )}
 
-      {/* 作者署名 + 导出 */}
+      {/* 作者署名（影响生成与水印） */}
       <div className="mb-3 rounded-md border border-gray-200 bg-gray-50 p-3">
         <p className="mb-2 text-[11px] leading-5 text-gray-500">
           默认按番茄小说封面尺寸 2:3 生成；预览和下载叠加作品名，作者署名可选。
@@ -1663,39 +1673,6 @@ function StoryImageCard({
             className="mt-2 block w-full rounded-md border border-gray-300 px-3 py-2 text-xs shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
           />
         )}
-
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <label className="text-[11px] font-medium text-gray-600">
-            导出格式
-            <select
-              value={exportFormat}
-              onChange={(e) => setExportFormat(e.target.value as typeof exportFormat)}
-              className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
-              data-testid="cover-export-format"
-            >
-              <option value="png">PNG 无损</option>
-              <option value="jpg">JPG 压缩</option>
-              <option value="jpeg">JPEG 压缩</option>
-            </select>
-          </label>
-          <label className="text-[11px] font-medium text-gray-600">
-            JPEG 质量：{exportQuality}%
-            <input
-              type="range"
-              min={60}
-              max={95}
-              step={1}
-              value={exportQuality}
-              disabled={exportFormat === 'png'}
-              onChange={(e) => setExportQuality(Number(e.target.value))}
-              className="mt-2 block w-full accent-sky-600 disabled:opacity-40"
-              data-testid="cover-export-quality"
-            />
-          </label>
-        </div>
-        <p className="mt-2 text-[11px] text-gray-400">
-          平台要求小于 5MB 时优先选 JPG/JPEG；仍超限则降低质量后重新下载。
-        </p>
       </div>
 
       {(generating || activeJob) && (
@@ -1719,62 +1696,82 @@ function StoryImageCard({
               className="mx-auto block max-h-[520px] w-full object-contain"
             />
             {payload.show_author && payload.author_name && (
-              <div className="pointer-events-none absolute bottom-4 right-4 rounded-full bg-black/55 px-3 py-1.5 text-xs font-medium text-white shadow-lg backdrop-blur-sm">
-                {payload.author_name}
+              <div className="pointer-events-none absolute inset-x-0 bottom-[5%] flex justify-center">
+                <span
+                  className="text-center text-2xl font-bold text-white sm:text-3xl"
+                  style={{
+                    textShadow:
+                      '0 2px 8px rgba(0,0,0,0.6), -1.5px -1.5px 0 rgba(0,0,0,0.65), 1.5px -1.5px 0 rgba(0,0,0,0.65), -1.5px 1.5px 0 rgba(0,0,0,0.65), 1.5px 1.5px 0 rgba(0,0,0,0.65)',
+                  }}
+                >
+                  {payload.author_name}
+                </span>
               </div>
             )}
           </div>
+          {/* 导出选项 */}
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+            <span className="text-[11px] font-medium text-gray-500">格式</span>
+            <div className="inline-flex overflow-hidden rounded-md ring-1 ring-gray-300">
+              {(['png', 'jpg', 'jpeg'] as const).map((fmt) => (
+                <button
+                  key={fmt}
+                  type="button"
+                  onClick={() => setExportFormat(fmt)}
+                  className={`px-2.5 py-1 text-[11px] transition ${
+                    exportFormat === fmt
+                      ? 'bg-sky-600 text-white'
+                      : 'bg-white text-gray-500 hover:bg-gray-100'
+                  }`}
+                  data-testid={`cover-export-format-${fmt}`}
+                >
+                  {fmt.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            {exportFormat !== 'png' && (
+              <label className="ml-1 inline-flex items-center gap-2 text-[11px] text-gray-500">
+                质量 {exportQuality}%
+                <input
+                  type="range"
+                  min={60}
+                  max={95}
+                  step={1}
+                  value={exportQuality}
+                  onChange={(e) => setExportQuality(Number(e.target.value))}
+                  className="h-1 w-24 accent-sky-600"
+                  data-testid="cover-export-quality"
+                />
+              </label>
+            )}
+            <span className="ml-auto text-[10px] text-gray-400">
+              {exportFormat === 'png' ? '无损·体积大' : '<5MB 优先选 JPG'}
+            </span>
+          </div>
+
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  setDownloading(true)
-                  await downloadCompositedCover(
-                    payload.data_url,
-                    storyImageFilename(projectId, exportFormat),
-                    payload.title_text,
-                    payload.author_name,
-                    payload.show_author,
-                    { format: exportFormat, quality: exportQuality / 100 },
-                  )
-                } catch (e) {
-                  setError(extractErrorMessage(e))
-                } finally {
-                  setDownloading(false)
-                }
-              }}
-              className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+              onClick={() => handleDownload()}
+              disabled={downloading}
+              className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
               data-testid="download-story-image-btn"
             >
-              {downloading ? '导出中…' : `下载${exportFormat.toUpperCase()}`}
+              <Download className="h-3 w-3" />
+              {downloading ? '导出中…' : `下载 ${exportFormat.toUpperCase()}`}
             </button>
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  setDownloading(true)
-                  await downloadCompositedCover(
-                    payload.data_url,
-                    storyImageFilename(projectId, exportFormat),
-                    payload.title_text,
-                    payload.author_name,
-                    payload.show_author,
-                    { format: exportFormat, quality: exportQuality / 100, fit: 'cover' },
-                  )
-                } catch (e) {
-                  setError(extractErrorMessage(e))
-                } finally {
-                  setDownloading(false)
-                }
-              }}
-              className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs text-sky-700 hover:bg-sky-100"
+              onClick={() => handleDownload('cover')}
+              disabled={downloading}
+              className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs text-sky-700 hover:bg-sky-100 disabled:opacity-50"
               data-testid="crop-story-image-btn"
               title="保持原图像素，按 3:4 比例裁剪（水平居中、顶部对齐）后下载"
             >
-              {downloading ? '处理中…' : '快速裁剪 3:4'}
+              <Crop className="h-3 w-3" />
+              {downloading ? '处理中…' : '裁剪 3:4 下载'}
             </button>
-            <span className="rounded-full bg-sky-50 px-2 py-1 text-[11px] text-sky-700">
+            <span className="ml-auto rounded-full bg-gray-100 px-2 py-1 text-[10px] text-gray-500">
               {payload.model}
             </span>
           </div>

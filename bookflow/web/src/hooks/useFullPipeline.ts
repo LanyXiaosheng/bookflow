@@ -1,7 +1,7 @@
 /**
  * AI 一键全流程编排：
  *
- *   README → 角色设定 → 大纲 → 正文（useFullBook）→ 全书汇总 → 配套素材
+ *   README → 角色设定 → 大纲 → 正文（useFullBook）→ 全书汇总 → 优化升华 → 配套素材
  *
  * 串行而非并行 —— 后续步骤依赖前置产物（角色设定要 README、大纲要角色设定、
  * 全书汇总要正文…），并行做不到，且本地代理账号池小，并发还会触发 429。
@@ -23,6 +23,7 @@ export type PipelineStepKey =
   | 'outline'
   | 'body'
   | 'book_summary'
+  | 'book_polished'
   | 'side_dishes'
   | 'blurb'
 
@@ -32,6 +33,7 @@ export const PIPELINE_STEP_LABELS: Record<PipelineStepKey, string> = {
   outline: '大纲',
   body: '正文',
   book_summary: '全书汇总',
+  book_polished: '优化升华',
   blurb: '导语',
   side_dishes: '配套素材',
 }
@@ -42,7 +44,7 @@ const ALL_STEPS: PipelineStepKey[] = [
   'outline',
   'body',
   'book_summary',
-  'blurb',
+  'book_polished',
   'side_dishes',
 ]
 
@@ -65,6 +67,8 @@ export interface FullPipelineProgress {
   skipped: PipelineStepKey[]
   /** 当前步骤后端正在重试时的信息（null = 未在重试，或有 delta 到达后清空） */
   retry: { attempt: number; max: number } | null
+  /** 当前步骤整体失败后、本地正在自动重跑该步骤的信息（null = 未在重跑） */
+  stepRetry: { attempt: number; max: number } | null
   error?: string
 }
 
@@ -76,6 +80,32 @@ const initial: FullPipelineProgress = {
   chars: 0,
   skipped: [],
   retry: null,
+  stepRetry: null,
+}
+
+/** 步骤级自动重试：每步最多尝试这么多次（含首次） */
+const MAX_STEP_ATTEMPTS = 3
+
+/** 可中断的等待；signal abort 时立即 resolve，让中断能打断退避 */
+function interruptibleSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve()
+    const t = setTimeout(done, ms)
+    function done() {
+      clearTimeout(t)
+      signal.removeEventListener('abort', done)
+      resolve()
+    }
+    signal.addEventListener('abort', done, { once: true })
+  })
+}
+
+/** 用户主动中断引发的错误不该触发重试 */
+function isAbortError(e: unknown): boolean {
+  if (e instanceof Error) {
+    return e.name === 'AbortError' || /已中断/.test(e.message)
+  }
+  return false
 }
 
 export interface RunFullPipelineOpts {
@@ -176,6 +206,7 @@ const ARTIFACT_KIND_BY_STEP: Partial<Record<PipelineStepKey, ArtifactKind>> = {
   character_setup: 'character_setup',
   outline: 'outline',
   book_summary: 'book_summary',
+  book_polished: 'book_polished',
   blurb: 'blurb',
   side_dishes: 'side_dishes',
 }
@@ -225,6 +256,7 @@ export function useFullPipeline() {
         chars: 0,
         skipped,
         retry: null,
+        stepRetry: null,
       })
 
       try {
@@ -253,28 +285,44 @@ export function useFullPipeline() {
             }
           }
 
-          setProgress((s) => ({ ...s, currentKey: step, chars: 0 }))
+          setProgress((s) => ({ ...s, currentKey: step, chars: 0, stepRetry: null }))
 
-          if (step === 'body') {
-            // 用 useFullBook 跑正文。它自己有 skipIfChars，不用我们判断。
-            // 把 fullBook 的 progress 投影到我们的 progress 上。
-            const ok = await fullBook.run({ projectId, target })
-            if (!ok) {
-              // useFullBook 内部已设了 error，把它带出来
-              const msg = fullBook.progress.error || '正文生成失败'
-              throw new Error(msg)
+          // 步骤级自动重试：本步整体失败（502/网络/解析等）就退避后重跑，
+          // 最多 MAX_STEP_ATTEMPTS 次。用户主动中断不重试。
+          for (let attempt = 1; ; attempt++) {
+            if (ac.signal.aborted) throw new Error('已中断')
+            try {
+              if (step === 'body') {
+                // 用 useFullBook 跑正文。它自己有 skipIfChars，不用我们判断。
+                const ok = await fullBook.run({ projectId, target })
+                if (!ok) {
+                  // useFullBook 内部已设了 error，把它带出来
+                  throw new Error(fullBook.progress.error || '正文生成失败')
+                }
+                qc.invalidateQueries({ queryKey: ['chapters', projectId] })
+              } else {
+                const url = endpointForStep(projectId, step)
+                await runSseStep(
+                  url,
+                  (chars) => setProgress((s) => ({ ...s, chars, retry: null })),
+                  (info) => setProgress((s) => ({ ...s, retry: info })),
+                  ac.signal,
+                )
+              }
+              break // 本步成功
+            } catch (stepErr) {
+              if (isAbortError(stepErr) || ac.signal.aborted) throw stepErr
+              if (attempt >= MAX_STEP_ATTEMPTS) throw stepErr
+              // 退避重试：1s, 2s（指数）；展示重跑进度
+              setProgress((s) => ({
+                ...s,
+                retry: null,
+                stepRetry: { attempt: attempt + 1, max: MAX_STEP_ATTEMPTS },
+              }))
+              await interruptibleSleep(1000 * 2 ** (attempt - 1), ac.signal)
             }
-            // 正文跑完，刷一下 chapters 缓存
-            qc.invalidateQueries({ queryKey: ['chapters', projectId] })
-          } else {
-            const url = endpointForStep(projectId, step)
-            await runSseStep(
-              url,
-              (chars) => setProgress((s) => ({ ...s, chars, retry: null })),
-              (info) => setProgress((s) => ({ ...s, retry: info })),
-              ac.signal,
-            )
           }
+          setProgress((s) => ({ ...s, stepRetry: null }))
 
           setProgress((s) => ({ ...s, done: i + 1 }))
           // 这一步如果产出了 artifact，刷新一下查询缓存
@@ -328,6 +376,8 @@ function endpointForStep(projectId: string, step: PipelineStepKey): string {
       return `/api/projects/${projectId}/ai-outline/stream`
     case 'book_summary':
       return `/api/projects/${projectId}/ai-book-summary/stream`
+    case 'book_polished':
+      return `/api/projects/${projectId}/ai-book-polish/stream`
     case 'blurb':
       return `/api/projects/${projectId}/ai-blurb/stream`
     case 'side_dishes':

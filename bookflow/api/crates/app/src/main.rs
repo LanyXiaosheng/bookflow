@@ -1067,6 +1067,8 @@ struct SettingsView {
     model: String,
     image_model: String,
     duomiapi_key_set: bool,
+    /// 多米 key 同样只露最后 4 位
+    duomiapi_key_masked: String,
     timeout_secs: i32,
 }
 
@@ -1132,6 +1134,7 @@ async fn get_settings(State(s): State<AppState>) -> Result<Json<SettingsView>, A
         model: cfg.model.clone(),
         image_model: cfg.image_model.clone(),
         duomiapi_key_set: !cfg.duomiapi_key.is_empty(),
+        duomiapi_key_masked: mask_key(&cfg.duomiapi_key),
         timeout_secs: cfg.timeout.as_secs() as i32,
     }))
 }
@@ -1181,6 +1184,7 @@ async fn put_settings(
         model: cfg.model.clone(),
         image_model: cfg.image_model.clone(),
         duomiapi_key_set: !cfg.duomiapi_key.is_empty(),
+        duomiapi_key_masked: mask_key(&cfg.duomiapi_key),
         timeout_secs: cfg.timeout.as_secs() as i32,
     }))
 }

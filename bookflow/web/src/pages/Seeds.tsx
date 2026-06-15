@@ -6,6 +6,8 @@ import { seedsApi, type AiScoreResponse, type AiSeedCandidate, type Score, type 
 import { projectsApi, type Project } from '../api/projects'
 import { extractErrorMessage } from '../api/errors'
 import { useConfirm } from '../components/ConfirmDialog'
+import { useBatchLaunch } from '../hooks/useBatchLaunch'
+import BatchLaunchPanel from '../components/BatchLaunchPanel'
 import TrackPills from '../components/TrackPills'
 import {
   composeTrack,
@@ -127,12 +129,52 @@ export default function Seeds() {
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const [hideTestData, setHideTestData] = useState(true)
 
+  // 批量立项
+  const batch = useBatchLaunch()
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [batchTarget, setBatchTarget] = useState(10)
+  const toggleSelect = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
   /** 应用「隐藏测试」过滤后的种子列表 */
   const visibleSeeds = useMemo(() => {
     if (!list.data) return []
     return hideTestData ? list.data.filter((s) => !looksLikeTestData(s.title)) : list.data
   }, [list.data, hideTestData])
   const hiddenCount = (list.data?.length ?? 0) - visibleSeeds.length
+
+  /** 可批量立项的种子：未立项 + 评分非「不做」 */
+  const launchableSeeds = useMemo(
+    () => visibleSeeds.filter((s) => !projectBySeedId.get(s.id) && s.tier !== 'reject'),
+    [visibleSeeds, projectBySeedId],
+  )
+  const allLaunchableSelected =
+    launchableSeeds.length > 0 && launchableSeeds.every((s) => selected.has(s.id))
+  const toggleSelectAll = () =>
+    setSelected((prev) => {
+      if (launchableSeeds.every((s) => prev.has(s.id))) {
+        const next = new Set(prev)
+        launchableSeeds.forEach((s) => next.delete(s.id))
+        return next
+      }
+      const next = new Set(prev)
+      launchableSeeds.forEach((s) => next.add(s.id))
+      return next
+    })
+
+  const runBatch = () => {
+    const picks = launchableSeeds
+      .filter((s) => selected.has(s.id))
+      .map((s) => ({ seedId: s.id, title: s.title }))
+    if (picks.length === 0) return
+    batch.run(picks, batchTarget)
+    setSelected(new Set())
+  }
 
   const aiScore = useMutation<AiScoreResponse, Error, { title: string; track: string }>({
     mutationFn: seedsApi.aiScore,
@@ -212,6 +254,7 @@ export default function Seeds() {
   return (
     <>
     <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <BatchLaunchPanel state={batch.state} onAbort={batch.abort} onClose={batch.reset} />
       {/* AI 批量生成选题（紧凑可折叠） */}
       <section
         className="mb-5 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200"
@@ -689,6 +732,49 @@ export default function Seeds() {
             <div className="rounded-xl bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
               绿灯项目可直接点进项目明细，未立项的种子可继续推进。
             </div>
+            {/* 批量立项操作条 */}
+            {launchableSeeds.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-violet-100 bg-violet-50/60 px-3 py-2">
+                <label className="inline-flex items-center gap-1.5 text-[11px] font-medium text-violet-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allLaunchableSelected}
+                    onChange={toggleSelectAll}
+                    className="h-3.5 w-3.5 accent-violet-600"
+                    data-testid="batch-select-all"
+                  />
+                  全选可立项（{launchableSeeds.length}）
+                </label>
+                <span className="text-[11px] text-violet-500">已选 {selected.size}</span>
+                <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-violet-600">
+                  章数
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={batchTarget}
+                    onChange={(e) => setBatchTarget(Number(e.target.value))}
+                    className="w-12 rounded border border-violet-200 px-1.5 py-0.5 text-center text-xs"
+                    data-testid="batch-target"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={runBatch}
+                  disabled={selected.size === 0 || batch.state.running}
+                  className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+                  data-testid="batch-launch-btn"
+                  title="并发 3 个跑全流程，带失败自动重试"
+                >
+                  {batch.state.running ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Rocket className="h-3.5 w-3.5" />
+                  )}
+                  批量立项 + 全流程
+                </button>
+              </div>
+            )}
           </header>
           {list.isLoading && <p className="text-sm text-gray-400">加载中…</p>}
           {list.isError && <p className="text-sm text-rose-600">读取失败</p>}
@@ -729,7 +815,20 @@ export default function Seeds() {
                 >
                   <div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium text-gray-900 truncate">{s.title}</span>
+                      <span className="flex min-w-0 items-center gap-2">
+                        {canLaunch && (
+                          <input
+                            type="checkbox"
+                            checked={selected.has(s.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={() => toggleSelect(s.id)}
+                            className="h-3.5 w-3.5 shrink-0 accent-violet-600"
+                            data-testid="seed-select"
+                            aria-label={`选择 ${s.title}`}
+                          />
+                        )}
+                        <span className="font-medium text-gray-900 truncate">{s.title}</span>
+                      </span>
                       <span className={`shrink-0 inline-flex items-center rounded-full border px-1.5 text-[10px] font-semibold ${TIER_BG[s.tier]}`}>
                         {TIER_LABEL[s.tier]}
                       </span>
