@@ -38,6 +38,10 @@ export interface AiSeedCandidate {
   title: string
   score: Score
   why_buy: string
+  /** 推荐原因：为什么现在推这题 */
+  recommend_reason?: string
+  /** 目前热度：爆款在售 / 上升期 / 平稳 / 冷门 */
+  heat?: string
 }
 
 export interface AiSeedGenerated {

@@ -18,7 +18,7 @@ import {
   Wand2,
   Zap,
 } from 'lucide-react'
-import { projectsApi, type ArtifactKind, type ProjectArtifact } from '../api/projects'
+import { projectsApi, type ArtifactKind, type ProjectArtifact, type ProjectStatus } from '../api/projects'
 import { chaptersApi, type Chapter } from '../api/chapters'
 import { imagesApi, type StoryImagePayload } from '../api/images'
 import { extractErrorMessage } from '../api/errors'
@@ -49,6 +49,47 @@ import { readStoryImageAuthor, writeStoryImageAuthor } from '../lib/storyImageAu
 
 type PreflightDrafts = Record<'readme' | 'character_setup', string>
 
+const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = {
+  writing: '写作中',
+  ready: '待发',
+  published: '已发',
+  archived: '归档',
+}
+
+const PROJECT_STATUS_STYLE: Record<ProjectStatus, string> = {
+  writing: 'border-blue-200 bg-blue-50 text-blue-700',
+  ready: 'border-amber-200 bg-amber-50 text-amber-700',
+  published: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  archived: 'border-slate-200 bg-slate-50 text-slate-600',
+}
+
+/** 后端只允许单步前进：写作→待发→已发→归档 */
+function nextProjectStatus(s: ProjectStatus): ProjectStatus | null {
+  switch (s) {
+    case 'writing':
+      return 'ready'
+    case 'ready':
+      return 'published'
+    case 'published':
+      return 'archived'
+    case 'archived':
+      return null
+  }
+}
+
+function projectStatusNextLabel(s: ProjectStatus): string {
+  switch (s) {
+    case 'writing':
+      return '标记定稿'
+    case 'ready':
+      return '标记已发'
+    case 'published':
+      return '归档'
+    case 'archived':
+      return ''
+  }
+}
+
 function emptyPreflightDrafts(): PreflightDrafts {
   return { readme: '', character_setup: '' }
 }
@@ -69,6 +110,15 @@ export default function ProjectDetail() {
     queryKey: ['project-artifacts', projectId],
     queryFn: () => projectsApi.listArtifacts(projectId),
     enabled: !!projectId,
+  })
+
+  const transition = useMutation({
+    mutationFn: (to: ProjectStatus) => projectsApi.transition(projectId, to),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      qc.invalidateQueries({ queryKey: ['projects'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
+    },
   })
 
   const chapters = useQuery({
@@ -206,6 +256,34 @@ export default function ProjectDetail() {
           <div className="hidden sm:block">
             {project.data?.track ? <TrackPills track={project.data.track} compact /> : null}
           </div>
+          {project.data && (
+            <div className="flex shrink-0 items-center gap-2">
+              <span
+                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${PROJECT_STATUS_STYLE[project.data.status]}`}
+                data-testid="project-status-badge"
+              >
+                {PROJECT_STATUS_LABEL[project.data.status]}
+              </span>
+              {nextProjectStatus(project.data.status) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const to = nextProjectStatus(project.data!.status)
+                    if (to) transition.mutate(to)
+                  }}
+                  disabled={transition.isPending}
+                  className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  data-testid="project-status-next-btn"
+                  title={`推进到「${PROJECT_STATUS_LABEL[nextProjectStatus(project.data.status)!]}」`}
+                >
+                  {transition.isPending ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : null}
+                  {projectStatusNextLabel(project.data.status)}
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:justify-end">
             {/* AI 一键全流程：README → 角色设定 → 大纲 → 正文 → 全书汇总 → 配套素材，已有产物的步骤会跳过 */}
             <button
@@ -285,6 +363,12 @@ export default function ProjectDetail() {
             </Link>
           </div>
         </div>
+        {transition.isError && (
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-600 inline-flex items-center gap-1">
+            <TriangleAlert className="h-3 w-3" />
+            状态切换失败：{extractErrorMessage(transition.error)}
+          </div>
+        )}
         {pipeline.progress.error && (
           <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-600 inline-flex items-center gap-1">
             <TriangleAlert className="h-3 w-3" />

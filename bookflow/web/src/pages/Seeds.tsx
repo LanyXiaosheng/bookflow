@@ -60,6 +60,14 @@ const TIER_BG: Record<Tier, string> = {
   reject: 'bg-rose-50 text-rose-700 border-rose-200',
 }
 
+/** AI 估的目前热度标签配色 */
+const HEAT_BG: Record<string, string> = {
+  爆款在售: 'border-rose-200 bg-rose-50 text-rose-700',
+  上升期: 'border-orange-200 bg-orange-50 text-orange-700',
+  平稳: 'border-sky-200 bg-sky-50 text-sky-700',
+  冷门: 'border-slate-200 bg-slate-50 text-slate-500',
+}
+
 /** 测试垃圾启发式：以「测试 / e2e / smoke / playwright / test」开头 */
 export default function Seeds() {
   const qc = useQueryClient()
@@ -478,6 +486,8 @@ export default function Seeds() {
                     title={c.title}
                     score={c.score}
                     why_buy={c.why_buy}
+                    recommendReason={c.recommend_reason}
+                    heat={c.heat}
                     testIdPrefix={`gen`}
                     index={i}
                     onAdopt={() => adoptCandidate(c)}
@@ -1097,6 +1107,9 @@ interface CandidateCardProps {
   selectable?: boolean
   selected?: boolean
   onToggleSelect?: () => void
+  /** AI 推荐原因 + 目前热度（仅本次生成的新候选有） */
+  recommendReason?: string
+  heat?: string
 }
 
 function CandidateCard({
@@ -1114,6 +1127,8 @@ function CandidateCard({
   selectable,
   selected,
   onToggleSelect,
+  recommendReason,
+  heat,
 }: CandidateCardProps) {
   const total = DIM_KEYS.reduce((a, k) => a + score[k], 0)
   const t = tierOf(total)
@@ -1147,7 +1162,26 @@ function CandidateCard({
           <TrackPills track={track} compact />
         </div>
       )}
+      {heat && (
+        <div className="mt-1.5">
+          <span
+            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${HEAT_BG[heat] ?? 'border-slate-200 bg-slate-50 text-slate-600'}`}
+            data-testid={`${testIdPrefix}-heat-${index}`}
+          >
+            🔥 {heat}
+          </span>
+        </div>
+      )}
       <p className="mt-2 text-xs leading-6 text-slate-500 line-clamp-3">{why_buy}</p>
+      {recommendReason && (
+        <p
+          className="mt-1.5 flex items-start gap-1 text-[11px] leading-5 text-violet-600"
+          data-testid={`${testIdPrefix}-reason-${index}`}
+        >
+          <Sparkles className="mt-0.5 h-3 w-3 shrink-0" />
+          <span className="line-clamp-2">推荐：{recommendReason}</span>
+        </p>
+      )}
       <div className="mt-3 flex flex-wrap gap-1">
         {DIM_KEYS.map((k) => (
           <span

@@ -65,6 +65,15 @@ export function useBatchLaunch() {
   // 记住本轮所有输入，供「重试失败项」复用
   const inputsRef = useRef<BatchInput[]>([])
   const targetRef = useRef(10)
+  // 节流刷新项目/种子列表：20 并发时避免每个项目都触发 N+1 重查导致页面卡顿
+  const lastInvalidateRef = useRef(0)
+  const throttledInvalidate = useCallback(() => {
+    const now = Date.now()
+    if (now - lastInvalidateRef.current < 2500) return
+    lastInvalidateRef.current = now
+    qc.invalidateQueries({ queryKey: ['projects'] })
+    qc.invalidateQueries({ queryKey: ['seeds'] })
+  }, [qc])
 
   const update = useCallback((key: string, patch: Partial<BatchItem>) => {
     setState((s) => ({
@@ -120,8 +129,7 @@ export function useBatchLaunch() {
           if (input.kind !== 'project') update(input.key, { status: 'launching' })
           projectId = await resolveProjectId(input)
           update(input.key, { projectId, status: 'running' })
-          qc.invalidateQueries({ queryKey: ['projects'] })
-          qc.invalidateQueries({ queryKey: ['seeds'] })
+          throttledInvalidate()
         } catch (e) {
           update(input.key, {
             status: 'failed',
@@ -159,7 +167,7 @@ export function useBatchLaunch() {
             retry: undefined,
           })
         } finally {
-          qc.invalidateQueries({ queryKey: ['projects'] })
+          throttledInvalidate()
         }
       }
 
@@ -186,7 +194,7 @@ export function useBatchLaunch() {
       qc.invalidateQueries({ queryKey: ['seeds'] })
       qc.invalidateQueries({ queryKey: ['dashboard'] })
     },
-    [state.running, qc, update],
+    [state.running, qc, update, throttledInvalidate],
   )
 
   /** 仅重跑失败的条目（复用本轮输入）。项目已建好的，重跑只补缺步骤。 */

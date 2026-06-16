@@ -2648,7 +2648,7 @@ fn build_story_image_prompt(
     };
     let author_line = author_name
         .filter(|n| !n.trim().is_empty())
-        .map(|n| format!("\n作者署名：{n}（放在封面角落）"))
+        .map(|n| format!("\n作者署名：{n}（紧贴书名正下方、小一号字，居中，不要放到画面底部以免被裁切）"))
         .unwrap_or_default();
     format!(
         "中文短篇小说封面配图：竖版构图、电影感光影、强情绪强冲突、人物关系明确。\

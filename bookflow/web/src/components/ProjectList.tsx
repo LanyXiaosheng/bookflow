@@ -105,6 +105,9 @@ export default function ProjectList({
       )
       return enriched
     },
+    // 列表查询是 N+1（每个项目再拉章节）；批量跑时失效频繁，
+    // 给 staleTime 让 2s 内的重复失效复用缓存，避免请求风暴拖卡页面
+    staleTime: 2000,
   })
 
   const visible = useMemo(() => {

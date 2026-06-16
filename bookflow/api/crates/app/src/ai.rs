@@ -1103,6 +1103,12 @@ pub struct AiSeedCandidate {
     pub title_type: String,
     #[serde(default)]
     pub blurb_hint: String,
+    /// 推荐原因：为什么现在推这个题材（一句话）
+    #[serde(default)]
+    pub recommend_reason: String,
+    /// 目前热度：AI 估的市场热度标签（爆款在售 / 上升期 / 平稳 / 冷门）
+    #[serde(default)]
+    pub heat: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
