@@ -38,6 +38,10 @@ export interface AiSeedCandidate {
   title: string
   score: Score
   why_buy: string
+  /** 推荐原因：为什么现在推这题 */
+  recommend_reason?: string
+  /** 目前热度：爆款在售 / 上升期 / 平稳 / 冷门 */
+  heat?: string
 }
 
 export interface AiSeedGenerated {
@@ -52,8 +56,17 @@ export interface AiSeedDraft {
   score: Score
   total_score: number
   why_buy: string
+  recommend_reason?: string
+  heat?: string
   batch_id: string
   created_at: string
+}
+
+export interface AiTrackRecommendation {
+  primary: string
+  plots: string[]
+  reason?: string
+  heat?: string
 }
 
 export const seedsApi = {
@@ -93,6 +106,27 @@ export const seedsApi = {
     const { data } = await api.post<{ id: string; title: string; track: string }>(
       '/seeds/ai-launch',
       { track },
+      { timeout: 180_000 }
+    )
+    return data
+  },
+  /** AI 推荐主分类+情节组合 */
+  async aiRecommendTrack(
+    primaries: string[],
+    plots: string[],
+  ): Promise<AiTrackRecommendation[]> {
+    const { data } = await api.post<{ recommendations: AiTrackRecommendation[] }>(
+      '/seeds/ai-recommend-track',
+      { primaries, plots },
+      { timeout: 120_000 }
+    )
+    return data.recommendations
+  },
+  /** 回填历史候选的热度+推荐原因（一次最多 60 个标题，可多次点） */
+  async aiBackfillHeat(): Promise<{ updated_titles: number; updated_rows: number }> {
+    const { data } = await api.post<{ updated_titles: number; updated_rows: number }>(
+      '/seeds/ai-backfill-heat',
+      {},
       { timeout: 180_000 }
     )
     return data

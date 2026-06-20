@@ -5,6 +5,9 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   ChevronLeft,
+  Crop,
+  Download,
+  FileArchive,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -16,7 +19,7 @@ import {
   Wand2,
   Zap,
 } from 'lucide-react'
-import { projectsApi, type ArtifactKind, type ProjectArtifact } from '../api/projects'
+import { projectsApi, type ArtifactKind, type ProjectArtifact, type ProjectStatus } from '../api/projects'
 import { chaptersApi, type Chapter } from '../api/chapters'
 import { imagesApi, type StoryImagePayload } from '../api/images'
 import { extractErrorMessage } from '../api/errors'
@@ -39,42 +42,59 @@ import { useFullPipeline, PIPELINE_STEP_LABELS } from '../hooks/useFullPipeline'
 import { usePipeline } from '../hooks/usePipeline'
 import { renderedMarkdownToPlainText } from '../lib/copyRenderedMarkdown'
 import { extractCharacterNamesFromReadme } from '../lib/extractCharacterNames'
+import {
+  readConfirmedCharacterSetupVersion,
+  writeConfirmedCharacterSetupVersion,
+} from '../lib/characterSetupConfirm'
+import { readStoryImageAuthor, writeStoryImageAuthor } from '../lib/storyImageAuthor'
 
 type PreflightDrafts = Record<'readme' | 'character_setup', string>
+
+const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = {
+  writing: '写作中',
+  ready: '待发',
+  published: '已发',
+  archived: '归档',
+}
+
+const PROJECT_STATUS_STYLE: Record<ProjectStatus, string> = {
+  writing: 'border-blue-200 bg-blue-50 text-blue-700',
+  ready: 'border-amber-200 bg-amber-50 text-amber-700',
+  published: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  archived: 'border-slate-200 bg-slate-50 text-slate-600',
+}
+
+/** 后端只允许单步前进：写作→待发→已发→归档 */
+function nextProjectStatus(s: ProjectStatus): ProjectStatus | null {
+  switch (s) {
+    case 'writing':
+      return 'ready'
+    case 'ready':
+      return 'published'
+    case 'published':
+      return 'archived'
+    case 'archived':
+      return null
+  }
+}
+
+function projectStatusNextLabel(s: ProjectStatus): string {
+  switch (s) {
+    case 'writing':
+      return '标记定稿'
+    case 'ready':
+      return '标记已发'
+    case 'published':
+      return '归档'
+    case 'archived':
+      return ''
+  }
+}
 
 function emptyPreflightDrafts(): PreflightDrafts {
   return { readme: '', character_setup: '' }
 }
 
-function confirmedCharacterSetupKey(projectId: string): string {
-  return `bookflow.character-setup-confirmed:${projectId}`
-}
-
-function readConfirmedCharacterSetupVersion(projectId: string): number | null {
-  try {
-    const raw = localStorage.getItem(confirmedCharacterSetupKey(projectId))
-    if (!raw) return null
-    const version = Number.parseInt(raw, 10)
-    return Number.isFinite(version) ? version : null
-  } catch {
-    return null
-  }
-}
-
-function writeConfirmedCharacterSetupVersion(
-  projectId: string,
-  version: number | null,
-) {
-  try {
-    if (version === null) {
-      localStorage.removeItem(confirmedCharacterSetupKey(projectId))
-      return
-    }
-    localStorage.setItem(confirmedCharacterSetupKey(projectId), String(version))
-  } catch {
-    // ignore storage write errors
-  }
-}
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>()
@@ -91,6 +111,15 @@ export default function ProjectDetail() {
     queryKey: ['project-artifacts', projectId],
     queryFn: () => projectsApi.listArtifacts(projectId),
     enabled: !!projectId,
+  })
+
+  const transition = useMutation({
+    mutationFn: (to: ProjectStatus) => projectsApi.transition(projectId, to),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['project', projectId] })
+      qc.invalidateQueries({ queryKey: ['projects'] })
+      qc.invalidateQueries({ queryKey: ['dashboard'] })
+    },
   })
 
   const chapters = useQuery({
@@ -117,10 +146,6 @@ export default function ProjectDetail() {
   )
   const sideDishes = useMemo(
     () => pickLatest(artifacts.data, 'side_dishes'),
-    [artifacts.data],
-  )
-  const blurb = useMemo(
-    () => pickLatest(artifacts.data, 'blurb'),
     [artifacts.data],
   )
   const storyImage = useMemo(
@@ -173,7 +198,7 @@ export default function ProjectDetail() {
   /** SOP 阶段 2 前期方案流：README → 角色设定（链式 SSE，自动落库） */
   const pipeline = usePipeline()
   /** 一键全流程：README → 角色设定 → 大纲 → 正文 → 全书汇总 → 配套素材 */
-  const fullPipeline = useFullPipeline()
+  const fullPipeline = useFullPipeline(projectId)
   const runProjectizeFlow = async () => {
     setPreflightDrafts(emptyPreflightDrafts())
     const ok = await pipeline.run([
@@ -198,6 +223,18 @@ export default function ProjectDetail() {
     setPreflightDrafts(emptyPreflightDrafts())
   }
 
+  // 一键全流程跑过角色设定后自动确认当前版本：流程会一路跑到大纲/正文，
+  // 用户无需手动点「确认」，避免跑完还卡在「待确认」。
+  useEffect(() => {
+    if (
+      fullPipeline.progress.running &&
+      characterSetup &&
+      confirmedCharacterSetupVersion !== characterSetup.version
+    ) {
+      setConfirmedCharacterSetupVersion(characterSetup.version)
+    }
+  }, [fullPipeline.progress.running, characterSetup, confirmedCharacterSetupVersion])
+
   return (
     <div className="bg-gray-50">
       <header className="sticky top-14 z-20 bg-white border-b border-gray-200">
@@ -220,6 +257,34 @@ export default function ProjectDetail() {
           <div className="hidden sm:block">
             {project.data?.track ? <TrackPills track={project.data.track} compact /> : null}
           </div>
+          {project.data && (
+            <div className="flex shrink-0 items-center gap-2">
+              <span
+                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${PROJECT_STATUS_STYLE[project.data.status]}`}
+                data-testid="project-status-badge"
+              >
+                {PROJECT_STATUS_LABEL[project.data.status]}
+              </span>
+              {nextProjectStatus(project.data.status) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const to = nextProjectStatus(project.data!.status)
+                    if (to) transition.mutate(to)
+                  }}
+                  disabled={transition.isPending}
+                  className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  data-testid="project-status-next-btn"
+                  title={`推进到「${PROJECT_STATUS_LABEL[nextProjectStatus(project.data.status)!]}」`}
+                >
+                  {transition.isPending ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : null}
+                  {projectStatusNextLabel(project.data.status)}
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:justify-end">
             {/* AI 一键全流程：README → 角色设定 → 大纲 → 正文 → 全书汇总 → 配套素材，已有产物的步骤会跳过 */}
             <button
@@ -299,6 +364,12 @@ export default function ProjectDetail() {
             </Link>
           </div>
         </div>
+        {transition.isError && (
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-600 inline-flex items-center gap-1">
+            <TriangleAlert className="h-3 w-3" />
+            状态切换失败：{extractErrorMessage(transition.error)}
+          </div>
+        )}
         {pipeline.progress.error && (
           <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-600 inline-flex items-center gap-1">
             <TriangleAlert className="h-3 w-3" />
@@ -328,6 +399,16 @@ export default function ProjectDetail() {
               .join(' / ')}
           </div>
         )}
+        {fullPipeline.progress.running && fullPipeline.progress.stepRetry && (
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-amber-600 inline-flex items-center gap-1">
+            <RefreshCw className="h-3 w-3 animate-spin" />
+            {fullPipeline.progress.currentKey
+              ? PIPELINE_STEP_LABELS[fullPipeline.progress.currentKey]
+              : '当前步骤'}
+            失败，自动重试（{fullPipeline.progress.stepRetry.attempt}/
+            {fullPipeline.progress.stepRetry.max}）…
+          </div>
+        )}
       </header>
 
       <main className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -342,7 +423,6 @@ export default function ProjectDetail() {
             totalWords={chapters.data?.reduce((a, c) => a + c.word_count, 0) ?? 0}
             hasBookSummary={!!bookSummary}
             hasSideDishes={!!sideDishes}
-            hasBlurb={!!blurb}
           />
           <ReadmeCard
             projectId={projectId}
@@ -407,6 +487,7 @@ export default function ProjectDetail() {
             copyable
             globalJob={aiJob}
             resumable
+            showCharCount
           />
           <ArtifactStreamCard
             projectId={projectId}
@@ -419,7 +500,10 @@ export default function ProjectDetail() {
             emptyHint="AI 会做去 AI 味、增强代入感、优化阅读节奏，不改剧情不走结局。"
             onDone={refreshArtifacts}
             copyable
+            downloadable
+            projectTitle={project.data?.title}
             globalJob={aiJob}
+            showCharCount
           />
           <ArtifactStreamCard
             projectId={projectId}
@@ -432,19 +516,8 @@ export default function ProjectDetail() {
             emptyHint="生成配套.md：标题变体、平台简介、推送语、标签、选段引流、评论区埋线。"
             onDone={refreshArtifacts}
             copyable
-            globalJob={aiJob}
-          />
-          <ArtifactStreamCard
-            projectId={projectId}
-            kind="blurb"
-            title="导语"
-            artifact={blurb}
-            endpoint={`/api/projects/${projectId}/ai-blurb/stream`}
-            disabled={!readme || !outline}
-            disabledHint="先生成 README 和大纲，再生成导语。"
-            emptyHint="生成 100-200 字叙事导语（四要素：开篇即冲突、人设清晰、强钩子、贴故事主线）。"
-            onDone={refreshArtifacts}
-            copyable
+            downloadable
+            projectTitle={project.data?.title}
             globalJob={aiJob}
           />
           <StoryImageCard
@@ -454,6 +527,13 @@ export default function ProjectDetail() {
             disabledHint="先生成 README，再生成小说配图。"
             onDone={refreshArtifacts}
             globalJob={aiJob}
+          />
+          <ProjectPackageCard
+            projectId={projectId}
+            projectTitle={project.data?.title}
+            sideDishes={sideDishes}
+            bookPolished={bookPolished}
+            storyImage={storyImage}
           />
         </div>
 
@@ -505,7 +585,6 @@ interface WorkflowStripProps {
   totalWords: number
   hasBookSummary: boolean
   hasSideDishes: boolean
-  hasBlurb: boolean
 }
 
 function WorkflowStrip({
@@ -518,7 +597,6 @@ function WorkflowStrip({
   totalWords,
   hasBookSummary,
   hasSideDishes,
-  hasBlurb,
 }: WorkflowStripProps) {
   const steps = [
     { label: 'README', done: hasReadme, hint: hasReadme ? '已生成' : '点击下方 AI 生成' },
@@ -574,16 +652,11 @@ function WorkflowStrip({
       done: hasSideDishes,
       hint: hasSideDishes ? '已生成' : hasOutline ? '可生成' : '先生成大纲',
     },
-    {
-      label: '导语',
-      done: hasBlurb,
-      hint: hasBlurb ? '已生成' : hasOutline ? '可生成' : '先生成大纲',
-    },
   ]
 
   return (
     <section className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-7">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-6">
         {steps.map((step, index) => (
           <div
             key={step.label}
@@ -676,6 +749,20 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
+/** 把文本下载成 txt（带 BOM，Windows 记事本不乱码）。文件名做基本清洗。 */
+function downloadTextFile(content: string, filename: string) {
+  const safe = filename.replace(/[\\/:*?"<>|]/g, '_').slice(0, 120)
+  const blob = new Blob(['﻿', content], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = safe.endsWith('.txt') ? safe : `${safe}.txt`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 function copyDisplayText(kind: ArtifactKind, display: string): string {
   switch (kind) {
     case 'readme':
@@ -695,14 +782,31 @@ function copyDisplayText(kind: ArtifactKind, display: string): string {
 async function downloadCompositedCover(
   dataUrl: string,
   filename: string,
-  titleText?: string | null,
-  authorName?: string | null,
-  showAuthor?: boolean,
   options?: {
     format?: 'png' | 'jpg' | 'jpeg'
     quality?: number
+    fit?: 'stretch' | 'cover'
   },
 ): Promise<void> {
+  const blob = await renderCompositedCoverBlob(dataUrl, options)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+async function renderCompositedCoverBlob(
+  dataUrl: string,
+  options?: {
+    format?: 'png' | 'jpg' | 'jpeg'
+    quality?: number
+    fit?: 'stretch' | 'cover'
+  },
+): Promise<Blob> {
   const img = new Image()
   const imageReady = new Promise<void>((resolve, reject) => {
     img.onload = () => resolve()
@@ -711,65 +815,190 @@ async function downloadCompositedCover(
   img.src = dataUrl
   await imageReady
 
-  const targetWidth = 600
-  const targetHeight = 800
   const canvas = document.createElement('canvas')
-  canvas.width = targetWidth
-  canvas.height = targetHeight
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('封面导出失败：canvas 不可用')
 
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-
-  if (showAuthor && authorName?.trim()) {
-    const text = authorName.trim()
-    const fontSize = Math.max(24, Math.round(canvas.width * 0.045))
-    const padX = Math.round(fontSize * 0.9)
-    const padY = Math.round(fontSize * 0.55)
-    ctx.font = `600 ${fontSize}px sans-serif`
-    const textWidth = ctx.measureText(text).width
-    const badgeWidth = textWidth + padX * 2
-    const badgeHeight = fontSize + padY * 2
-    const x = canvas.width - badgeWidth - Math.round(canvas.width * 0.04)
-    const y = canvas.height - badgeHeight - Math.round(canvas.height * 0.04)
-    const radius = badgeHeight / 2
-
-    ctx.fillStyle = 'rgba(0,0,0,0.58)'
-    ctx.beginPath()
-    ctx.moveTo(x + radius, y)
-    ctx.lineTo(x + badgeWidth - radius, y)
-    ctx.quadraticCurveTo(x + badgeWidth, y, x + badgeWidth, y + radius)
-    ctx.lineTo(x + badgeWidth, y + badgeHeight - radius)
-    ctx.quadraticCurveTo(x + badgeWidth, y + badgeHeight, x + badgeWidth - radius, y + badgeHeight)
-    ctx.lineTo(x + radius, y + badgeHeight)
-    ctx.quadraticCurveTo(x, y + badgeHeight, x, y + badgeHeight - radius)
-    ctx.lineTo(x, y + radius)
-    ctx.quadraticCurveTo(x, y, x + radius, y)
-    ctx.closePath()
-    ctx.fill()
-
-    ctx.fillStyle = '#ffffff'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(text, x + padX, y + badgeHeight / 2 + 1)
+  const fit = options?.fit ?? 'stretch'
+  if (fit === 'cover') {
+    // 保持原图像素，按 3:4 比例裁剪：水平居中、顶部对齐（保留画面上部主体）
+    const srcW = img.naturalWidth || img.width
+    const srcH = img.naturalHeight || img.height
+    const ratio = 3 / 4 // 宽 : 高
+    let cropW: number
+    let cropH: number
+    if (srcW / srcH > ratio) {
+      // 原图偏宽：保留全高，按 3:4 裁掉左右
+      cropH = srcH
+      cropW = Math.round(srcH * ratio)
+    } else {
+      // 原图偏高：保留全宽，按 3:4 裁掉底部
+      cropW = srcW
+      cropH = Math.min(srcH, Math.round(srcW / ratio))
+    }
+    const sx = Math.round((srcW - cropW) / 2) // 水平居中
+    const sy = 0 // 顶部对齐
+    canvas.width = cropW
+    canvas.height = cropH
+    ctx.drawImage(img, sx, sy, cropW, cropH, 0, 0, cropW, cropH)
+  } else {
+    const targetWidth = 600
+    const targetHeight = 800
+    canvas.width = targetWidth
+    canvas.height = targetHeight
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
   }
+
+  // 注意：作者署名由生图提示词烘进图里（后端 build_story_image_prompt），
+  // 这里不再做后处理叠字，避免出现两个作者名。
 
   const format = options?.format ?? 'png'
   const mimeType = format === 'png' ? 'image/png' : 'image/jpeg'
   const quality = Math.min(0.95, Math.max(0.6, options?.quality ?? 0.88))
-  const out = format === 'png'
-    ? canvas.toDataURL(mimeType)
-    : canvas.toDataURL(mimeType, quality)
-  const a = document.createElement('a')
-  a.href = out
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) resolve(blob)
+        else reject(new Error('封面导出失败：图片编码失败'))
+      },
+      mimeType,
+      format === 'png' ? undefined : quality,
+    )
+  })
 }
 
 function storyImageFilename(projectId: string, format: 'png' | 'jpg' | 'jpeg'): string {
   return `story-image-${projectId}.${format}`
 }
+
+function safeFilename(name: string): string {
+  return name.replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 120) || '未命名'
+}
+
+interface ZipEntryInput {
+  name: string
+  data: Blob | string
+}
+
+async function downloadZip(entries: ZipEntryInput[], filename: string) {
+  const blob = await createZipBlob(entries)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = safeFilename(filename).endsWith('.zip') ? safeFilename(filename) : `${safeFilename(filename)}.zip`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+async function createZipBlob(entries: ZipEntryInput[]): Promise<Blob> {
+  const encoder = new TextEncoder()
+  const fileParts: Uint8Array[] = []
+  const centralParts: Uint8Array[] = []
+  let offset = 0
+
+  for (const entry of entries) {
+    const nameBytes = encoder.encode(safeFilename(entry.name))
+    const dataBytes = entry.data instanceof Blob
+      ? new Uint8Array(await entry.data.arrayBuffer())
+      : encoder.encode(entry.data)
+    const crc = crc32(dataBytes)
+    const localHeader = zipLocalHeader(nameBytes, dataBytes.length, crc)
+    fileParts.push(localHeader, dataBytes)
+    centralParts.push(zipCentralDirectoryHeader(nameBytes, dataBytes.length, crc, offset))
+    offset += localHeader.length + dataBytes.length
+  }
+
+  const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0)
+  const centralOffset = offset
+  const end = zipEndOfCentralDirectory(entries.length, centralSize, centralOffset)
+  return new Blob(
+    [
+      ...fileParts.map((part) => new Blob([part.buffer as ArrayBuffer])),
+      ...centralParts.map((part) => new Blob([part.buffer as ArrayBuffer])),
+      new Blob([end.buffer as ArrayBuffer]),
+    ],
+    { type: 'application/zip' },
+  )
+}
+
+function zipLocalHeader(name: Uint8Array, size: number, crc: number): Uint8Array {
+  const out = new Uint8Array(30 + name.length)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, 0x04034b50, true)
+  view.setUint16(4, 20, true)
+  view.setUint16(6, 0x0800, true)
+  view.setUint16(8, 0, true)
+  view.setUint16(10, 0, true)
+  view.setUint16(12, 0, true)
+  view.setUint32(14, crc, true)
+  view.setUint32(18, size, true)
+  view.setUint32(22, size, true)
+  view.setUint16(26, name.length, true)
+  view.setUint16(28, 0, true)
+  out.set(name, 30)
+  return out
+}
+
+function zipCentralDirectoryHeader(
+  name: Uint8Array,
+  size: number,
+  crc: number,
+  localOffset: number,
+): Uint8Array {
+  const out = new Uint8Array(46 + name.length)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, 0x02014b50, true)
+  view.setUint16(4, 20, true)
+  view.setUint16(6, 20, true)
+  view.setUint16(8, 0x0800, true)
+  view.setUint16(10, 0, true)
+  view.setUint16(12, 0, true)
+  view.setUint16(14, 0, true)
+  view.setUint32(16, crc, true)
+  view.setUint32(20, size, true)
+  view.setUint32(24, size, true)
+  view.setUint16(28, name.length, true)
+  view.setUint16(30, 0, true)
+  view.setUint16(32, 0, true)
+  view.setUint16(34, 0, true)
+  view.setUint16(36, 0, true)
+  view.setUint32(38, 0, true)
+  view.setUint32(42, localOffset, true)
+  out.set(name, 46)
+  return out
+}
+
+function zipEndOfCentralDirectory(entryCount: number, centralSize: number, centralOffset: number): Uint8Array {
+  const out = new Uint8Array(22)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, 0x06054b50, true)
+  view.setUint16(4, 0, true)
+  view.setUint16(6, 0, true)
+  view.setUint16(8, entryCount, true)
+  view.setUint16(10, entryCount, true)
+  view.setUint32(12, centralSize, true)
+  view.setUint32(16, centralOffset, true)
+  view.setUint16(20, 0, true)
+  return out
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff
+  for (const byte of bytes) {
+    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ byte) & 0xff]
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+const CRC32_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let c = index
+  for (let k = 0; k < 8; k += 1) {
+    c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+  }
+  return c >>> 0
+})
 
 interface ArtifactStreamCardProps {
   projectId: string
@@ -782,12 +1011,17 @@ interface ArtifactStreamCardProps {
   emptyHint: string
   onDone: () => void
   copyable?: boolean
+  /** 显示「下载 txt」按钮，文件名 = 书名-模块.txt */
+  downloadable?: boolean
+  /** 书名，用于下载文件名 */
+  projectTitle?: string
   globalJob?: AiJob
   externalText?: string
   externalStreaming?: boolean
   notice?: React.ReactNode
   footer?: React.ReactNode
   resumable?: boolean
+  showCharCount?: boolean
 }
 
 function ArtifactStreamCard({
@@ -801,12 +1035,15 @@ function ArtifactStreamCard({
   emptyHint,
   onDone,
   copyable = false,
+  downloadable = false,
+  projectTitle,
   globalJob,
   externalText,
   externalStreaming = false,
   notice,
   footer,
   resumable = false,
+  showCharCount = false,
 }: ArtifactStreamCardProps) {
   const activeJob = globalJob?.kind === kind ? globalJob : undefined
   const startedAtRef = useRef(0)
@@ -848,6 +1085,12 @@ function ArtifactStreamCard({
   const statusTitle = activeJob?.title || title
   const statusChars =
     activeJob?.chars ?? Array.from(sse.text || externalText || '').length
+  const displayChars = Array.from(display).length
+  const abortStream = () => {
+    sse.abort()
+    clearAiJob(projectId)
+    sse.reset()
+  }
 
   return (
     <section
@@ -857,6 +1100,11 @@ function ArtifactStreamCard({
       <header className="flex items-center gap-2 mb-3">
         <Sparkles className="h-4 w-4 text-violet-600" />
         <h2 className="text-sm font-semibold">{title}</h2>
+        {showCharCount && displayChars > 0 && (
+          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500">
+            {displayChars.toLocaleString('zh-CN')} 字
+          </span>
+        )}
         {artifact && !streaming && (
           <span className="text-[10px] text-gray-400">v{artifact.version}</span>
         )}
@@ -874,6 +1122,23 @@ function ArtifactStreamCard({
             {copyState === 'done' ? '已复制' : copyState === 'error' ? '复制失败' : '复制'}
           </button>
         )}
+        {display && downloadable && (
+          <button
+            type="button"
+            onClick={() =>
+              downloadTextFile(
+                copyDisplayText(kind, display),
+                `${projectTitle?.trim() || '未命名'}-${title}`,
+              )
+            }
+            className={`${copyable ? '' : 'ml-auto '}inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50`}
+            data-testid={`download-${kind}-btn`}
+            title={`下载 ${projectTitle?.trim() || '未命名'}-${title}.txt`}
+          >
+            <Download className="h-3 w-3" />
+            下载
+          </button>
+        )}
         <button
           type="button"
           onClick={() => sse.start(endpoint)}
@@ -889,6 +1154,17 @@ function ArtifactStreamCard({
           )}
           {artifact ? '重新生成' : `AI 生成${title}`}
         </button>
+        {activeJob && (
+          <button
+            type="button"
+            onClick={abortStream}
+            className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+            data-testid={`ai-${kind}-abort-btn`}
+            title="中断当前生成并清除运行状态"
+          >
+            中断
+          </button>
+        )}
         {resumable && sse.status === 'error' && artifact && (
           <button
             type="button"
@@ -1469,6 +1745,93 @@ interface StoryImageCardProps {
   globalJob?: AiJob
 }
 
+interface ProjectPackageCardProps {
+  projectId: string
+  projectTitle?: string
+  sideDishes?: ProjectArtifact
+  bookPolished?: ProjectArtifact
+  storyImage?: ProjectArtifact
+}
+
+function ProjectPackageCard({
+  projectId,
+  projectTitle,
+  sideDishes,
+  bookPolished,
+  storyImage,
+}: ProjectPackageCardProps) {
+  const [packing, setPacking] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const payload = parseStoryImageArtifact(storyImage)
+  const missing = [
+    !sideDishes?.content ? '配套素材' : '',
+    !bookPolished?.content ? '优化升华' : '',
+    !payload?.data_url ? '小说配图' : '',
+  ].filter(Boolean)
+  const disabled = packing || missing.length > 0
+
+  const handlePackage = async () => {
+    if (!sideDishes?.content || !bookPolished?.content || !payload?.data_url) return
+    try {
+      setPacking(true)
+      setError(null)
+      const title = safeFilename(projectTitle || '未命名项目')
+      const storedAuthor = readStoryImageAuthor(projectId)
+      const authorPart = safeFilename(storedAuthor?.authorName.trim() || '封面带作者署名')
+      const packageBaseName = `${title}-${authorPart}`
+      const coverBlob = await renderCompositedCoverBlob(payload.data_url, {
+        format: 'png',
+        fit: 'cover',
+      })
+      await downloadZip(
+        [
+          { name: `${title}-配套素材.txt`, data: `\uFEFF${copyDisplayText('side_dishes', sideDishes.content)}` },
+          { name: `${title}-优化升华.txt`, data: `\uFEFF${copyDisplayText('book_polished', bookPolished.content)}` },
+          { name: `${packageBaseName}-3x4.png`, data: coverBlob },
+        ],
+        `${packageBaseName}.zip`,
+      )
+    } catch (e) {
+      setError(extractErrorMessage(e))
+    } finally {
+      setPacking(false)
+    }
+  }
+
+  return (
+    <section className="rounded-lg bg-white p-4 shadow-sm ring-1 ring-gray-200">
+      <header className="mb-3 flex items-center gap-2">
+        <FileArchive className="h-4 w-4 text-emerald-600" />
+        <h2 className="text-sm font-semibold">一键打包</h2>
+        <button
+          type="button"
+          onClick={handlePackage}
+          disabled={disabled}
+          className="ml-auto inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+          data-testid="download-project-package-btn"
+          title={missing.length > 0 ? `缺少：${missing.join('、')}` : ''}
+        >
+          {packing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+          {packing ? '打包中…' : '下载 ZIP'}
+        </button>
+      </header>
+      <p className="text-xs leading-5 text-gray-500">
+        打包配套素材、优化升华和 3:4 裁剪封面，文件名按当前项目标题生成。
+      </p>
+      {missing.length > 0 && (
+        <p className="mt-2 text-xs text-amber-600">
+          还缺：{missing.join('、')}
+        </p>
+      )}
+      {error && (
+        <p className="mt-2 inline-flex items-center gap-1 text-xs text-rose-600">
+          <TriangleAlert className="h-3 w-3" /> 打包失败：{error}
+        </p>
+      )}
+    </section>
+  )
+}
+
 function StoryImageCard({
   projectId,
   artifact,
@@ -1482,8 +1845,12 @@ function StoryImageCard({
   const [downloading, setDownloading] = useState(false)
   const [preset, setPreset] = useState<'cover' | 'square' | 'banner' | 'auto' | 'custom'>('cover')
   const [customVal, setCustomVal] = useState('')
-  const [showAuthor, setShowAuthor] = useState(false)
-  const [authorName, setAuthorName] = useState('')
+  const [showAuthor, setShowAuthor] = useState(
+    () => readStoryImageAuthor(projectId)?.showAuthor ?? false,
+  )
+  const [authorName, setAuthorName] = useState(
+    () => readStoryImageAuthor(projectId)?.authorName ?? '',
+  )
   const [exportFormat, setExportFormat] = useState<'png' | 'jpg' | 'jpeg'>('png')
   const [exportQuality, setExportQuality] = useState(88)
   const payload = parseStoryImageArtifact(artifact)
@@ -1499,14 +1866,23 @@ function StoryImageCard({
 
   useEffect(() => {
     if (!payload) return
-    setShowAuthor(payload.show_author)
-    if (payload.author_name) setAuthorName(payload.author_name)
+    // 优先尊重本地已保存的署名设置；仅当本地没有时才用产物里的值回填
+    const stored = readStoryImageAuthor(projectId)
+    if (!stored) {
+      setShowAuthor(payload.show_author)
+      if (payload.author_name) setAuthorName(payload.author_name)
+    }
     if (payload.cover_size) {
       const found = Object.entries(sizeMap).find(([, v]) => v === payload.cover_size)
       if (found) setPreset(found[0] as typeof preset)
       else { setPreset('custom'); setCustomVal(payload.cover_size) }
     }
-  }, [payload])
+  }, [payload, projectId])
+
+  // 作者署名设置变化即持久化，离开页面再回来不丢
+  useEffect(() => {
+    writeStoryImageAuthor(projectId, { authorName, showAuthor })
+  }, [projectId, authorName, showAuthor])
 
   const start = async () => {
     setError(null)
@@ -1532,6 +1908,23 @@ function StoryImageCard({
     } finally {
       clearAiJob(projectId)
       setGenerating(false)
+    }
+  }
+
+  const handleDownload = async (fit?: 'cover') => {
+    if (!payload) return
+    try {
+      setDownloading(true)
+      setError(null)
+      await downloadCompositedCover(
+        payload.data_url,
+        storyImageFilename(projectId, exportFormat),
+        { format: exportFormat, quality: exportQuality / 100, fit },
+      )
+    } catch (e) {
+      setError(extractErrorMessage(e))
+    } finally {
+      setDownloading(false)
     }
   }
 
@@ -1566,32 +1959,38 @@ function StoryImageCard({
       {disabled && <p className="mb-2 text-xs text-gray-400">{disabledHint}</p>}
 
       {/* 尺寸预设 */}
+      <p className="mb-1.5 text-[11px] font-medium text-gray-500">封面尺寸</p>
       <div className="mb-3 flex flex-wrap gap-2">
         {[
-          { key: 'cover', label: '番茄封面' },
-          { key: 'square', label: '方图' },
-          { key: 'banner', label: '横版宣传图' },
-          { key: 'auto', label: '自动' },
+          { key: 'cover', label: '番茄封面', ratio: '2:3' },
+          { key: 'square', label: '方图', ratio: '1:1' },
+          { key: 'banner', label: '横版宣传图', ratio: '3:2' },
+          { key: 'auto', label: '自动', ratio: '' },
         ].map((opt) => (
           <button
             key={opt.key}
             type="button"
             onClick={() => setPreset(opt.key as typeof preset)}
-            className={`rounded-full px-3 py-1 text-[11px] ${
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] transition ${
               preset === opt.key
-                ? 'bg-sky-100 text-sky-700'
+                ? 'bg-sky-100 text-sky-700 ring-1 ring-sky-200'
                 : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
             }`}
           >
             {opt.label}
+            {opt.ratio && (
+              <span className={preset === opt.key ? 'text-[10px] text-sky-500' : 'text-[10px] text-gray-400'}>
+                {opt.ratio}
+              </span>
+            )}
           </button>
         ))}
         <button
           type="button"
           onClick={() => setPreset('custom')}
-          className={`rounded-full px-3 py-1 text-[11px] ${
+          className={`rounded-full px-3 py-1 text-[11px] transition ${
             preset === 'custom'
-              ? 'bg-sky-100 text-sky-700'
+              ? 'bg-sky-100 text-sky-700 ring-1 ring-sky-200'
               : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
           }`}
         >
@@ -1614,7 +2013,7 @@ function StoryImageCard({
         </div>
       )}
 
-      {/* 作者署名 + 导出 */}
+      {/* 作者署名（影响生成与水印） */}
       <div className="mb-3 rounded-md border border-gray-200 bg-gray-50 p-3">
         <p className="mb-2 text-[11px] leading-5 text-gray-500">
           默认按番茄小说封面尺寸 2:3 生成；预览和下载叠加作品名，作者署名可选。
@@ -1638,39 +2037,6 @@ function StoryImageCard({
             className="mt-2 block w-full rounded-md border border-gray-300 px-3 py-2 text-xs shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
           />
         )}
-
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <label className="text-[11px] font-medium text-gray-600">
-            导出格式
-            <select
-              value={exportFormat}
-              onChange={(e) => setExportFormat(e.target.value as typeof exportFormat)}
-              className="mt-1 block w-full rounded-md border border-gray-300 bg-white px-2 py-1.5 text-xs shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
-              data-testid="cover-export-format"
-            >
-              <option value="png">PNG 无损</option>
-              <option value="jpg">JPG 压缩</option>
-              <option value="jpeg">JPEG 压缩</option>
-            </select>
-          </label>
-          <label className="text-[11px] font-medium text-gray-600">
-            JPEG 质量：{exportQuality}%
-            <input
-              type="range"
-              min={60}
-              max={95}
-              step={1}
-              value={exportQuality}
-              disabled={exportFormat === 'png'}
-              onChange={(e) => setExportQuality(Number(e.target.value))}
-              className="mt-2 block w-full accent-sky-600 disabled:opacity-40"
-              data-testid="cover-export-quality"
-            />
-          </label>
-        </div>
-        <p className="mt-2 text-[11px] text-gray-400">
-          平台要求小于 5MB 时优先选 JPG/JPEG；仍超限则降低质量后重新下载。
-        </p>
       </div>
 
       {(generating || activeJob) && (
@@ -1693,38 +2059,70 @@ function StoryImageCard({
               alt="小说配图"
               className="mx-auto block max-h-[520px] w-full object-contain"
             />
-            {payload.show_author && payload.author_name && (
-              <div className="pointer-events-none absolute bottom-4 right-4 rounded-full bg-black/55 px-3 py-1.5 text-xs font-medium text-white shadow-lg backdrop-blur-sm">
-                {payload.author_name}
-              </div>
-            )}
           </div>
+          {/* 导出选项 */}
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+            <span className="text-[11px] font-medium text-gray-500">格式</span>
+            <div className="inline-flex overflow-hidden rounded-md ring-1 ring-gray-300">
+              {(['png', 'jpg', 'jpeg'] as const).map((fmt) => (
+                <button
+                  key={fmt}
+                  type="button"
+                  onClick={() => setExportFormat(fmt)}
+                  className={`px-2.5 py-1 text-[11px] transition ${
+                    exportFormat === fmt
+                      ? 'bg-sky-600 text-white'
+                      : 'bg-white text-gray-500 hover:bg-gray-100'
+                  }`}
+                  data-testid={`cover-export-format-${fmt}`}
+                >
+                  {fmt.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            {exportFormat !== 'png' && (
+              <label className="ml-1 inline-flex items-center gap-2 text-[11px] text-gray-500">
+                质量 {exportQuality}%
+                <input
+                  type="range"
+                  min={60}
+                  max={95}
+                  step={1}
+                  value={exportQuality}
+                  onChange={(e) => setExportQuality(Number(e.target.value))}
+                  className="h-1 w-24 accent-sky-600"
+                  data-testid="cover-export-quality"
+                />
+              </label>
+            )}
+            <span className="ml-auto text-[10px] text-gray-400">
+              {exportFormat === 'png' ? '无损·体积大' : '<5MB 优先选 JPG'}
+            </span>
+          </div>
+
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  setDownloading(true)
-                  await downloadCompositedCover(
-                    payload.data_url,
-                    storyImageFilename(projectId, exportFormat),
-                    payload.title_text,
-                    payload.author_name,
-                    payload.show_author,
-                    { format: exportFormat, quality: exportQuality / 100 },
-                  )
-                } catch (e) {
-                  setError(extractErrorMessage(e))
-                } finally {
-                  setDownloading(false)
-                }
-              }}
-              className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+              onClick={() => handleDownload()}
+              disabled={downloading}
+              className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
               data-testid="download-story-image-btn"
             >
-              {downloading ? '导出中…' : `下载${exportFormat.toUpperCase()}`}
+              <Download className="h-3 w-3" />
+              {downloading ? '导出中…' : `下载 ${exportFormat.toUpperCase()}`}
             </button>
-            <span className="rounded-full bg-sky-50 px-2 py-1 text-[11px] text-sky-700">
+            <button
+              type="button"
+              onClick={() => handleDownload('cover')}
+              disabled={downloading}
+              className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs text-sky-700 hover:bg-sky-100 disabled:opacity-50"
+              data-testid="crop-story-image-btn"
+              title="保持原图像素，按 3:4 比例裁剪（水平居中、顶部对齐）后下载"
+            >
+              <Crop className="h-3 w-3" />
+              {downloading ? '处理中…' : '裁剪 3:4 下载'}
+            </button>
+            <span className="ml-auto rounded-full bg-gray-100 px-2 py-1 text-[10px] text-gray-500">
               {payload.model}
             </span>
           </div>

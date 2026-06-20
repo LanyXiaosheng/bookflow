@@ -7,8 +7,8 @@ use bookflow_domain::{Beat, Score};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tokio::sync::{mpsc, RwLock};
-use tokio::time::sleep;
+use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::time::{sleep, Instant};
 use tracing::{error, warn};
 
 /// 后端用的 AI 配置（从 env 读，运行时可被 Settings 接口热替换）
@@ -77,6 +77,9 @@ impl AiConfig {
 pub struct AiClient {
     cfg: Arc<RwLock<AiConfig>>,
     http: reqwest::Client,
+    /// 全局限速闸门：记录「下一次最早可发请求」的时刻。所有 AI 调用串行过闸，
+    /// 把瞬时并发摊平成错峰，避免一次性打空上游共享账号池（503 No available accounts）。
+    rate_gate: Arc<Mutex<Instant>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,7 +99,30 @@ impl AiClient {
         Ok(Self {
             cfg: Arc::new(RwLock::new(cfg)),
             http,
+            rate_gate: Arc::new(Mutex::new(Instant::now())),
         })
+    }
+
+    /// 全局限速：每次 AI 请求发起前调用。串行抢闸 + 按最小间隔放行，
+    /// 把瞬时并发摊平。间隔由 AI_MIN_INTERVAL_MS 控制（默认 350ms，0=不限速）。
+    async fn throttle(&self) {
+        let interval_ms: u64 = std::env::var("AI_MIN_INTERVAL_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(350);
+        if interval_ms == 0 {
+            return;
+        }
+        let interval = Duration::from_millis(interval_ms);
+        let mut next = self.rate_gate.lock().await;
+        let now = Instant::now();
+        if *next > now {
+            let wait = *next - now;
+            sleep(wait).await;
+            *next += interval;
+        } else {
+            *next = now + interval;
+        }
     }
 
     /// 热替换配置（Settings PUT 后调用）。注意：timeout 改了不会重建 http client，下次重启生效。
@@ -143,9 +169,10 @@ impl AiClient {
     async fn complete_anthropic(&self, cfg: &AiConfig, system: &str, user: &str) -> Result<String> {
         let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
         for attempt in 1..=MAX_AI_ATTEMPTS {
+            self.throttle().await;
             let body = json!({
                 "model": cfg.model,
-                "max_tokens": 1024,
+                "max_tokens": 4096,
                 "system": system,
                 "messages": [{"role": "user", "content": user}],
             });
@@ -165,6 +192,7 @@ impl AiClient {
                     if status.is_success() {
                         let parsed: AnthropicResp = serde_json::from_str(&text)
                             .with_context(|| format!("解析 anthropic 响应失败: {text}"))?;
+                        let truncated = parsed.stop_reason.as_deref() == Some("max_tokens");
                         let out = parsed
                             .content
                             .into_iter()
@@ -174,6 +202,12 @@ impl AiClient {
                             })
                             .collect::<Vec<_>>()
                             .join("");
+                        if truncated {
+                            // 输出被 max_tokens 截断，JSON 必然不完整，提前给出可读错误
+                            return Err(anyhow!(
+                                "AI 输出超长被截断（stop_reason=max_tokens），请缩短章节或重试"
+                            ));
+                        }
                         return Ok(out);
                     }
 
@@ -209,8 +243,12 @@ impl AiClient {
     }
 
     async fn complete_openai(&self, cfg: &AiConfig, system: &str, user: &str) -> Result<String> {
+        if openai_uses_responses_api(cfg) {
+            return self.complete_openai_responses(cfg, system, user).await;
+        }
         let url = format!("{}/v1/chat/completions", cfg.base_url.trim_end_matches('/'));
         for attempt in 1..=MAX_AI_ATTEMPTS {
+            self.throttle().await;
             let body = json!({
                 "model": cfg.model,
                 "temperature": 0.4,
@@ -280,6 +318,85 @@ impl AiClient {
             }
         }
         unreachable!("openai completion retry loop must return")
+    }
+
+    async fn complete_openai_responses(
+        &self,
+        cfg: &AiConfig,
+        system: &str,
+        user: &str,
+    ) -> Result<String> {
+        let url = format!("{}/v1/responses", cfg.base_url.trim_end_matches('/'));
+        for attempt in 1..=MAX_AI_ATTEMPTS {
+            self.throttle().await;
+            let body = json!({
+                "model": cfg.model,
+                "instructions": system,
+                "input": user,
+            });
+            let send = self
+                .http
+                .post(&url)
+                .bearer_auth(&cfg.api_key)
+                .json(&body)
+                .send()
+                .await;
+            match send {
+                Ok(resp) => {
+                    let status = resp.status();
+                    let text = resp.text().await.context("读 openai responses 响应失败")?;
+                    if status.is_success() {
+                        let parsed: OpenAiResponsesResp = serde_json::from_str(&text)
+                            .with_context(|| format!("解析 openai responses 响应失败: {text}"))?;
+                        if !parsed.output_text.is_empty() {
+                            return Ok(parsed.output_text);
+                        }
+                        let out = parsed
+                            .output
+                            .into_iter()
+                            .flat_map(|item| item.content.into_iter())
+                            .filter_map(|c| c.text)
+                            .collect::<String>();
+                        return Ok(out);
+                    }
+
+                    if should_retry_status(status) && attempt < MAX_AI_ATTEMPTS {
+                        warn!(
+                            attempt,
+                            max_attempts = MAX_AI_ATTEMPTS,
+                            %status,
+                            "openai responses completion failed with retryable status"
+                        );
+                        sleep(retry_delay(attempt)).await;
+                        continue;
+                    }
+
+                    error!(
+                        attempt,
+                        %status,
+                        body = %text,
+                        "openai responses completion failed"
+                    );
+                    return Err(anyhow!(openai_status_user_message(status)));
+                }
+                Err(err) => {
+                    if should_retry_transport(&err) && attempt < MAX_AI_ATTEMPTS {
+                        warn!(
+                            attempt,
+                            max_attempts = MAX_AI_ATTEMPTS,
+                            err = %err,
+                            "openai responses completion transport failed, retrying"
+                        );
+                        sleep(retry_delay(attempt)).await;
+                        continue;
+                    }
+
+                    error!(attempt, err = %err, "openai responses completion transport failed");
+                    return Err(anyhow!(openai_transport_user_message(&err)));
+                }
+            }
+        }
+        unreachable!("openai responses completion retry loop must return")
     }
 
     async fn generate_openai_image(
@@ -389,13 +506,28 @@ impl AiClient {
         let (tx, rx) = mpsc::channel::<StreamEvent>(64);
         let cfg = self.cfg.read().await.clone();
         let http = self.http.clone();
+        let gate = self.rate_gate.clone();
         tokio::spawn(async move {
             let r = match cfg.provider {
                 Provider::Anthropic => {
-                    stream_anthropic(&http, &cfg, &system, &user, max_tokens, tx.clone()).await
+                    stream_anthropic(&http, &cfg, &system, &user, max_tokens, tx.clone(), &gate).await
                 }
                 Provider::Openai => {
-                    stream_openai(&http, &cfg, &system, &user, max_tokens, tx.clone()).await
+                    if openai_uses_responses_api(&cfg) {
+                        stream_openai_responses(
+                            &http,
+                            &cfg,
+                            &system,
+                            &user,
+                            max_tokens,
+                            tx.clone(),
+                            &gate,
+                        )
+                        .await
+                    } else {
+                        stream_openai(&http, &cfg, &system, &user, max_tokens, tx.clone(), &gate)
+                            .await
+                    }
                 }
             };
             if let Err(e) = r {
@@ -420,7 +552,28 @@ fn stream_timeout(cfg: &AiConfig) -> Duration {
     cfg.timeout.max(Duration::from_secs(600))
 }
 
-const MAX_AI_ATTEMPTS: usize = 5;
+/// 全局限速闸门（流式专用，复用 AiClient.rate_gate）。
+async fn throttle_gate(gate: &Arc<Mutex<Instant>>) {
+    let interval_ms: u64 = std::env::var("AI_MIN_INTERVAL_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(350);
+    if interval_ms == 0 {
+        return;
+    }
+    let interval = Duration::from_millis(interval_ms);
+    let mut next = gate.lock().await;
+    let now = Instant::now();
+    if *next > now {
+        let wait = *next - now;
+        sleep(wait).await;
+        *next += interval;
+    } else {
+        *next = now + interval;
+    }
+}
+
+const MAX_AI_ATTEMPTS: usize = 7;
 
 fn should_retry_status(status: reqwest::StatusCode) -> bool {
     matches!(status.as_u16(), 429 | 502 | 503 | 504)
@@ -438,7 +591,9 @@ fn retry_delay(attempt: usize) -> Duration {
         1 => 1000,
         2 => 2000,
         3 => 4000,
-        _ => 8000,
+        4 => 8000,
+        5 => 12000,
+        _ => 16000,
     };
     // 0..=base/2 的伪随机抖动，无需引第三方 rng
     let jitter = pseudo_jitter(base_ms / 2);
@@ -464,6 +619,31 @@ fn body_is_retryable(body: &str) -> bool {
     b.contains("no available accounts") || b.contains("overloaded") || b.contains("rate_limit")
 }
 
+fn openai_uses_responses_api(cfg: &AiConfig) -> bool {
+    if cfg.provider != Provider::Openai || !cfg.model.starts_with("gpt-5") {
+        return false;
+    }
+    match std::env::var("AI_OPENAI_API_KIND")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("responses") => return true,
+        Some("chat") | Some("chat_completions") | Some("chat-completions") => return false,
+        _ => {}
+    }
+    is_official_openai_base_url(&cfg.base_url)
+}
+
+fn is_official_openai_base_url(base_url: &str) -> bool {
+    let normalized = base_url.trim().to_ascii_lowercase();
+    normalized == "https://api.openai.com"
+        || normalized == "https://api.openai.com/"
+        || normalized.starts_with("https://api.openai.com/")
+}
+
 fn openai_status_user_message(status: reqwest::StatusCode) -> &'static str {
     match status.as_u16() {
         429 | 502 | 503 | 504 => "上游 AI 服务暂时不可用，请稍后重试",
@@ -480,6 +660,16 @@ fn openai_transport_user_message(err: &reqwest::Error) -> &'static str {
     }
 }
 
+/// 读流结果：用于决定是否可安全重试。
+enum DrainOutcome {
+    /// 正常读完（已收到 [DONE]/message_stop 或流自然结束且吐过内容）
+    Done,
+    /// 还没吐出任何 delta 就断流/早期错误 —— 可安全整请求重试
+    RetryableEarly(String),
+    /// 已吐出内容后失败 —— 不能重试（会重复），上抛
+    Fatal(anyhow::Error),
+}
+
 async fn stream_anthropic(
     http: &reqwest::Client,
     cfg: &AiConfig,
@@ -487,11 +677,15 @@ async fn stream_anthropic(
     user: &str,
     max_tokens: u32,
     tx: mpsc::Sender<StreamEvent>,
+    gate: &Arc<Mutex<Instant>>,
 ) -> Result<()> {
     let url = format!("{}/v1/messages", cfg.base_url.trim_end_matches('/'));
-    // 只在「建连 + 拿状态码」阶段重试：一旦开始读流、吐出 delta 就不能重试（否则重复内容）。
-    let mut resp = None;
+    // 连接 + 读流整体放进重试循环：
+    // - 连接/状态码失败可重试
+    // - 开流后「还没吐出任何 delta」就断流/报错，也可安全重试（不会重复内容）
+    // - 一旦已吐出 delta 再失败，则上抛，交前端步骤级重试整步重跑
     for attempt in 1..=MAX_AI_ATTEMPTS {
+        throttle_gate(gate).await;
         let body = json!({
             "model": cfg.model,
             "max_tokens": max_tokens,
@@ -509,78 +703,87 @@ async fn stream_anthropic(
             .json(&body)
             .send()
             .await;
-        match send {
+        let resp = match send {
             Ok(candidate) => {
                 let status = candidate.status();
                 if status.is_success() {
-                    resp = Some(candidate);
-                    break;
+                    candidate
+                } else {
+                    let text = candidate.text().await.unwrap_or_default();
+                    let retryable = should_retry_status(status) || body_is_retryable(&text);
+                    if retryable && attempt < MAX_AI_ATTEMPTS {
+                        warn!(attempt, max_attempts = MAX_AI_ATTEMPTS, %status,
+                            "anthropic stream failed with retryable response, retrying");
+                        tx.send(StreamEvent::Retry { attempt: attempt + 1, max: MAX_AI_ATTEMPTS }).await.ok();
+                        sleep(retry_delay(attempt)).await;
+                        continue;
+                    }
+                    error!(attempt, %status, body = %text, "anthropic stream failed");
+                    return Err(anyhow!("anthropic stream {} : {}", status, text));
                 }
-                let text = candidate.text().await.unwrap_or_default();
-                let retryable = should_retry_status(status) || body_is_retryable(&text);
-                if retryable && attempt < MAX_AI_ATTEMPTS {
-                    warn!(
-                        attempt,
-                        max_attempts = MAX_AI_ATTEMPTS,
-                        %status,
-                        "anthropic stream failed with retryable response, retrying"
-                    );
-                    tx.send(StreamEvent::Retry {
-                        attempt: attempt + 1,
-                        max: MAX_AI_ATTEMPTS,
-                    })
-                    .await
-                    .ok();
-                    sleep(retry_delay(attempt)).await;
-                    continue;
-                }
-                error!(attempt, %status, body = %text, "anthropic stream failed");
-                return Err(anyhow!("anthropic stream {} : {}", status, text));
             }
             Err(err) => {
                 if should_retry_transport(&err) && attempt < MAX_AI_ATTEMPTS {
-                    warn!(
-                        attempt,
-                        max_attempts = MAX_AI_ATTEMPTS,
-                        err = %err,
-                        "anthropic stream transport failed, retrying"
-                    );
-                    tx.send(StreamEvent::Retry {
-                        attempt: attempt + 1,
-                        max: MAX_AI_ATTEMPTS,
-                    })
-                    .await
-                    .ok();
+                    warn!(attempt, max_attempts = MAX_AI_ATTEMPTS, err = %err,
+                        "anthropic stream transport failed, retrying");
+                    tx.send(StreamEvent::Retry { attempt: attempt + 1, max: MAX_AI_ATTEMPTS }).await.ok();
                     sleep(retry_delay(attempt)).await;
                     continue;
                 }
                 return Err(anyhow::Error::new(err).context("调 anthropic stream 失败（连接/超时）"));
             }
+        };
+
+        match drain_anthropic_stream(resp, &tx).await {
+            DrainOutcome::Done => return Ok(()),
+            DrainOutcome::Fatal(e) => return Err(e),
+            DrainOutcome::RetryableEarly(why) => {
+                if attempt < MAX_AI_ATTEMPTS {
+                    warn!(attempt, why, "anthropic stream failed before any delta, retrying");
+                    tx.send(StreamEvent::Retry { attempt: attempt + 1, max: MAX_AI_ATTEMPTS }).await.ok();
+                    sleep(retry_delay(attempt)).await;
+                    continue;
+                }
+                return Err(anyhow!("anthropic stream 多次重试仍未产出内容：{why}"));
+            }
         }
     }
-    let resp = resp.expect("anthropic stream retry loop must produce a response");
+    Ok(())
+}
+
+/// 读 Anthropic SSE 流。返回 DrainOutcome 决定能否重试。
+async fn drain_anthropic_stream(
+    resp: reqwest::Response,
+    tx: &mpsc::Sender<StreamEvent>,
+) -> DrainOutcome {
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
+    let mut emitted = 0usize;
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("读 anthropic SSE chunk 失败")?;
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => {
+                if emitted == 0 {
+                    return DrainOutcome::RetryableEarly(format!("断流：{e}"));
+                }
+                return DrainOutcome::Fatal(anyhow::Error::new(e).context("读 anthropic SSE chunk 失败"));
+            }
+        };
         buf.push_str(&String::from_utf8_lossy(&chunk));
-        // SSE 事件以空行分隔
         while let Some(idx) = buf.find("\n\n") {
             let event = buf[..idx].to_string();
             buf.drain(..idx + 2);
-            // 一个 event 可能多行 data: ；只关心 data 字段
             for line in event.lines() {
                 if let Some(payload) = line.strip_prefix("data: ") {
                     if payload.trim() == "[DONE]" {
-                        return Ok(());
+                        return DrainOutcome::Done;
                     }
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
                         match v.get("type").and_then(|t| t.as_str()) {
                             Some("content_block_delta") => {
-                                if let Some(text) =
-                                    v.pointer("/delta/text").and_then(|t| t.as_str())
-                                {
+                                if let Some(text) = v.pointer("/delta/text").and_then(|t| t.as_str()) {
                                     if !text.is_empty() {
+                                        emitted += 1;
                                         tx.send(StreamEvent::Delta(text.to_string())).await.ok();
                                     }
                                 }
@@ -589,10 +792,14 @@ async fn stream_anthropic(
                                 let msg = v
                                     .pointer("/error/message")
                                     .and_then(|t| t.as_str())
-                                    .unwrap_or("anthropic stream error");
-                                return Err(anyhow!(msg.to_string()));
+                                    .unwrap_or("anthropic stream error")
+                                    .to_string();
+                                if emitted == 0 && body_is_retryable(&msg) {
+                                    return DrainOutcome::RetryableEarly(msg);
+                                }
+                                return DrainOutcome::Fatal(anyhow!(msg));
                             }
-                            Some("message_stop") => return Ok(()),
+                            Some("message_stop") => return DrainOutcome::Done,
                             _ => {}
                         }
                     }
@@ -600,8 +807,14 @@ async fn stream_anthropic(
             }
         }
     }
-    Ok(())
+    // 流自然结束
+    if emitted == 0 {
+        DrainOutcome::RetryableEarly("流结束但未产出任何内容".into())
+    } else {
+        DrainOutcome::Done
+    }
 }
+
 
 async fn stream_openai(
     http: &reqwest::Client,
@@ -610,10 +823,11 @@ async fn stream_openai(
     user: &str,
     max_tokens: u32,
     tx: mpsc::Sender<StreamEvent>,
+    gate: &Arc<Mutex<Instant>>,
 ) -> Result<()> {
     let url = format!("{}/v1/chat/completions", cfg.base_url.trim_end_matches('/'));
-    let mut resp = None;
     for attempt in 1..=MAX_AI_ATTEMPTS {
+        throttle_gate(gate).await;
         let body = json!({
             "model": cfg.model,
             "temperature": 0.4,
@@ -632,60 +846,151 @@ async fn stream_openai(
             .json(&body)
             .send()
             .await;
-        match send {
+        let resp = match send {
             Ok(candidate) => {
                 let status = candidate.status();
                 if status.is_success() {
-                    resp = Some(candidate);
-                    break;
+                    candidate
+                } else {
+                    let text = candidate.text().await.unwrap_or_default();
+                    if (should_retry_status(status) || body_is_retryable(&text))
+                        && attempt < MAX_AI_ATTEMPTS
+                    {
+                        warn!(attempt, max_attempts = MAX_AI_ATTEMPTS, %status,
+                            "openai stream failed with retryable status");
+                        tx.send(StreamEvent::Retry { attempt: attempt + 1, max: MAX_AI_ATTEMPTS }).await.ok();
+                        sleep(retry_delay(attempt)).await;
+                        continue;
+                    }
+                    error!(attempt, %status, body = %text, "openai stream failed");
+                    return Err(anyhow!(openai_status_user_message(status)));
                 }
-                let text = candidate.text().await.unwrap_or_default();
-                if should_retry_status(status) && attempt < MAX_AI_ATTEMPTS {
-                    warn!(
-                        attempt,
-                        max_attempts = MAX_AI_ATTEMPTS,
-                        %status,
-                        "openai stream failed with retryable status"
-                    );
-                    tx.send(StreamEvent::Retry {
-                        attempt: attempt + 1,
-                        max: MAX_AI_ATTEMPTS,
-                    })
-                    .await
-                    .ok();
-                    sleep(retry_delay(attempt)).await;
-                    continue;
-                }
-                error!(attempt, %status, body = %text, "openai stream failed");
-                return Err(anyhow!(openai_status_user_message(status)));
             }
             Err(err) => {
                 if should_retry_transport(&err) && attempt < MAX_AI_ATTEMPTS {
-                    warn!(
-                        attempt,
-                        max_attempts = MAX_AI_ATTEMPTS,
-                        err = %err,
-                        "openai stream transport failed, retrying"
-                    );
-                    tx.send(StreamEvent::Retry {
-                        attempt: attempt + 1,
-                        max: MAX_AI_ATTEMPTS,
-                    })
-                    .await
-                    .ok();
+                    warn!(attempt, max_attempts = MAX_AI_ATTEMPTS, err = %err,
+                        "openai stream transport failed, retrying");
+                    tx.send(StreamEvent::Retry { attempt: attempt + 1, max: MAX_AI_ATTEMPTS }).await.ok();
                     sleep(retry_delay(attempt)).await;
                     continue;
                 }
                 error!(attempt, err = %err, "openai stream transport failed");
                 return Err(anyhow!(openai_transport_user_message(&err)));
             }
+        };
+
+        match drain_openai_stream(resp, &tx).await {
+            DrainOutcome::Done => return Ok(()),
+            DrainOutcome::Fatal(e) => return Err(e),
+            DrainOutcome::RetryableEarly(why) => {
+                if attempt < MAX_AI_ATTEMPTS {
+                    warn!(attempt, why, "openai stream failed before any delta, retrying");
+                    tx.send(StreamEvent::Retry { attempt: attempt + 1, max: MAX_AI_ATTEMPTS }).await.ok();
+                    sleep(retry_delay(attempt)).await;
+                    continue;
+                }
+                return Err(anyhow!("openai stream 多次重试仍未产出内容：{why}"));
+            }
         }
     }
-    let resp = resp.expect("openai stream retry loop must produce a response");
+    Ok(())
+}
+
+async fn stream_openai_responses(
+    http: &reqwest::Client,
+    cfg: &AiConfig,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+    tx: mpsc::Sender<StreamEvent>,
+    gate: &Arc<Mutex<Instant>>,
+) -> Result<()> {
+    let url = format!("{}/v1/responses", cfg.base_url.trim_end_matches('/'));
+    for attempt in 1..=MAX_AI_ATTEMPTS {
+        throttle_gate(gate).await;
+        let body = json!({
+            "model": cfg.model,
+            "stream": true,
+            "instructions": system,
+            "input": user,
+            "max_output_tokens": max_tokens,
+        });
+        let send = http
+            .post(&url)
+            .bearer_auth(&cfg.api_key)
+            .header("accept", "text/event-stream")
+            .timeout(stream_timeout(cfg))
+            .json(&body)
+            .send()
+            .await;
+        let resp = match send {
+            Ok(candidate) => {
+                let status = candidate.status();
+                if status.is_success() {
+                    candidate
+                } else {
+                    let text = candidate.text().await.unwrap_or_default();
+                    if (should_retry_status(status) || body_is_retryable(&text))
+                        && attempt < MAX_AI_ATTEMPTS
+                    {
+                        warn!(attempt, max_attempts = MAX_AI_ATTEMPTS, %status,
+                            "openai responses stream failed with retryable status");
+                        tx.send(StreamEvent::Retry { attempt: attempt + 1, max: MAX_AI_ATTEMPTS }).await.ok();
+                        sleep(retry_delay(attempt)).await;
+                        continue;
+                    }
+                    error!(attempt, %status, body = %text, "openai responses stream failed");
+                    return Err(anyhow!(openai_status_user_message(status)));
+                }
+            }
+            Err(err) => {
+                if should_retry_transport(&err) && attempt < MAX_AI_ATTEMPTS {
+                    warn!(attempt, max_attempts = MAX_AI_ATTEMPTS, err = %err,
+                        "openai responses stream transport failed, retrying");
+                    tx.send(StreamEvent::Retry { attempt: attempt + 1, max: MAX_AI_ATTEMPTS }).await.ok();
+                    sleep(retry_delay(attempt)).await;
+                    continue;
+                }
+                error!(attempt, err = %err, "openai responses stream transport failed");
+                return Err(anyhow!(openai_transport_user_message(&err)));
+            }
+        };
+
+        match drain_openai_responses_stream(resp, &tx).await {
+            DrainOutcome::Done => return Ok(()),
+            DrainOutcome::Fatal(e) => return Err(e),
+            DrainOutcome::RetryableEarly(why) => {
+                if attempt < MAX_AI_ATTEMPTS {
+                    warn!(attempt, why, "openai responses stream failed before any delta, retrying");
+                    tx.send(StreamEvent::Retry { attempt: attempt + 1, max: MAX_AI_ATTEMPTS }).await.ok();
+                    sleep(retry_delay(attempt)).await;
+                    continue;
+                }
+                return Err(anyhow!("openai responses stream 多次重试仍未产出内容：{why}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 读 OpenAI 兼容 SSE 流。
+async fn drain_openai_stream(
+    resp: reqwest::Response,
+    tx: &mpsc::Sender<StreamEvent>,
+) -> DrainOutcome {
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
+    let mut emitted = 0usize;
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("读 openai SSE chunk 失败")?;
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => {
+                if emitted == 0 {
+                    return DrainOutcome::RetryableEarly(format!("断流：{e}"));
+                }
+                return DrainOutcome::Fatal(anyhow::Error::new(e).context("读 openai SSE chunk 失败"));
+            }
+        };
         buf.push_str(&String::from_utf8_lossy(&chunk));
         while let Some(idx) = buf.find("\n\n") {
             let event = buf[..idx].to_string();
@@ -693,7 +998,7 @@ async fn stream_openai(
             for line in event.lines() {
                 if let Some(payload) = line.strip_prefix("data: ") {
                     if payload.trim() == "[DONE]" {
-                        return Ok(());
+                        return DrainOutcome::Done;
                     }
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
                         if let Some(text) = v
@@ -701,6 +1006,7 @@ async fn stream_openai(
                             .and_then(|t| t.as_str())
                         {
                             if !text.is_empty() {
+                                emitted += 1;
                                 tx.send(StreamEvent::Delta(text.to_string())).await.ok();
                             }
                         }
@@ -709,12 +1015,81 @@ async fn stream_openai(
             }
         }
     }
-    Ok(())
+    if emitted == 0 {
+        DrainOutcome::RetryableEarly("流结束但未产出任何内容".into())
+    } else {
+        DrainOutcome::Done
+    }
+}
+
+async fn drain_openai_responses_stream(
+    resp: reqwest::Response,
+    tx: &mpsc::Sender<StreamEvent>,
+) -> DrainOutcome {
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    let mut emitted = 0usize;
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => {
+                if emitted == 0 {
+                    return DrainOutcome::RetryableEarly(format!("断流：{e}"));
+                }
+                return DrainOutcome::Fatal(anyhow::Error::new(e).context("读 openai responses SSE chunk 失败"));
+            }
+        };
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(idx) = buf.find("\n\n") {
+            let event = buf[..idx].to_string();
+            buf.drain(..idx + 2);
+            let mut event_name = "";
+            for line in event.lines() {
+                if let Some(name) = line.strip_prefix("event: ") {
+                    event_name = name.trim();
+                }
+                if let Some(payload) = line.strip_prefix("data: ") {
+                    if payload.trim() == "[DONE]" {
+                        return DrainOutcome::Done;
+                    }
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) {
+                        if event_name == "response.output_text.delta" {
+                            if let Some(text) = v.pointer("/delta").and_then(|t| t.as_str()) {
+                                if !text.is_empty() {
+                                    emitted += 1;
+                                    tx.send(StreamEvent::Delta(text.to_string())).await.ok();
+                                }
+                            }
+                        } else if event_name == "response.failed" {
+                            let msg = v
+                                .pointer("/response/error/message")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("openai responses stream error")
+                                .to_string();
+                            if emitted == 0 && body_is_retryable(&msg) {
+                                return DrainOutcome::RetryableEarly(msg);
+                            }
+                            return DrainOutcome::Fatal(anyhow!(msg));
+                        } else if event_name == "response.completed" {
+                            return DrainOutcome::Done;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if emitted == 0 {
+        DrainOutcome::RetryableEarly("流结束但未产出任何内容".into())
+    } else {
+        DrainOutcome::Done
+    }
 }
 
 #[derive(Deserialize)]
 struct AnthropicResp {
     content: Vec<AnthropicBlock>,
+    #[serde(default)]
+    stop_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -740,6 +1115,26 @@ struct OpenAiChoice {
 #[derive(Deserialize)]
 struct OpenAiMsg {
     content: String,
+}
+
+#[derive(Deserialize)]
+struct OpenAiResponsesResp {
+    #[serde(default)]
+    output_text: String,
+    #[serde(default)]
+    output: Vec<OpenAiResponsesOutput>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiResponsesOutput {
+    #[serde(default)]
+    content: Vec<OpenAiResponsesContent>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiResponsesContent {
+    #[serde(default)]
+    text: Option<String>,
 }
 
 // === 选题 AI 试评 ===
@@ -870,16 +1265,193 @@ pub async fn stream_publish_post(
 
 pub async fn stream_side_dishes(
     client: &AiClient,
+    track: &str,
     readme_md: &str,
     outline_md: &str,
     body_excerpt: &str,
 ) -> mpsc::Receiver<StreamEvent> {
-    let user = format!(
-        "README:\n{readme_md}\n\n大纲:\n{outline_md}\n\n正文节选（用于挑选段引流）:\n{body_excerpt}\n\n请输出配套.md。"
-    );
+    let scope = side_dish_tag_scope_from_track(track);
+    let user = side_dishes_user_prompt(readme_md, outline_md, body_excerpt, &scope);
     client
         .stream_text(SIDE_DISHES_SYSTEM.to_string(), user, 2000)
         .await
+}
+
+#[derive(Debug, Clone)]
+pub struct SideDishTagScope {
+    primary: String,
+    plots: Vec<String>,
+}
+
+pub fn side_dish_tag_scope_from_track(track: &str) -> SideDishTagScope {
+    let (primary, plots) = split_project_track(track);
+    SideDishTagScope { primary, plots }
+}
+
+fn side_dishes_user_prompt(
+    readme_md: &str,
+    outline_md: &str,
+    body_excerpt: &str,
+    scope: &SideDishTagScope,
+) -> String {
+    format!(
+        "README:\n{readme_md}\n\n大纲:\n{outline_md}\n\n正文节选（用于挑选段引流）:\n{body_excerpt}\n\n标签硬约束：\n- 主分类只能填写：{primary}\n- 情节只能从这里选择：{plots}\n- 角色只能从系统 prompt 的角色池里选\n- 情绪只能从系统 prompt 的情绪池里选\n- 背景只能从系统 prompt 的背景池里选\n- 禁止输出不在上述范围内的主分类或情节；不确定时也必须使用上述值。\n\n请输出配套.md。",
+        primary = scope.primary,
+        plots = scope.plots.join(" / "),
+    )
+}
+
+pub fn normalize_side_dishes_tags(content: &str, scope: &SideDishTagScope) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let Some(tag_heading_idx) = lines.iter().position(|line| line.trim() == "## 标签") else {
+        return content.to_string();
+    };
+    let next_heading_idx = lines
+        .iter()
+        .enumerate()
+        .skip(tag_heading_idx + 1)
+        .find_map(|(idx, line)| line.trim_start().starts_with("## ").then_some(idx))
+        .unwrap_or(lines.len());
+
+    let mut out = Vec::new();
+    out.extend(lines[..=tag_heading_idx].iter().map(|line| (*line).to_string()));
+    out.push(format!("- 主分类：{}", scope.primary));
+    out.push(format!("- 情节：{}", scope.plots.join(" / ")));
+
+    let tag_lines = &lines[tag_heading_idx + 1..next_heading_idx];
+    out.push(format!(
+        "- 角色：{}",
+        normalize_tag_values(tag_lines, "角色", &SIDE_DISH_ROLE_TAGS, 1, 2, &["大女主"])
+            .join(" / ")
+    ));
+    out.push(format!(
+        "- 情绪：{}",
+        normalize_tag_values(tag_lines, "情绪", &SIDE_DISH_EMOTION_TAGS, 1, 2, &["爽文"])
+            .join(" / ")
+    ));
+    out.push(format!(
+        "- 背景：{}",
+        normalize_tag_values(tag_lines, "背景", &SIDE_DISH_BACKGROUND_TAGS, 1, 1, &["现代都市"])
+            .join(" / ")
+    ));
+
+    out.extend(lines[next_heading_idx..].iter().map(|line| (*line).to_string()));
+    let mut normalized = out.join("\n");
+    if content.ends_with('\n') {
+        normalized.push('\n');
+    }
+    normalized
+}
+
+const SIDE_DISH_ROLE_TAGS: [&str; 7] = [
+    "霸总",
+    "病娇",
+    "双强",
+    "高智商女主",
+    "大女主",
+    "真千金",
+    "天才宝宝",
+];
+const SIDE_DISH_EMOTION_TAGS: [&str; 6] = ["爽文", "解压", "高能", "反转", "上头", "短小精悍"];
+const SIDE_DISH_BACKGROUND_TAGS: [&str; 6] = [
+    "豪门",
+    "娱乐圈",
+    "商战",
+    "校园",
+    "古言宫斗",
+    "现代都市",
+];
+
+fn normalize_tag_values(
+    tag_lines: &[&str],
+    label: &str,
+    allowed: &[&str],
+    min: usize,
+    max: usize,
+    fallback: &[&str],
+) -> Vec<String> {
+    let mut values = tag_lines
+        .iter()
+        .find_map(|line| parse_tag_line(line, label))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|item| allowed.iter().any(|allowed_item| allowed_item == item))
+        .fold(Vec::<String>::new(), |mut acc, item| {
+            if !acc.iter().any(|existing| existing == &item) {
+                acc.push(item);
+            }
+            acc
+        });
+    for item in fallback {
+        if values.len() >= min {
+            break;
+        }
+        if allowed.iter().any(|allowed_item| allowed_item == item)
+            && !values.iter().any(|existing| existing == item)
+        {
+            values.push((*item).to_string());
+        }
+    }
+    values.truncate(max);
+    values
+}
+
+fn parse_tag_line(line: &str, label: &str) -> Option<Vec<String>> {
+    let trimmed = line.trim();
+    let rest = trimmed
+        .strip_prefix("- ")
+        .unwrap_or(trimmed)
+        .strip_prefix(&format!("{label}："))
+        .or_else(|| {
+            trimmed
+                .strip_prefix("- ")
+                .unwrap_or(trimmed)
+                .strip_prefix(&format!("{label}:"))
+        })?;
+    Some(
+        rest.split(['/', '／', '、', ',', '，'])
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+    )
+}
+
+fn split_project_track(track: &str) -> (String, Vec<String>) {
+    let normalized = track.trim();
+    if normalized.is_empty() {
+        return ("婚姻家庭".to_string(), vec!["追妻火葬场".to_string()]);
+    }
+    let separators = ["·", " / ", "/", "-", "｜", "|"];
+    for separator in separators {
+        if let Some(idx) = normalized.find(separator) {
+            if idx == 0 {
+                continue;
+            }
+            let primary = normalized[..idx].trim();
+            let plots = normalized[idx + separator.len()..]
+                .split('/')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            return (
+                if primary.is_empty() { "婚姻家庭" } else { primary }.to_string(),
+                if plots.is_empty() {
+                    vec!["追妻火葬场".to_string()]
+                } else {
+                    plots
+                },
+            );
+        }
+    }
+    match normalized {
+        "现言婚恋火葬场" => ("婚姻家庭".to_string(), vec!["追妻火葬场".to_string()]),
+        "古言重生打脸" => ("历史古代".to_string(), vec!["重生".to_string()]),
+        "古言替嫁冲喜" => ("古言甜宠".to_string(), vec!["先婚后爱".to_string()]),
+        "悬疑规则怪谈" => ("悬疑惊悚".to_string(), vec!["规则怪谈".to_string()]),
+        _ => (normalized.to_string(), vec!["追妻火葬场".to_string()]),
+    }
 }
 
 pub async fn stream_blurb(
@@ -1094,6 +1666,12 @@ pub struct AiSeedCandidate {
     pub title_type: String,
     #[serde(default)]
     pub blurb_hint: String,
+    /// 推荐原因：为什么现在推这个题材（一句话）
+    #[serde(default)]
+    pub recommend_reason: String,
+    /// 目前热度：AI 估的市场热度标签（爆款在售 / 上升期 / 平稳 / 冷门）
+    #[serde(default)]
+    pub heat: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1144,8 +1722,93 @@ pub async fn generate_seeds(client: &AiClient, track: &str) -> Result<AiSeedGene
     Ok(parsed)
 }
 
-// === 多米 API（文生图 / 图生图 / 文生视频） ===
+// === 赛道推荐（主分类 + 情节组合）===
 
+const TRACK_RECOMMEND_SYSTEM: &str = include_str!("ai_prompts/track_recommend.system.md");
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AiTrackRecommendation {
+    pub primary: String,
+    pub plots: Vec<String>,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub heat: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AiTrackRecommendGenerated {
+    pub recommendations: Vec<AiTrackRecommendation>,
+}
+
+pub async fn recommend_tracks(
+    client: &AiClient,
+    primaries: &[String],
+    plots: &[String],
+) -> Result<AiTrackRecommendGenerated> {
+    let user = format!(
+        "可选主分类（只能从这里选 1 个）：\n{}\n\n可选情节标签（只能从这里选 1-3 个）：\n{}\n\n请按 schema 严格只回 JSON。",
+        primaries.join("、"),
+        plots.join("、"),
+    );
+    let raw = client.complete_json(TRACK_RECOMMEND_SYSTEM, &user).await?;
+    let json_str = extract_json(&raw).with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
+    let parsed: AiTrackRecommendGenerated = match serde_json::from_str(json_str) {
+        Ok(p) => p,
+        Err(first_err) => {
+            let fix_user = format!(
+                "下面这段 JSON 有解析错误（{first_err}），请把它修成合法 JSON 后原样返回。\n注意：字符串字面量里的引号要换成中文「」，不要用英文 \"。\n\n{json_str}"
+            );
+            let fixed_raw = client.complete_json(TRACK_RECOMMEND_SYSTEM, &fix_user).await?;
+            let fixed = extract_json(&fixed_raw)
+                .with_context(|| format!("AI 修复输出仍找不到 JSON：{fixed_raw}"))?;
+            serde_json::from_str::<AiTrackRecommendGenerated>(fixed)
+                .with_context(|| format!("修复后仍解析失败：{fixed}"))?
+        }
+    };
+    if parsed.recommendations.is_empty() {
+        return Err(anyhow!("AI 没推荐任何赛道组合"));
+    }
+    Ok(parsed)
+}
+
+// === 历史候选热度回填 ===
+
+const HEAT_BACKFILL_SYSTEM: &str = include_str!("ai_prompts/seed_heat_backfill.system.md");
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HeatBackfillItem {
+    pub title: String,
+    #[serde(default)]
+    pub heat: String,
+    #[serde(default)]
+    pub recommend_reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct HeatBackfillResp {
+    items: Vec<HeatBackfillItem>,
+}
+
+/// 一批 (title, track) → 热度 + 推荐原因
+pub async fn backfill_heat(
+    client: &AiClient,
+    rows: &[(String, String)],
+) -> Result<Vec<HeatBackfillItem>> {
+    let list = rows
+        .iter()
+        .map(|(title, track)| format!("- 标题：{title}（赛道：{track}）"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let user = format!("候选列表：\n{list}\n\n请按 schema 严格只回 JSON。");
+    let raw = client.complete_json(HEAT_BACKFILL_SYSTEM, &user).await?;
+    let json_str = extract_json(&raw).with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
+    let parsed: HeatBackfillResp = serde_json::from_str(json_str)
+        .with_context(|| format!("AI JSON 解析失败：{json_str}"))?;
+    Ok(parsed.items)
+}
+
+// === 多米 API（文生图 / 图生图 / 文生视频） ===
 const DOMIAPI_BASE: &str = "https://duomiapi.com";
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1433,6 +2096,41 @@ impl DuoMiClient {
     }
 }
 
+/// 复盘分析输出
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewAnalyzeResponse {
+    pub overall_result: String,
+    pub title_result: String,
+    pub hook_result: String,
+    pub emotion_result: String,
+    pub success_reason: String,
+    pub failure_reason: String,
+    pub next_action: String,
+}
+
+const REVIEW_ANALYZE_SYSTEM: &str = include_str!("ai_prompts/review_analyze.system.md");
+
+/// AI 复盘分析：根据作品数据（标题/赛道/字数/阅读量/分类标签）生成复盘结论
+pub async fn analyze_review(
+    client: &AiClient,
+    project_title: &str,
+    track: &str,
+    total_words: u32,
+    read_count: i64,
+    word_number: i32,
+    categories_json: Option<&str>,
+) -> Result<ReviewAnalyzeResponse> {
+    let user = format!(
+        "标题：{project_title}\n赛道：{track}\n总字数：{total_words}\n阅读量：{read_count}\n互动量：{word_number}\n分类标签：{}",
+        categories_json.unwrap_or("[]")
+    );
+    let raw = client.complete_json(REVIEW_ANALYZE_SYSTEM, &user).await?;
+    let json_str = extract_json(&raw).unwrap_or(&raw);
+    let resp: ReviewAnalyzeResponse = serde_json::from_str(json_str)
+        .map_err(|e| anyhow!("AI 复盘分析 JSON 解析失败: {e}\nraw: {json_str}"))?;
+    Ok(resp)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1506,6 +2204,43 @@ mod tests {
     }
 
     #[test]
+    fn side_dishes_prompt_locks_project_track_tags() {
+        let scope = side_dish_tag_scope_from_track("婚姻家庭·追妻火葬场/大女主");
+        let user = side_dishes_user_prompt("# README", "# 大纲", "正文", &scope);
+
+        assert!(user.contains("主分类只能填写：婚姻家庭"));
+        assert!(user.contains("情节只能从这里选择：追妻火葬场 / 大女主"));
+        assert!(user.contains("禁止输出不在上述范围内的主分类或情节"));
+    }
+
+    #[test]
+    fn normalize_side_dishes_tags_replaces_out_of_pool_track_labels() {
+        let scope = side_dish_tag_scope_from_track("婚姻家庭·追妻火葬场/大女主");
+        let raw = r#"# 配套：测试
+
+## 标签
+- 主分类：都市职场
+- 情节：火葬场 / 复仇 / 反套路 / 马甲
+- 角色：大女主 / 双强
+- 情绪：爽文 / 解压
+- 背景：商战
+
+## 推荐发布时段
+21:00-22:00
+"#;
+
+        let normalized = normalize_side_dishes_tags(raw, &scope);
+
+        assert!(normalized.contains("- 主分类：婚姻家庭"));
+        assert!(normalized.contains("- 情节：追妻火葬场 / 大女主"));
+        assert!(normalized.contains("- 角色：大女主 / 双强"));
+        assert!(normalized.contains("- 情绪：爽文 / 解压"));
+        assert!(normalized.contains("- 背景：商战"));
+        assert!(!normalized.contains("主分类：都市职场"));
+        assert!(!normalized.contains("情节：火葬场 / 复仇 / 反套路 / 马甲"));
+    }
+
+    #[test]
     fn stream_timeout_has_ten_minute_floor() {
         let cfg = AiConfig {
             provider: Provider::Openai,
@@ -1513,6 +2248,7 @@ mod tests {
             api_key: String::new(),
             model: String::new(),
             image_model: "gpt-image-2".into(),
+            duomiapi_key: String::new(),
             timeout: Duration::from_secs(60),
         };
         assert_eq!(stream_timeout(&cfg), Duration::from_secs(600));
@@ -1526,8 +2262,65 @@ mod tests {
             api_key: String::new(),
             model: String::new(),
             image_model: "gpt-image-2".into(),
+            duomiapi_key: String::new(),
             timeout: Duration::from_secs(900),
         };
         assert_eq!(stream_timeout(&cfg), Duration::from_secs(900));
+    }
+
+    #[test]
+    fn official_openai_gpt_5_models_use_responses_api() {
+        let cfg = AiConfig {
+            provider: Provider::Openai,
+            base_url: "https://api.openai.com".into(),
+            api_key: "sk-test".into(),
+            model: "gpt-5.5".into(),
+            image_model: "gpt-image-2".into(),
+            duomiapi_key: String::new(),
+            timeout: Duration::from_secs(60),
+        };
+        assert!(openai_uses_responses_api(&cfg));
+    }
+
+    #[test]
+    fn openai_compatible_gateway_gpt_5_models_keep_chat_completions_by_default() {
+        let cfg = AiConfig {
+            provider: Provider::Openai,
+            base_url: "http://43.133.47.36:8080".into(),
+            api_key: "sk-test".into(),
+            model: "gpt-5.5".into(),
+            image_model: "gpt-image-2".into(),
+            duomiapi_key: String::new(),
+            timeout: Duration::from_secs(60),
+        };
+        assert!(!openai_uses_responses_api(&cfg));
+    }
+
+    #[test]
+    fn anthropic_claude_models_never_use_openai_responses_api() {
+        let cfg = AiConfig {
+            provider: Provider::Anthropic,
+            base_url: "http://43.133.47.36:8080".into(),
+            api_key: "sk-test".into(),
+            model: "claude-opus-4-8".into(),
+            image_model: "gpt-image-2".into(),
+            duomiapi_key: String::new(),
+            timeout: Duration::from_secs(60),
+        };
+        assert!(!openai_uses_responses_api(&cfg));
+    }
+
+    #[test]
+    fn legacy_openai_models_keep_chat_completions_api() {
+        let cfg = AiConfig {
+            provider: Provider::Openai,
+            base_url: "http://example.com".into(),
+            api_key: "sk-test".into(),
+            model: "gpt-4o-mini".into(),
+            image_model: "gpt-image-2".into(),
+            duomiapi_key: String::new(),
+            timeout: Duration::from_secs(60),
+        };
+        assert!(!openai_uses_responses_api(&cfg));
     }
 }

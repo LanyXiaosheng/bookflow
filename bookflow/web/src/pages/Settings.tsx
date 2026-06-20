@@ -266,9 +266,9 @@ function SettingsForm({
 
       <Field label="多米 API Key" htmlFor="duomiapi_key">
         {initial.duomiapi_key_set && (
-          <div className="mb-2 inline-flex max-w-full items-center gap-2 rounded-md bg-gray-50 px-2.5 py-1 font-mono text-xs text-gray-600 ring-1 ring-gray-200">
+          <div className="mb-2 inline-flex max-w-full items-center gap-2 break-all rounded-md bg-gray-50 px-2.5 py-1 font-mono text-xs text-gray-600 ring-1 ring-gray-200">
             <Check className="h-3.5 w-3.5 text-emerald-600" />
-            当前已配置
+            当前：{initial.duomiapi_key_masked}
           </div>
         )}
         <input
@@ -280,7 +280,7 @@ function SettingsForm({
           className="block min-w-0 w-full max-w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
         <p className="mt-1 text-xs text-gray-500">
-          配置后生图走<a href="https://duomiapi.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">多米 API</a>，不受 provider 限制。key 仅以「已配置」状态回显，不能查看明文。
+          配置后生图走<a href="https://duomiapi.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">多米 API</a>，不受 provider 限制。key 仅以掩码方式回显，不能查看明文。
         </p>
       </Field>
 

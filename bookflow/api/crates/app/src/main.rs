@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::collections::HashMap;
 
 use anyhow::Context;
 use argon2::{
@@ -35,16 +36,17 @@ use tower_http::{
 use tracing::info;
 use uuid::Uuid;
 
+
 mod ai;
 mod character_names;
 mod docs;
 mod settings;
 use ai::{
-    beats_for_chapter, generate_seeds, score_seed, stream_blurb, stream_book_polish,
-    stream_book_summary_chapters, stream_character_setup, stream_outline, stream_publish_post,
-    stream_readme, stream_side_dishes, stream_write_paragraph, write_paragraph, AiClient,
-    AiConfig, AiScoreRequest, AiScoreResponse, AiSeedGenerated, DuoMiClient, GeneratedImage,
-    StreamEvent,
+    backfill_heat, beats_for_chapter, generate_seeds, recommend_tracks, score_seed, stream_blurb,
+    stream_book_polish, stream_book_summary_chapters, stream_character_setup, stream_outline,
+    stream_publish_post, stream_readme, stream_side_dishes, stream_write_paragraph,
+    write_paragraph, AiClient, AiConfig, AiScoreRequest, AiScoreResponse, AiSeedGenerated,
+    AiTrackRecommendGenerated, DuoMiClient, GeneratedImage, ReviewAnalyzeResponse, StreamEvent, analyze_review,
 };
 use character_names::{
     apply_exact_replacement, build_preview_item, extract_candidate_names, local_recommended_name,
@@ -157,6 +159,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/seeds/:id", axum::routing::delete(delete_seed))
         .route("/api/seeds/ai-score", post(ai_score_seed))
         .route("/api/seeds/ai-generate", post(ai_generate_seeds))
+        .route("/api/seeds/ai-recommend-track", post(ai_recommend_track))
+        .route("/api/seeds/ai-backfill-heat", post(ai_backfill_heat))
         .route("/api/seeds/ai-drafts", get(list_seed_drafts))
         .route("/api/seeds/ai-launch", post(ai_launch_seed))
         .route("/api/auth/register", post(register_user))
@@ -168,11 +172,18 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects/:id", get(get_project).delete(delete_project))
         .route("/api/projects/:id/transition", post(transition_project))
         .route("/api/reviews/pending", get(list_pending_reviews))
+        .route("/api/reviews/quick-batch", post(reviews_quick_batch))
         .route("/api/projects/:id/reviews", get(list_project_reviews))
         .route(
             "/api/projects/:id/reviews/:stage",
             put(upsert_project_review),
         )
+        .route(
+            "/api/projects/:id/reviews/:stage/ai-analyze",
+            post(ai_analyze_review),
+        )
+        .route("/api/fanqie/fetch-all", post(fanqie_fetch_all))
+        .route("/api/fanqie/fetch-from-curl", post(fanqie_fetch_from_curl))
         .route("/api/projects/:id/artifacts", get(list_project_artifacts))
         .route("/api/projects/:id/ai-readme/stream", post(ai_readme_stream))
         .route(
@@ -506,6 +517,10 @@ struct UpsertProjectReviewBody {
     read_count: Option<i64>,
     completion_rate: Option<f64>,
     engagement_count: Option<i64>,
+    show_count: Option<i64>,
+    comment_count: Option<i64>,
+    like_count: Option<i64>,
+    library_count: Option<i64>,
     overall_result: Option<String>,
     title_result: Option<String>,
     hook_result: Option<String>,
@@ -564,7 +579,7 @@ async fn upsert_project_review(
 ) -> Result<Json<ProjectReview>, AppError> {
     let stage = ReviewStage::parse(&stage)
         .ok_or_else(|| AppError::BadRequest(format!("unknown review stage: {stage}")))?;
-    require_project(&s, &headers, project_id).await?;
+    let (_, project) = require_project(&s, &headers, project_id).await?;
     let published_at = fetch_project_published_at(&s.pool, project_id).await?;
     if let Some(read_count) = body.read_count {
         if read_count < 0 {
@@ -605,6 +620,10 @@ async fn upsert_project_review(
             body.read_count,
             body.completion_rate,
             body.engagement_count,
+            body.show_count,
+            body.comment_count,
+            body.like_count,
+            body.library_count,
             overall_result.map(ReviewResult::as_str),
             body.title_result.as_deref(),
             body.hook_result.as_deref(),
@@ -618,6 +637,682 @@ async fn upsert_project_review(
         .await
         .map_err(AppError::Storage)?;
     Ok(Json(review))
+}
+
+#[derive(Debug, Deserialize)]
+struct QuickBatchRetroItem {
+    title: String,
+    read_count: i64,
+    word_number: i32,
+    categories: Vec<String>,
+    show_count: Option<i64>,
+    comment_count: Option<i64>,
+    like_count: Option<i64>,
+    library_count: Option<i64>,
+    completion_rate: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct QuickBatchRetroBody {
+    items: Vec<QuickBatchRetroItem>,
+    stage: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct QuickBatchRetroItemResult {
+    title: String,
+    matched: bool,
+    project_id: Option<Uuid>,
+    skip_reason: Option<String>,
+    updated: bool,
+}
+
+async fn reviews_quick_batch(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<QuickBatchRetroBody>,
+) -> Result<Json<Vec<QuickBatchRetroItemResult>>, AppError> {
+    let user = require_user(&s, &headers).await?;
+    let stage = body
+        .stage
+        .as_deref()
+        .and_then(ReviewStage::parse)
+        .unwrap_or(ReviewStage::D7);
+
+    let fetched_items: Vec<FanqieFetchAllItem> = body
+        .items
+        .into_iter()
+        .map(|item| FanqieFetchAllItem {
+            book_id: String::new(),
+            title: item.title,
+            read_count: item.read_count,
+            word_number: item.word_number,
+            categories: item.categories,
+            show_count: item.show_count,
+            completion_rate: item.completion_rate,
+            comment_count: item.comment_count,
+            like_count: item.like_count,
+            library_count: item.library_count,
+        })
+        .collect();
+    let results = write_fanqie_reviews(&s, user.id, stage, &fetched_items).await?;
+    Ok(Json(results))
+}
+
+#[derive(Debug, Deserialize)]
+struct AiAnalyzeReviewBody {
+    track: String,
+    total_words: u32,
+    read_count: i64,
+    word_number: i32,
+    categories_json: Option<String>,
+}
+
+async fn ai_analyze_review(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path((project_id, stage)): Path<(Uuid, String)>,
+    Json(body): Json<AiAnalyzeReviewBody>,
+) -> Result<Json<ReviewAnalyzeResponse>, AppError> {
+    let _stage = ReviewStage::parse(&stage)
+        .ok_or_else(|| AppError::BadRequest(format!("unknown review stage: {stage}")))?;
+    let (_user, project) = require_project(&s, &headers, project_id).await?;
+
+    let resp = analyze_review(
+        &s.ai,
+        &project.title,
+        &body.track,
+        body.total_words,
+        body.read_count,
+        body.word_number,
+        body.categories_json.as_deref(),
+    )
+    .await
+    .map_err(AppError::Ai)?;
+
+    Ok(Json(resp))
+}
+
+#[derive(Debug, Deserialize)]
+struct FanqieFetchAllBody {
+    cookies: String,
+    #[serde(default = "default_fanqie_aid")]
+    aid: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct FanqieFetchFromCurlBody {
+    curl: String,
+    stage: Option<String>,
+}
+
+fn default_fanqie_aid() -> String {
+    "2503".into()
+}
+
+#[derive(Debug, Serialize)]
+struct FanqieFetchAllResult {
+    items: Vec<FanqieFetchAllItem>,
+    total_count: usize,
+    detail_success: usize,
+    detail_failed: usize,
+    errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct FanqieFetchAllItem {
+    book_id: String,
+    title: String,
+    read_count: i64,
+    word_number: i32,
+    categories: Vec<String>,
+    show_count: Option<i64>,
+    completion_rate: Option<f64>,
+    comment_count: Option<i64>,
+    like_count: Option<i64>,
+    library_count: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct FanqieFetchFromCurlResult {
+    items: Vec<FanqieFetchAllItem>,
+    total_count: usize,
+    detail_success: usize,
+    detail_failed: usize,
+    errors: Vec<String>,
+    batch_results: Vec<QuickBatchRetroItemResult>,
+    stage: String,
+}
+
+#[derive(Debug)]
+struct FanqieFetchRequest {
+    aid: String,
+    cookies: String,
+    user_agent: String,
+    accept: String,
+    referer_list: String,
+}
+
+#[derive(Debug)]
+struct FanqieFetched {
+    items: Vec<FanqieFetchAllItem>,
+    total_count: usize,
+    detail_success: usize,
+    detail_failed: usize,
+    errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FanqieDetailStats {
+    show_count: Option<i64>,
+    completion_rate: Option<f64>,
+    comment_count: Option<i64>,
+    like_count: Option<i64>,
+    library_count: Option<i64>,
+}
+
+async fn fanqie_fetch_all(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<FanqieFetchAllBody>,
+) -> Result<Json<FanqieFetchAllResult>, AppError> {
+    let _user = require_user(&s, &headers).await?;
+
+    let fetched = fetch_fanqie_all_with_cookies(&body.cookies, &body.aid).await?;
+    Ok(Json(FanqieFetchAllResult {
+        items: fetched.items,
+        total_count: fetched.total_count,
+        detail_success: fetched.detail_success,
+        detail_failed: fetched.detail_failed,
+        errors: fetched.errors,
+    }))
+}
+
+async fn fanqie_fetch_from_curl(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<FanqieFetchFromCurlBody>,
+) -> Result<Json<FanqieFetchFromCurlResult>, AppError> {
+    let user = require_user(&s, &headers).await?;
+    let parsed = parse_fanqie_list_curl(&body.curl)?;
+    let stage = body
+        .stage
+        .as_deref()
+        .and_then(ReviewStage::parse)
+        .unwrap_or(ReviewStage::D7);
+    let fetched = fetch_fanqie_all_with_request(&parsed).await?;
+    let batch_results = write_fanqie_reviews(&s, user.id, stage, &fetched.items).await?;
+
+    Ok(Json(FanqieFetchFromCurlResult {
+        items: fetched.items,
+        total_count: fetched.total_count,
+        detail_success: fetched.detail_success,
+        detail_failed: fetched.detail_failed,
+        errors: fetched.errors,
+        batch_results,
+        stage: stage.as_str().to_string(),
+    }))
+}
+
+fn parse_fanqie_list_curl(curl: &str) -> Result<FanqieFetchRequest, AppError> {
+    let url = curl
+        .split_whitespace()
+        .find(|part| part.starts_with("http://") || part.starts_with("https://"))
+        .map(|s| s.trim_matches('\'').trim_matches('"'))
+        .ok_or_else(|| AppError::BadRequest("curl 中缺少 URL".into()))?;
+    let aid = url
+        .split_once('?')
+        .and_then(|(_, query)| {
+            query.split('&').find_map(|pair| {
+                let (k, v) = pair.split_once('=')?;
+                (k == "aid").then(|| v.to_string())
+            })
+        })
+        .unwrap_or_else(default_fanqie_aid);
+
+    let cookies = extract_curl_flag_value(curl, "-b")
+        .or_else(|| extract_curl_flag_value(curl, "--cookie"))
+        .ok_or_else(|| AppError::BadRequest("curl 中缺少 cookies (-b/--cookie)".into()))?;
+    let user_agent = extract_curl_header_value(curl, "user-agent")
+        .unwrap_or_else(|| "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36".into());
+    let accept = extract_curl_header_value(curl, "accept")
+        .unwrap_or_else(|| "application/json, text/plain, */*".into());
+    let referer_list = extract_curl_header_value(curl, "referer")
+        .unwrap_or_else(|| "https://fanqienovel.com/main/writer/short-manage".into());
+
+    Ok(FanqieFetchRequest {
+        aid,
+        cookies,
+        user_agent,
+        accept,
+        referer_list,
+    })
+}
+
+fn extract_curl_flag_value(curl: &str, flag: &str) -> Option<String> {
+    for quote in ['\'', '"'] {
+        let needle = format!("{flag} {quote}");
+        if let Some(start) = curl.find(&needle) {
+            let rest = &curl[start + needle.len()..];
+            if let Some(end) = rest.find(quote) {
+                return Some(rest[..end].to_string());
+            }
+        }
+    }
+    None
+}
+
+fn extract_curl_header_value(curl: &str, header_name: &str) -> Option<String> {
+    for line in curl.split("\\\n") {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("-H ") && !trimmed.contains(" -H ") {
+            continue;
+        }
+        let segment = trimmed
+            .rsplit_once("-H ")
+            .map(|(_, right)| right)
+            .unwrap_or(trimmed)
+            .trim()
+            .trim_matches('\'')
+            .trim_matches('"');
+        let lower = segment.to_ascii_lowercase();
+        let prefix = format!("{header_name}:");
+        if lower.starts_with(&prefix) {
+            return Some(segment[prefix.len()..].trim().to_string());
+        }
+    }
+    None
+}
+
+async fn fetch_fanqie_all_with_cookies(
+    cookies: &str,
+    aid: &str,
+) -> Result<FanqieFetched, AppError> {
+    let req = FanqieFetchRequest {
+        aid: aid.to_string(),
+        cookies: cookies.to_string(),
+        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36".into(),
+        accept: "application/json".into(),
+        referer_list: "https://fanqienovel.com/main/writer/short-manage".into(),
+    };
+    fetch_fanqie_all_with_request(&req).await
+}
+
+async fn fetch_fanqie_all_with_request(
+    req: &FanqieFetchRequest,
+) -> Result<FanqieFetched, AppError> {
+
+    let mut errors: Vec<String> = Vec::new();
+
+    // Step 1: fetch list via external curl (reqwest TLS fingerprint blocked by fanqie)
+    let list_url = format!(
+        "https://fanqienovel.com/api/author/short_article/list/v0/?aid={}&app_name=muye_novel&page_count=50&page_index=0&status=0&time_sort=0&image_fmt_list=450x800&book_image_fmt_list=190x250&pack_type=1",
+        req.aid
+    );
+
+    let list_output = tokio::task::spawn_blocking({
+        let cookies = req.cookies.clone();
+        let accept = req.accept.clone();
+        let user_agent = req.user_agent.clone();
+        let referer = req.referer_list.clone();
+        let url = list_url.clone();
+        move || {
+            std::process::Command::new("curl")
+                .arg("-s")
+                .arg(&url)
+                .arg("-H")
+                .arg(format!("accept: {accept}"))
+                .arg("-H")
+                .arg(format!("user-agent: {user_agent}"))
+                .arg("-H")
+                .arg(format!("referer: {referer}"))
+                .arg("-b")
+                .arg(&cookies)
+                .output()
+        }
+    })
+    .await
+    .map_err(|e| AppError::Ai(anyhow::anyhow!("spawn_blocking: {e}")))?;
+
+    let list_output = list_output.map_err(|e| AppError::Ai(anyhow::anyhow!("curl list: {e}")))?;
+    if !list_output.status.success() {
+        return Err(AppError::Ai(anyhow::anyhow!("curl list exit: {}", list_output.status)));
+    }
+
+    let list_json: serde_json::Value = serde_json::from_slice(&list_output.stdout)
+        .map_err(|e| AppError::Ai(anyhow::anyhow!("list parse failed: {e}")))?;
+
+    let code = list_json["code"].as_i64().unwrap_or(-1);
+    if code != 0 {
+        let msg = list_json["message"].as_str().unwrap_or("unknown");
+        return Err(AppError::Ai(anyhow::anyhow!("番茄 API 返回错误 code={code}: {msg}，可能 cookies 已过期")));
+    }
+
+    let item_list = list_json["data"]["item_list"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    let now = chrono::Utc::now();
+    let today_start = now.date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc();
+    let end_ts = today_start.timestamp();
+    let start_ts = end_ts - 7 * 86400;
+
+    let mut items: Vec<FanqieFetchAllItem> = Vec::new();
+    let mut detail_success = 0usize;
+    let mut detail_failed = 0usize;
+
+    for raw in &item_list {
+        let book_id = raw["book_id"].as_str().unwrap_or_default().to_string();
+        let title = raw["multi_title"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_str())
+            .unwrap_or("(无标题)")
+            .to_string();
+        let read_count: i64 = raw["read_count"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let word_number: i32 = raw["word_number"].as_i64().unwrap_or(0) as i32;
+        let categories: Vec<String> = raw["category"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| c["name"].as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Step 2: fetch detail stats via curl. Fanqie has moved between stats endpoints,
+        // so try the current single-day endpoint first and fall back to the older table API.
+        let detail = fetch_fanqie_detail_stats(
+            req,
+            &book_id,
+            start_ts,
+            end_ts,
+        )
+        .await;
+
+        let (show_count, completion_rate, comment_count, like_count, library_count) =
+            match detail {
+                Ok(stats) => {
+                    detail_success += 1;
+                    (
+                        stats.show_count,
+                        stats.completion_rate,
+                        stats.comment_count,
+                        stats.like_count,
+                        stats.library_count,
+                    )
+                }
+                Err(e) => {
+                    detail_failed += 1;
+                    errors.push(format!("{title}: 明细抓取失败 {e}"));
+                    (None, None, None, None, None)
+                }
+            };
+
+        items.push(FanqieFetchAllItem {
+            book_id,
+            title,
+            read_count,
+            word_number,
+            categories,
+            show_count,
+            completion_rate,
+            comment_count,
+            like_count,
+            library_count,
+        });
+    }
+
+    let total_count = items.len();
+    Ok(FanqieFetched {
+        items,
+        total_count,
+        detail_success,
+        detail_failed,
+        errors,
+    })
+}
+
+async fn fetch_fanqie_detail_stats(
+    req: &FanqieFetchRequest,
+    book_id: &str,
+    start_ts: i64,
+    end_ts: i64,
+) -> Result<FanqieDetailStats, AppError> {
+    let single_day_url = format!(
+        "https://fanqienovel.com/api/author/sa_stats/single_by_date/v0/?aid={}&app_name=muye_novel&book_id={}&start_date={start_ts}&end_date={end_ts}",
+        req.aid, book_id
+    );
+    let legacy_url = format!(
+        "https://fanqienovel.com/api/author/stats/book_increase_v2/v0/?aid={}&app_name=muye_novel&book_id={}&start_date={start_ts}&end_date={end_ts}&stats_types=32",
+        req.aid, book_id
+    );
+    let referer = format!("https://fanqienovel.com/main/writer/short-data?bookId={book_id}&tab=2");
+
+    let mut last_err: Option<String> = None;
+    for url in [single_day_url, legacy_url] {
+        match curl_fanqie_json(req, &url, &referer).await {
+            Ok(json) => {
+                if let Some(stats) = parse_fanqie_detail_stats(&json) {
+                    return Ok(stats);
+                }
+                last_err = Some("响应里没有可识别的统计字段".into());
+            }
+            Err(e) => last_err = Some(format!("{e}")),
+        }
+    }
+
+    Err(AppError::Ai(anyhow::anyhow!(
+        "{}",
+        last_err.unwrap_or_else(|| "明细接口无可用数据".into())
+    )))
+}
+
+async fn curl_fanqie_json(
+    req: &FanqieFetchRequest,
+    url: &str,
+    referer: &str,
+) -> Result<serde_json::Value, AppError> {
+    let cookies = req.cookies.clone();
+    let accept = req.accept.clone();
+    let user_agent = req.user_agent.clone();
+    let url = url.to_string();
+    let referer = referer.to_string();
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("curl")
+            .arg("-s")
+            .arg(&url)
+            .arg("-H")
+            .arg(format!("accept: {accept}"))
+            .arg("-H")
+            .arg(format!("user-agent: {user_agent}"))
+            .arg("-H")
+            .arg(format!("referer: {referer}"))
+            .arg("-b")
+            .arg(&cookies)
+            .output()
+    })
+    .await
+    .map_err(|e| AppError::Ai(anyhow::anyhow!("spawn_blocking: {e}")))?;
+
+    let output = output.map_err(|e| AppError::Ai(anyhow::anyhow!("curl detail: {e}")))?;
+    if !output.status.success() {
+        return Err(AppError::Ai(anyhow::anyhow!("curl detail exit: {}", output.status)));
+    }
+    serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .map_err(|e| AppError::Ai(anyhow::anyhow!("detail parse failed: {e}")))
+}
+
+fn parse_fanqie_detail_stats(json: &serde_json::Value) -> Option<FanqieDetailStats> {
+    parse_fanqie_detail_table(json).or_else(|| parse_fanqie_detail_object(json))
+}
+
+fn parse_fanqie_detail_table(json: &serde_json::Value) -> Option<FanqieDetailStats> {
+    let row = json["data"]["data_list"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.as_array())?;
+    Some(FanqieDetailStats {
+        show_count: row
+            .get(2)
+            .and_then(parse_i64_value),
+        completion_rate: row
+            .get(1)
+            .and_then(parse_ratio_value),
+        comment_count: row
+            .get(4)
+            .and_then(parse_i64_value),
+        like_count: row
+            .get(5)
+            .and_then(parse_i64_value),
+        library_count: row
+            .get(6)
+            .and_then(parse_i64_value),
+    })
+}
+
+fn parse_fanqie_detail_object(json: &serde_json::Value) -> Option<FanqieDetailStats> {
+    let data = &json["data"];
+    if data.is_null() {
+        return None;
+    }
+    Some(FanqieDetailStats {
+        show_count: first_i64_by_keys(data, &["show_count", "show_cnt", "impression_count", "exposure_count"]),
+        completion_rate: first_ratio_by_keys(data, &["completion_rate", "finish_rate", "read_finish_rate", "ctr"]),
+        comment_count: first_i64_by_keys(data, &["comment_count", "comment_cnt", "comments"]),
+        like_count: first_i64_by_keys(data, &["like_count", "like_cnt", "likes"]),
+        library_count: first_i64_by_keys(data, &["library_count", "bookshelf_count", "shelf_count", "collect_count"]),
+    })
+}
+
+fn first_i64_by_keys(value: &serde_json::Value, keys: &[&str]) -> Option<i64> {
+    keys.iter().find_map(|key| value.get(*key).and_then(parse_i64_value))
+}
+
+fn first_ratio_by_keys(value: &serde_json::Value, keys: &[&str]) -> Option<f64> {
+    keys.iter().find_map(|key| value.get(*key).and_then(parse_ratio_value))
+}
+
+fn parse_i64_value(value: &serde_json::Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_f64().map(|v| v as i64))
+        .or_else(|| value.as_str().and_then(|s| s.replace(',', "").parse::<i64>().ok()))
+}
+
+fn parse_ratio_value(value: &serde_json::Value) -> Option<f64> {
+    if let Some(v) = value.as_f64() {
+        return Some(if v > 1.0 { v / 100.0 } else { v });
+    }
+    value.as_str().and_then(parse_percent_ratio)
+}
+
+fn parse_percent_ratio(input: &str) -> Option<f64> {
+    let normalized = input.trim().trim_end_matches('%');
+    let value = normalized.parse::<f64>().ok()?;
+    Some(value / 100.0)
+}
+
+async fn write_fanqie_reviews(
+    s: &AppState,
+    user_id: Uuid,
+    stage: ReviewStage,
+    items: &[FanqieFetchAllItem],
+) -> Result<Vec<QuickBatchRetroItemResult>, AppError> {
+    let titles: Vec<String> = items.iter().map(|i| i.title.clone()).collect();
+    let found = s
+        .projects
+        .find_by_titles(user_id, &titles)
+        .await
+        .map_err(AppError::Storage)?;
+
+    let mut title_map: HashMap<String, (Uuid, Option<chrono::DateTime<chrono::Utc>>)> = HashMap::new();
+    for (title, pid, published_at) in found {
+        title_map.entry(title).or_insert((pid, published_at));
+    }
+
+    let mut results = Vec::with_capacity(items.len());
+    for item in items {
+        let Some((project_id, published_at)) = title_map.get(&item.title) else {
+            results.push(QuickBatchRetroItemResult {
+                title: item.title.clone(),
+                matched: false,
+                project_id: None,
+                skip_reason: Some("title_not_found".into()),
+                updated: false,
+            });
+            continue;
+        };
+        let Some(published_at) = published_at.as_ref() else {
+            results.push(QuickBatchRetroItemResult {
+                title: item.title.clone(),
+                matched: true,
+                project_id: Some(*project_id),
+                skip_reason: Some("not_published".into()),
+                updated: false,
+            });
+            continue;
+        };
+
+        let cats_json = if item.categories.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&item.categories).unwrap_or_default())
+        };
+
+        let write = s
+            .reviews
+            .upsert(
+                *project_id,
+                stage,
+                *published_at,
+                true,
+                Some(item.read_count),
+                item.completion_rate,
+                Some(item.word_number as i64),
+                item.show_count,
+                item.comment_count,
+                item.like_count,
+                item.library_count,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                cats_json.as_deref(),
+                None,
+            )
+            .await;
+        match write {
+            Ok(_) => results.push(QuickBatchRetroItemResult {
+                title: item.title.clone(),
+                matched: true,
+                project_id: Some(*project_id),
+                skip_reason: None,
+                updated: true,
+            }),
+            Err(e) => {
+                tracing::warn!(%project_id, ?stage, ?e, "fanqie review upsert failed");
+                results.push(QuickBatchRetroItemResult {
+                    title: item.title.clone(),
+                    matched: true,
+                    project_id: Some(*project_id),
+                    skip_reason: Some("write_error".into()),
+                    updated: false,
+                });
+            }
+        }
+    }
+    Ok(results)
 }
 
 // === Chapters ===
@@ -1067,6 +1762,8 @@ struct SettingsView {
     model: String,
     image_model: String,
     duomiapi_key_set: bool,
+    /// 多米 key 同样只露最后 4 位
+    duomiapi_key_masked: String,
     timeout_secs: i32,
 }
 
@@ -1132,6 +1829,7 @@ async fn get_settings(State(s): State<AppState>) -> Result<Json<SettingsView>, A
         model: cfg.model.clone(),
         image_model: cfg.image_model.clone(),
         duomiapi_key_set: !cfg.duomiapi_key.is_empty(),
+        duomiapi_key_masked: mask_key(&cfg.duomiapi_key),
         timeout_secs: cfg.timeout.as_secs() as i32,
     }))
 }
@@ -1181,6 +1879,7 @@ async fn put_settings(
         model: cfg.model.clone(),
         image_model: cfg.image_model.clone(),
         duomiapi_key_set: !cfg.duomiapi_key.is_empty(),
+        duomiapi_key_masked: mask_key(&cfg.duomiapi_key),
         timeout_secs: cfg.timeout.as_secs() as i32,
     }))
 }
@@ -1237,12 +1936,89 @@ async fn ai_generate_seeds(
             title: c.title.clone(),
             score: c.score.clone(),
             why_buy: c.why_buy.clone(),
+            recommend_reason: c.recommend_reason.clone(),
+            heat: c.heat.clone(),
         })
         .collect();
     if let Err(e) = s.seed_drafts.insert_batch(user.id, &drafts).await {
         tracing::warn!(?e, "ai_seed_drafts batch insert failed (returning anyway)");
     }
     Ok(Json(r))
+}
+
+#[derive(Debug, Deserialize)]
+struct AiRecommendTrackReq {
+    primaries: Vec<String>,
+    plots: Vec<String>,
+}
+
+async fn ai_recommend_track(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AiRecommendTrackReq>,
+) -> Result<Json<AiTrackRecommendGenerated>, AppError> {
+    require_user(&s, &headers).await?;
+    if req.primaries.is_empty() || req.plots.is_empty() {
+        return Err(AppError::Domain(DomainError::TitleLength { len: 0 }));
+    }
+    let r = recommend_tracks(&s.ai, &req.primaries, &req.plots)
+        .await
+        .map_err(AppError::Ai)?;
+    Ok(Json(r))
+}
+
+#[derive(Debug, Serialize)]
+struct BackfillHeatResult {
+    updated_titles: usize,
+    updated_rows: u64,
+}
+
+/// 回填历史候选的热度+推荐原因：拉「热度为空」的标题，分批喂 AI，写回库。
+async fn ai_backfill_heat(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<BackfillHeatResult>, AppError> {
+    let user = require_user(&s, &headers).await?;
+    // 一次最多处理 60 个标题，避免单次过久；前端可多次点
+    let todo = s
+        .seed_drafts
+        .titles_needing_heat(user.id, 60)
+        .await
+        .map_err(AppError::Storage)?;
+    if todo.is_empty() {
+        return Ok(Json(BackfillHeatResult { updated_titles: 0, updated_rows: 0 }));
+    }
+    let mut updated_titles = 0usize;
+    let mut updated_rows = 0u64;
+    // 每批 10 个标题
+    for chunk in todo.chunks(10) {
+        let items = match backfill_heat(&s.ai, chunk).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(?e, "heat backfill chunk failed, skip");
+                continue;
+            }
+        };
+        for it in items {
+            let heat = it.heat.trim();
+            if heat.is_empty() {
+                continue;
+            }
+            match s
+                .seed_drafts
+                .set_heat_by_title(user.id, &it.title, heat, it.recommend_reason.trim())
+                .await
+            {
+                Ok(n) if n > 0 => {
+                    updated_titles += 1;
+                    updated_rows += n;
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(?e, title = %it.title, "set_heat_by_title failed"),
+            }
+        }
+    }
+    Ok(Json(BackfillHeatResult { updated_titles, updated_rows }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1290,6 +2066,8 @@ async fn ai_launch_seed(
             title: c.title.clone(),
             score: c.score.clone(),
             why_buy: c.why_buy.clone(),
+            recommend_reason: c.recommend_reason.clone(),
+            heat: c.heat.clone(),
         })
         .collect();
     if let Err(e) = s.seed_drafts.insert_batch(user.id, &drafts).await {
@@ -1975,10 +2753,23 @@ struct StoryImageBody {
 /// - Error 转 `event: error`
 /// 流结束后调用 `on_complete(全文)` 落库（失败也走 error 事件）
 fn sse_from_stream<F, Fut>(
-    mut rx: tokio::sync::mpsc::Receiver<StreamEvent>,
+    rx: tokio::sync::mpsc::Receiver<StreamEvent>,
     on_complete: F,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>
 where
+    F: FnOnce(String) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+{
+    sse_from_stream_with_transform(rx, |full| full, on_complete)
+}
+
+fn sse_from_stream_with_transform<T, F, Fut>(
+    mut rx: tokio::sync::mpsc::Receiver<StreamEvent>,
+    transform: T,
+    on_complete: F,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>
+where
+    T: FnOnce(String) -> String + Send + 'static,
     F: FnOnce(String) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
 {
@@ -2005,8 +2796,11 @@ where
             }
         }
         if had_error.is_none() && !acc.is_empty() {
-            match on_complete(acc).await {
+            let final_text = transform(acc);
+            match on_complete(final_text.clone()).await {
                 Ok(()) => {
+                    let payload = serde_json::json!({"text": final_text}).to_string();
+                    yield Ok(Event::default().event("replace").data(payload));
                     yield Ok(Event::default().event("done").data("{}"));
                 }
                 Err(e) => {
@@ -2237,7 +3031,7 @@ async fn ai_side_dishes_stream(
     headers: HeaderMap,
     Path(project_id): Path<Uuid>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
-    require_project(&s, &headers, project_id).await?;
+    let (_, project) = require_project(&s, &headers, project_id).await?;
     let arts = s
         .artifacts
         .latest_all(project_id)
@@ -2269,15 +3063,20 @@ async fn ai_side_dishes_stream(
         .collect::<Vec<_>>()
         .join("\n\n");
     let body_excerpt = take_chars(&body_excerpt, 4000);
-    let rx = stream_side_dishes(&s.ai, &readme, &outline, &body_excerpt).await;
+    let tag_scope = ai::side_dish_tag_scope_from_track(&project.track);
+    let rx = stream_side_dishes(&s.ai, &project.track, &readme, &outline, &body_excerpt).await;
     let artifacts = s.artifacts.clone();
-    Ok(sse_from_stream(rx, move |full| async move {
+    Ok(sse_from_stream_with_transform(
+        rx,
+        move |full| ai::normalize_side_dishes_tags(&full, &tag_scope),
+        move |full| async move {
         artifacts
             .save(project_id, ArtifactKind::SideDishes, &full)
             .await
             .map(|_| ())
             .map_err(|e| format!("{e:#}"))
-    }))
+        },
+    ))
 }
 
 async fn ai_blurb_stream(
@@ -2644,7 +3443,7 @@ fn build_story_image_prompt(
     };
     let author_line = author_name
         .filter(|n| !n.trim().is_empty())
-        .map(|n| format!("\n作者署名：{n}（放在封面角落）"))
+        .map(|n| format!("\n作者署名：{n}（紧贴书名正下方、小一号字，居中，不要放到画面底部以免被裁切）"))
         .unwrap_or_default();
     format!(
         "中文短篇小说封面配图：竖版构图、电影感光影、强情绪强冲突、人物关系明确。\
@@ -2711,6 +3510,7 @@ fn build_full_book_source(chapters: Vec<Chapter>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{build_full_book_source, looks_like_chapter_heading, review_stage_priority};
+    use super::parse_fanqie_detail_stats;
     use bookflow_domain::Chapter;
     use uuid::Uuid;
 
@@ -2801,5 +3601,39 @@ mod tests {
     fn review_stage_priority_orders_72h_before_24h_before_7d() {
         assert!(review_stage_priority("72h") < review_stage_priority("24h"));
         assert!(review_stage_priority("24h") < review_stage_priority("7d"));
+    }
+
+    #[test]
+    fn fanqie_detail_stats_parse_legacy_table() {
+        let json = serde_json::json!({
+            "data": {
+                "data_list": [["2026-06-20", "33.5%", "1200", "x", "9", "18", "7"]]
+            }
+        });
+        let stats = parse_fanqie_detail_stats(&json).expect("stats");
+        assert_eq!(stats.show_count, Some(1200));
+        assert_eq!(stats.completion_rate, Some(0.335));
+        assert_eq!(stats.comment_count, Some(9));
+        assert_eq!(stats.like_count, Some(18));
+        assert_eq!(stats.library_count, Some(7));
+    }
+
+    #[test]
+    fn fanqie_detail_stats_parse_single_day_object() {
+        let json = serde_json::json!({
+            "data": {
+                "show_count": "1,234",
+                "completion_rate": 0.42,
+                "comment_count": 3,
+                "like_count": "12",
+                "library_count": 5
+            }
+        });
+        let stats = parse_fanqie_detail_stats(&json).expect("stats");
+        assert_eq!(stats.show_count, Some(1234));
+        assert_eq!(stats.completion_rate, Some(0.42));
+        assert_eq!(stats.comment_count, Some(3));
+        assert_eq!(stats.like_count, Some(12));
+        assert_eq!(stats.library_count, Some(5));
     }
 }

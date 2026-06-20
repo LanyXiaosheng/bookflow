@@ -1,11 +1,14 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, TriangleAlert, Check, Wand2, X, Loader2, Brain, ListPlus, Rocket, ArrowRight, History, ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
+import { Sparkles, TriangleAlert, Check, Wand2, X, Loader2, Brain, ListPlus, Rocket, ArrowRight, History, ChevronDown, ChevronUp, Trash2, Flame } from 'lucide-react'
 import { seedsApi, type AiScoreResponse, type AiSeedCandidate, type Score, type Tier } from '../api/seeds'
 import { projectsApi, type Project } from '../api/projects'
 import { extractErrorMessage } from '../api/errors'
 import { useConfirm } from '../components/ConfirmDialog'
+import { useBatchLaunch, type BatchInput } from '../hooks/useBatchLaunch'
+import BatchLaunchPanel from '../components/BatchLaunchPanel'
+import HeatBadge from '../components/HeatBadge'
 import TrackPills from '../components/TrackPills'
 import {
   composeTrack,
@@ -127,12 +130,78 @@ export default function Seeds() {
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const [hideTestData, setHideTestData] = useState(true)
 
+  // 批量立项
+  const batch = useBatchLaunch()
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [batchTarget, setBatchTarget] = useState(10)
+  const toggleSelect = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  // 历史候选批量选择（draftId）
+  const [selectedDrafts, setSelectedDrafts] = useState<Set<string>>(new Set())
+  const toggleSelectDraft = (id: string) =>
+    setSelectedDrafts((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
   /** 应用「隐藏测试」过滤后的种子列表 */
   const visibleSeeds = useMemo(() => {
     if (!list.data) return []
     return hideTestData ? list.data.filter((s) => !looksLikeTestData(s.title)) : list.data
   }, [list.data, hideTestData])
   const hiddenCount = (list.data?.length ?? 0) - visibleSeeds.length
+
+  /** 可批量立项的种子：未立项 + 评分非「不做」 */
+  const launchableSeeds = useMemo(
+    () => visibleSeeds.filter((s) => !projectBySeedId.get(s.id) && s.tier !== 'reject'),
+    [visibleSeeds, projectBySeedId],
+  )
+  const allLaunchableSelected =
+    launchableSeeds.length > 0 && launchableSeeds.every((s) => selected.has(s.id))
+  const toggleSelectAll = () =>
+    setSelected((prev) => {
+      if (launchableSeeds.every((s) => prev.has(s.id))) {
+        const next = new Set(prev)
+        launchableSeeds.forEach((s) => next.delete(s.id))
+        return next
+      }
+      const next = new Set(prev)
+      launchableSeeds.forEach((s) => next.add(s.id))
+      return next
+    })
+
+  const runBatch = () => {
+    const picks: BatchInput[] = launchableSeeds
+      .filter((s) => selected.has(s.id))
+      .map((s) => ({ kind: 'seed' as const, key: s.id, title: s.title, seedId: s.id }))
+    if (picks.length === 0) return
+    batch.run(picks, batchTarget)
+    setSelected(new Set())
+  }
+
+  /** 历史候选批量：先建种子→立项→跑全流程。已立项为「已发/归档」的候选不可选。 */
+  const runBatchDrafts = () => {
+    const byTitle = drafts.data ?? []
+    const picks: BatchInput[] = byTitle
+      .filter((d) => selectedDrafts.has(d.id) && d.total_score >= 23)
+      .map((d) => ({
+        kind: 'draft' as const,
+        key: d.id,
+        title: d.title,
+        track: d.track,
+        score: d.score,
+      }))
+    if (picks.length === 0) return
+    batch.run(picks, batchTarget)
+    setSelectedDrafts(new Set())
+  }
 
   const aiScore = useMutation<AiScoreResponse, Error, { title: string; track: string }>({
     mutationFn: seedsApi.aiScore,
@@ -142,6 +211,31 @@ export default function Seeds() {
     mutationFn: (t: string) => seedsApi.aiGenerate(t),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-drafts'] }),
   })
+
+  /** AI 推荐主分类+情节组合 */
+  const aiRecommendTrack = useMutation({
+    mutationFn: () =>
+      seedsApi.aiRecommendTrack(
+        [...TRACK_PRIMARY_OPTIONS],
+        [...TRACK_PLOT_OPTIONS],
+      ),
+  })
+
+  /** 回填历史候选热度+推荐原因 */
+  const backfillHeat = useMutation({
+    mutationFn: () => seedsApi.aiBackfillHeat(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-drafts'] }),
+  })
+
+  /** 应用一条推荐到当前赛道选择（只取选项里合法的值） */
+  const applyTrackRecommendation = (rec: { primary: string; plots: string[] }) => {
+    const primaryOk = (TRACK_PRIMARY_OPTIONS as readonly string[]).includes(rec.primary)
+    if (primaryOk) setTrackPrimary(rec.primary as TrackPrimary)
+    const plots = rec.plots.filter((p) =>
+      (TRACK_PLOT_OPTIONS as readonly string[]).includes(p),
+    )
+    if (plots.length > 0) setTrackPlots(plots)
+  }
 
   /** 候选历史：全部赛道、按时间倒序，跨刷新和换标签都在 */
   const drafts = useQuery({
@@ -212,6 +306,12 @@ export default function Seeds() {
   return (
     <>
     <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <BatchLaunchPanel
+        state={batch.state}
+        onAbort={batch.abort}
+        onClose={batch.reset}
+        onRetryFailed={batch.retryFailed}
+      />
       {/* AI 批量生成选题（紧凑可折叠） */}
       <section
         className="mb-5 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200"
@@ -248,6 +348,78 @@ export default function Seeds() {
 
         {aiPanelOpen && (
           <div className="border-t border-slate-100 px-5 py-5">
+            {/* AI 推荐主分类+情节组合 */}
+            <div className="mb-4 rounded-2xl border border-violet-100 bg-violet-50/50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-violet-700">
+                    <Brain className="h-3.5 w-3.5" /> AI 推荐组合
+                  </div>
+                  <p className="mt-1 text-xs text-violet-500">
+                    不知道做什么？让 AI 按当下热度推荐「主分类 + 情节」组合，点一下直接套用。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => aiRecommendTrack.mutate()}
+                  disabled={aiRecommendTrack.isPending}
+                  data-testid="ai-recommend-track-btn"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+                >
+                  {aiRecommendTrack.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Wand2 className="h-3.5 w-3.5" />
+                  )}
+                  {aiRecommendTrack.isPending ? 'AI 推荐中…' : 'AI 推荐组合'}
+                </button>
+              </div>
+              {aiRecommendTrack.isError && (
+                <div className="mt-3 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">
+                  <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  推荐失败：{(aiRecommendTrack.error as Error)?.message}
+                </div>
+              )}
+              {aiRecommendTrack.data && aiRecommendTrack.data.length > 0 && (
+                <ul className="mt-3 grid gap-2 sm:grid-cols-3" data-testid="track-recommend-list">
+                  {aiRecommendTrack.data.map((rec, i) => (
+                    <li
+                      key={i}
+                      className="flex flex-col rounded-xl border border-violet-200 bg-white p-3"
+                      data-testid={`track-recommend-${i}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-gray-900">{rec.primary}</span>
+                        {rec.heat && <HeatBadge heat={rec.heat} className="shrink-0" />}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {rec.plots.map((p) => (
+                          <span
+                            key={p}
+                            className="inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] text-violet-700"
+                          >
+                            {p}
+                          </span>
+                        ))}
+                      </div>
+                      {rec.reason && (
+                        <p className="mt-2 text-[11px] leading-5 text-slate-500 line-clamp-2">
+                          {rec.reason}
+                        </p>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => applyTrackRecommendation(rec)}
+                        className="mt-2 inline-flex items-center justify-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1.5 text-[11px] font-medium text-violet-700 hover:bg-violet-100"
+                        data-testid={`track-recommend-apply-${i}`}
+                      >
+                        套用这组
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
               <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="mb-3">
@@ -404,6 +576,8 @@ export default function Seeds() {
                     title={c.title}
                     score={c.score}
                     why_buy={c.why_buy}
+                    recommendReason={c.recommend_reason}
+                    heat={c.heat}
                     testIdPrefix={`gen`}
                     index={i}
                     onAdopt={() => adoptCandidate(c)}
@@ -420,13 +594,62 @@ export default function Seeds() {
               已被立项为「已发」/「归档」的标题会被隐藏，不占列表空间。 */}
           {drafts.data && drafts.data.length > 0 && (
             <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50/60 p-4">
-              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
                 <History className="h-3.5 w-3.5" /> 历史候选 · 全部赛道（{
                   drafts.data.filter((d) =>
                     !aiGen.data?.candidates.some((c) => c.title === d.title) &&
                     !finishedDraftTitles.has(d.title)
                   ).length
                 }）
+                <button
+                  type="button"
+                  onClick={() => backfillHeat.mutate()}
+                  disabled={backfillHeat.isPending}
+                  className="ml-1 inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-medium normal-case tracking-normal text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                  data-testid="backfill-heat-btn"
+                  title="给还没有热度的历史候选补全热度+推荐原因（一次最多 60 个，可多次点）"
+                >
+                  {backfillHeat.isPending ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Flame className="h-3 w-3" />
+                  )}
+                  {backfillHeat.isPending ? '补全中…' : '补全历史热度'}
+                </button>
+                {backfillHeat.data && (
+                  <span className="text-[11px] font-medium normal-case tracking-normal text-emerald-600">
+                    已补 {backfillHeat.data.updated_titles} 个标题
+                  </span>
+                )}
+                {selectedDrafts.size > 0 && (
+                  <span className="ml-2 inline-flex items-center gap-2 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 normal-case tracking-normal">
+                    <span className="text-[11px] font-medium text-violet-700">
+                      已选 {selectedDrafts.size}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={runBatchDrafts}
+                      disabled={batch.state.running}
+                      className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+                      data-testid="batch-launch-drafts-btn"
+                      title="对选中候选先建种子再立项，并发跑全流程"
+                    >
+                      {batch.state.running ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Rocket className="h-3 w-3" />
+                      )}
+                      批量立项 + 全流程
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDrafts(new Set())}
+                      className="text-[11px] text-violet-500 hover:text-violet-700"
+                    >
+                      清空
+                    </button>
+                  </span>
+                )}
               </div>
               <ul className="grid gap-3 lg:grid-cols-2" data-testid="drafts-list">
                 {drafts.data
@@ -440,6 +663,8 @@ export default function Seeds() {
                       title={d.title}
                       score={d.score}
                       why_buy={d.why_buy}
+                      recommendReason={d.recommend_reason}
+                      heat={d.heat}
                       track={d.track}
                       testIdPrefix="draft"
                       index={i}
@@ -456,6 +681,9 @@ export default function Seeds() {
                       }
                       isLaunching={false}
                       disabled={adoptAndCreate.isPending || projectize.isPending}
+                      selectable={d.total_score >= 23}
+                      selected={selectedDrafts.has(d.id)}
+                      onToggleSelect={() => toggleSelectDraft(d.id)}
                     />
                   ))}
               </ul>
@@ -689,6 +917,49 @@ export default function Seeds() {
             <div className="rounded-xl bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
               绿灯项目可直接点进项目明细，未立项的种子可继续推进。
             </div>
+            {/* 批量立项操作条 */}
+            {launchableSeeds.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-violet-100 bg-violet-50/60 px-3 py-2">
+                <label className="inline-flex items-center gap-1.5 text-[11px] font-medium text-violet-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allLaunchableSelected}
+                    onChange={toggleSelectAll}
+                    className="h-3.5 w-3.5 accent-violet-600"
+                    data-testid="batch-select-all"
+                  />
+                  全选可立项（{launchableSeeds.length}）
+                </label>
+                <span className="text-[11px] text-violet-500">已选 {selected.size}</span>
+                <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-violet-600">
+                  章数
+                  <input
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={batchTarget}
+                    onChange={(e) => setBatchTarget(Number(e.target.value))}
+                    className="w-12 rounded border border-violet-200 px-1.5 py-0.5 text-center text-xs"
+                    data-testid="batch-target"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={runBatch}
+                  disabled={selected.size === 0 || batch.state.running}
+                  className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+                  data-testid="batch-launch-btn"
+                  title="并发跑全流程，带失败自动重试"
+                >
+                  {batch.state.running ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Rocket className="h-3.5 w-3.5" />
+                  )}
+                  批量立项 + 全流程
+                </button>
+              </div>
+            )}
           </header>
           {list.isLoading && <p className="text-sm text-gray-400">加载中…</p>}
           {list.isError && <p className="text-sm text-rose-600">读取失败</p>}
@@ -729,7 +1000,20 @@ export default function Seeds() {
                 >
                   <div>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium text-gray-900 truncate">{s.title}</span>
+                      <span className="flex min-w-0 items-center gap-2">
+                        {canLaunch && (
+                          <input
+                            type="checkbox"
+                            checked={selected.has(s.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={() => toggleSelect(s.id)}
+                            className="h-3.5 w-3.5 shrink-0 accent-violet-600"
+                            data-testid="seed-select"
+                            aria-label={`选择 ${s.title}`}
+                          />
+                        )}
+                        <span className="font-medium text-gray-900 truncate">{s.title}</span>
+                      </span>
                       <span className={`shrink-0 inline-flex items-center rounded-full border px-1.5 text-[10px] font-semibold ${TIER_BG[s.tier]}`}>
                         {TIER_LABEL[s.tier]}
                       </span>
@@ -931,6 +1215,13 @@ interface CandidateCardProps {
   muted?: boolean
   /** 历史候选展示自己的赛道，方便跨赛道一眼区分 */
   track?: string
+  /** 批量选择（仅历史候选用）；传了才渲染勾选框 */
+  selectable?: boolean
+  selected?: boolean
+  onToggleSelect?: () => void
+  /** AI 推荐原因 + 目前热度（仅本次生成的新候选有） */
+  recommendReason?: string
+  heat?: string
 }
 
 function CandidateCard({
@@ -945,6 +1236,11 @@ function CandidateCard({
   disabled,
   muted,
   track,
+  selectable,
+  selected,
+  onToggleSelect,
+  recommendReason,
+  heat,
 }: CandidateCardProps) {
   const total = DIM_KEYS.reduce((a, k) => a + score[k], 0)
   const t = tierOf(total)
@@ -954,7 +1250,19 @@ function CandidateCard({
       className={`rounded-2xl border border-slate-200 p-4 ${muted ? 'bg-white' : 'bg-slate-50/70'}`}
     >
       <div className="flex items-start justify-between gap-3">
-        <h3 className="text-sm font-semibold text-gray-900 leading-6">{title}</h3>
+        <div className="flex min-w-0 items-start gap-2">
+          {selectable && (
+            <input
+              type="checkbox"
+              checked={!!selected}
+              onChange={onToggleSelect}
+              className="mt-1 h-3.5 w-3.5 shrink-0 accent-violet-600"
+              data-testid={`${testIdPrefix}-select-${index}`}
+              aria-label={`选择 ${title}`}
+            />
+          )}
+          <h3 className="text-sm font-semibold text-gray-900 leading-6">{title}</h3>
+        </div>
         <span
           className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${TIER_BG[t]}`}
         >
@@ -966,7 +1274,21 @@ function CandidateCard({
           <TrackPills track={track} compact />
         </div>
       )}
+      {heat && (
+        <div className="mt-1.5" data-testid={`${testIdPrefix}-heat-${index}`}>
+          <HeatBadge heat={heat} />
+        </div>
+      )}
       <p className="mt-2 text-xs leading-6 text-slate-500 line-clamp-3">{why_buy}</p>
+      {recommendReason && (
+        <p
+          className="mt-1.5 flex items-start gap-1 text-[11px] leading-5 text-violet-600"
+          data-testid={`${testIdPrefix}-reason-${index}`}
+        >
+          <Sparkles className="mt-0.5 h-3 w-3 shrink-0" />
+          <span className="line-clamp-2">推荐：{recommendReason}</span>
+        </p>
+      )}
       <div className="mt-3 flex flex-wrap gap-1">
         {DIM_KEYS.map((k) => (
           <span

@@ -10,12 +10,32 @@ services:
       - "5433:5432"
     volumes:
       - bookflow_pgdata:/var/lib/postgresql/data
-      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U bookflow -d bookflow_dev"]
       interval: 5s
       timeout: 3s
       retries: 5
+
+  app:
+    image: bookflow:latest
+    container_name: bookflow-app
+    profiles: ["deploy"]
+    ports:
+      - "5174:5174"
+    environment:
+      DATABASE_URL: postgres://bookflow:bookflow@postgres:5432/bookflow_dev
+      RUST_LOG: info,bookflow=debug,sqlx=warn
+      APP_PORT: 3000
+      AI_PROVIDER: anthropic
+      AI_BASE_URL: ""
+      AI_API_KEY: ""
+      AI_MODEL: claude-sonnet-4-6
+      AI_IMAGE_MODEL: gpt-image-2
+      AI_TIMEOUT_SECS: 60
+      DOMIAPI_KEY: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   bookflow_pgdata:

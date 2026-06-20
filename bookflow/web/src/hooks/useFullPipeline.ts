@@ -1,7 +1,7 @@
 /**
  * AI 一键全流程编排：
  *
- *   README → 角色设定 → 大纲 → 正文（useFullBook）→ 全书汇总 → 配套素材
+ *   README → 角色设定 → 大纲 → 正文（useFullBook）→ 全书汇总 → 优化升华 → 配套素材
  *
  * 串行而非并行 —— 后续步骤依赖前置产物（角色设定要 README、大纲要角色设定、
  * 全书汇总要正文…），并行做不到，且本地代理账号池小，并发还会触发 429。
@@ -12,10 +12,11 @@
  * 中断：一个 AbortController 串通所有步骤；正文步骤把 signal 透给 useFullBook
  * 通过 abort() 联动。
  */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { projectsApi, type ArtifactKind, type ProjectArtifact } from '../api/projects'
 import { useFullBook } from './useFullBook'
+import { clearAiJob, setAiJob, useAiJob } from './useAiJobStore'
 
 export type PipelineStepKey =
   | 'readme'
@@ -23,6 +24,7 @@ export type PipelineStepKey =
   | 'outline'
   | 'body'
   | 'book_summary'
+  | 'book_polished'
   | 'side_dishes'
   | 'blurb'
 
@@ -32,6 +34,7 @@ export const PIPELINE_STEP_LABELS: Record<PipelineStepKey, string> = {
   outline: '大纲',
   body: '正文',
   book_summary: '全书汇总',
+  book_polished: '优化升华',
   blurb: '导语',
   side_dishes: '配套素材',
 }
@@ -42,7 +45,7 @@ const ALL_STEPS: PipelineStepKey[] = [
   'outline',
   'body',
   'book_summary',
-  'blurb',
+  'book_polished',
   'side_dishes',
 ]
 
@@ -65,6 +68,8 @@ export interface FullPipelineProgress {
   skipped: PipelineStepKey[]
   /** 当前步骤后端正在重试时的信息（null = 未在重试，或有 delta 到达后清空） */
   retry: { attempt: number; max: number } | null
+  /** 当前步骤整体失败后、本地正在自动重跑该步骤的信息（null = 未在重跑） */
+  stepRetry: { attempt: number; max: number } | null
   error?: string
 }
 
@@ -76,6 +81,67 @@ const initial: FullPipelineProgress = {
   chars: 0,
   skipped: [],
   retry: null,
+  stepRetry: null,
+}
+
+const STORAGE_KEY = 'bookflow.full_pipeline_jobs.v1'
+const STORAGE_EVENT = 'bookflow:full-pipeline-jobs-changed'
+
+type FullPipelineJobs = Record<string, FullPipelineProgress>
+
+function readJobs(): FullPipelineJobs {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return {}
+    return JSON.parse(raw) as FullPipelineJobs
+  } catch {
+    return {}
+  }
+}
+
+function writeJobs(jobs: FullPipelineJobs) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(jobs))
+  } catch {
+    // ignore quota
+  }
+  window.dispatchEvent(new CustomEvent(STORAGE_EVENT))
+}
+
+function getStoredProgress(projectId: string | undefined): FullPipelineProgress {
+  if (!projectId) return initial
+  return readJobs()[projectId] ?? initial
+}
+
+function setStoredProgress(projectId: string, progress: FullPipelineProgress) {
+  const jobs = readJobs()
+  jobs[projectId] = progress
+  writeJobs(jobs)
+}
+
+/** 步骤级自动重试：每步最多尝试这么多次（含首次） */
+const MAX_STEP_ATTEMPTS = 3
+
+/** 可中断的等待；signal abort 时立即 resolve，让中断能打断退避 */
+function interruptibleSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve()
+    const t = setTimeout(done, ms)
+    function done() {
+      clearTimeout(t)
+      signal.removeEventListener('abort', done)
+      resolve()
+    }
+    signal.addEventListener('abort', done, { once: true })
+  })
+}
+
+/** 用户主动中断引发的错误不该触发重试 */
+function isAbortError(e: unknown): boolean {
+  if (e instanceof Error) {
+    return e.name === 'AbortError' || /已中断/.test(e.message)
+  }
+  return false
 }
 
 export interface RunFullPipelineOpts {
@@ -100,7 +166,7 @@ interface SSERetry {
 /** 跑一个普通 SSE 流式步骤（README / 角色设定 / 大纲 / 全书汇总 / 配套素材） */
 async function runSseStep(
   url: string,
-  onChars: (chars: number) => void,
+  onText: (text: string) => void,
   onRetry: (info: SSERetry | null) => void,
   signal: AbortSignal,
 ): Promise<void> {
@@ -125,7 +191,7 @@ async function runSseStep(
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  let chars = 0
+  let acc = ''
   let errored: string | null = null
   while (true) {
     const { value, done } = await reader.read()
@@ -146,8 +212,8 @@ async function runSseStep(
       if (event === 'delta') {
         try {
           const { text } = JSON.parse(data) as SSEEventDelta
-          chars += text.length
-          onChars(chars)
+          acc += text
+          onText(acc)
           onRetry(null) // 有正文了，清空重试提示
         } catch {
           /* skip bad frame */
@@ -176,6 +242,7 @@ const ARTIFACT_KIND_BY_STEP: Partial<Record<PipelineStepKey, ArtifactKind>> = {
   character_setup: 'character_setup',
   outline: 'outline',
   book_summary: 'book_summary',
+  book_polished: 'book_polished',
   blurb: 'blurb',
   side_dishes: 'side_dishes',
 }
@@ -184,16 +251,57 @@ function hasArtifact(artifacts: ProjectArtifact[], kind: ArtifactKind): boolean 
   return artifacts.some((a) => a.kind === kind && a.content.trim().length > 0)
 }
 
-export function useFullPipeline() {
+export function useFullPipeline(projectIdForStorage?: string) {
   const qc = useQueryClient()
-  const [progress, setProgress] = useState<FullPipelineProgress>(initial)
+  const [progress, setProgressState] = useState<FullPipelineProgress>(() =>
+    getStoredProgress(projectIdForStorage),
+  )
   const abortRef = useRef<AbortController | null>(null)
   const fullBook = useFullBook()
+  const aiJob = useAiJob(projectIdForStorage)
+  const startedAtRef = useRef(0)
+  const storageProjectIdRef = useRef(projectIdForStorage)
+  storageProjectIdRef.current = projectIdForStorage
+
+  const setProgress = useCallback((next: FullPipelineProgress) => {
+    const projectId = storageProjectIdRef.current
+    if (projectId) {
+      setStoredProgress(projectId, next)
+    }
+    setProgressState(next)
+  }, [])
+
+  const updateProgress = useCallback((updater: (prev: FullPipelineProgress) => FullPipelineProgress) => {
+    const projectId = storageProjectIdRef.current
+    if (projectId) {
+      const next = updater(getStoredProgress(projectId))
+      setStoredProgress(projectId, next)
+      setProgressState(next)
+      return next
+    }
+    setProgressState((prev) => updater(prev))
+  }, [])
+
+  useEffect(() => {
+    if (!projectIdForStorage) {
+      setProgressState(initial)
+      return
+    }
+    const refresh = () => setProgressState(getStoredProgress(projectIdForStorage))
+    refresh()
+    window.addEventListener(STORAGE_EVENT, refresh)
+    window.addEventListener('storage', refresh)
+    return () => {
+      window.removeEventListener(STORAGE_EVENT, refresh)
+      window.removeEventListener('storage', refresh)
+    }
+  }, [projectIdForStorage])
 
   const abort = useCallback(() => {
     abortRef.current?.abort()
     fullBook.abort()
-  }, [fullBook])
+    setProgress({ ...initial, error: '已中断' })
+  }, [fullBook, setProgress])
 
   const reset = useCallback(() => setProgress(initial), [])
 
@@ -206,6 +314,7 @@ export function useFullPipeline() {
       if (progress.running) return false
       const ac = new AbortController()
       abortRef.current = ac
+      startedAtRef.current = Date.now()
 
       // 跑前先拿一份最新 artifacts，决定哪些步骤跳过
       let artifacts: ProjectArtifact[]
@@ -224,6 +333,8 @@ export function useFullPipeline() {
         total: ALL_STEPS.length,
         chars: 0,
         skipped,
+        retry: null,
+        stepRetry: null,
       })
 
       try {
@@ -240,7 +351,7 @@ export function useFullPipeline() {
               const kind = ARTIFACT_KIND_BY_STEP[step]
               if (kind && hasArtifact(artifacts, kind)) {
                 skipped.push(step)
-                setProgress((s) => ({
+                updateProgress((s) => ({
                   ...s,
                   done: i + 1,
                   skipped: [...skipped],
@@ -252,30 +363,70 @@ export function useFullPipeline() {
             }
           }
 
-          setProgress((s) => ({ ...s, currentKey: step, chars: 0 }))
-
-          if (step === 'body') {
-            // 用 useFullBook 跑正文。它自己有 skipIfChars，不用我们判断。
-            // 把 fullBook 的 progress 投影到我们的 progress 上。
-            const ok = await fullBook.run({ projectId, target })
-            if (!ok) {
-              // useFullBook 内部已设了 error，把它带出来
-              const msg = fullBook.progress.error || '正文生成失败'
-              throw new Error(msg)
-            }
-            // 正文跑完，刷一下 chapters 缓存
-            qc.invalidateQueries({ queryKey: ['chapters', projectId] })
-          } else {
-            const url = endpointForStep(projectId, step)
-            await runSseStep(
-              url,
-              (chars) => setProgress((s) => ({ ...s, chars, retry: null })),
-              (info) => setProgress((s) => ({ ...s, retry: info })),
-              ac.signal,
-            )
+          updateProgress((s) => ({ ...s, currentKey: step, chars: 0, stepRetry: null }))
+          const artifactKind = ARTIFACT_KIND_BY_STEP[step]
+          if (artifactKind) {
+            setAiJob({
+              projectId,
+              kind: artifactKind,
+              title: PIPELINE_STEP_LABELS[step],
+              chars: 0,
+              previewText: '',
+              startedAt: startedAtRef.current,
+            })
           }
 
-          setProgress((s) => ({ ...s, done: i + 1 }))
+          // 步骤级自动重试：本步整体失败（502/网络/解析等）就退避后重跑，
+          // 最多 MAX_STEP_ATTEMPTS 次。用户主动中断不重试。
+          for (let attempt = 1; ; attempt++) {
+            if (ac.signal.aborted) throw new Error('已中断')
+            try {
+              if (step === 'body') {
+                // 用 useFullBook 跑正文。它自己有 skipIfChars，不用我们判断。
+                const ok = await fullBook.run({ projectId, target })
+                if (!ok) {
+                  // useFullBook 内部已设了 error，把它带出来
+                  throw new Error(fullBook.progress.error || '正文生成失败')
+                }
+                qc.invalidateQueries({ queryKey: ['chapters', projectId] })
+              } else {
+                const url = endpointForStep(projectId, step)
+                await runSseStep(
+                  url,
+                  (text) => {
+                    const chars = Array.from(text).length
+                    updateProgress((s) => ({ ...s, chars, retry: null }))
+                    if (artifactKind) {
+                      setAiJob({
+                        projectId,
+                        kind: artifactKind,
+                        title: PIPELINE_STEP_LABELS[step],
+                        chars,
+                        previewText: text,
+                        startedAt: startedAtRef.current,
+                      })
+                    }
+                  },
+                  (info) => updateProgress((s) => ({ ...s, retry: info })),
+                  ac.signal,
+                )
+              }
+              break // 本步成功
+            } catch (stepErr) {
+              if (isAbortError(stepErr) || ac.signal.aborted) throw stepErr
+              if (attempt >= MAX_STEP_ATTEMPTS) throw stepErr
+              // 退避重试：1s, 2s（指数）；展示重跑进度
+              updateProgress((s) => ({
+                ...s,
+                retry: null,
+                stepRetry: { attempt: attempt + 1, max: MAX_STEP_ATTEMPTS },
+              }))
+              await interruptibleSleep(1000 * 2 ** (attempt - 1), ac.signal)
+            }
+          }
+          updateProgress((s) => ({ ...s, stepRetry: null }))
+
+          updateProgress((s) => ({ ...s, done: i + 1 }))
           // 这一步如果产出了 artifact，刷新一下查询缓存
           if (step !== 'body') {
             qc.invalidateQueries({ queryKey: ['project-artifacts', projectId] })
@@ -285,6 +436,7 @@ export function useFullPipeline() {
         qc.invalidateQueries({ queryKey: ['project-artifacts', projectId] })
         qc.invalidateQueries({ queryKey: ['chapters', projectId] })
         qc.invalidateQueries({ queryKey: ['project', projectId] })
+        clearAiJob(projectId)
         setProgress({ ...initial, skipped })
         return true
       } catch (e) {
@@ -294,11 +446,12 @@ export function useFullPipeline() {
               ? '已中断'
               : e.message
             : '未知错误'
+        clearAiJob(projectId)
         setProgress({ ...initial, error: msg, skipped })
         return false
       }
     },
-    [progress.running, qc, fullBook],
+    [progress.running, qc, fullBook, setProgress, updateProgress],
   )
 
   // 把 useFullBook 的细粒度进度投影出来（章/段），方便上层显示
@@ -312,6 +465,15 @@ export function useFullPipeline() {
           bodyBeat: fullBook.progress.beat,
           bodyTotalBeats: fullBook.progress.totalBeats,
         }
+      : progress.running && progress.currentKey === 'body' && aiJob?.kind === 'full_book'
+        ? {
+            ...progress,
+            chars: aiJob.chars,
+            bodyChapter: aiJob.chapter,
+            bodyTotalChapters: aiJob.totalChapters,
+            bodyBeat: aiJob.beat,
+            bodyTotalBeats: aiJob.totalBeats,
+          }
       : progress
 
   return { progress: merged, run, abort, reset }
@@ -327,6 +489,8 @@ function endpointForStep(projectId: string, step: PipelineStepKey): string {
       return `/api/projects/${projectId}/ai-outline/stream`
     case 'book_summary':
       return `/api/projects/${projectId}/ai-book-summary/stream`
+    case 'book_polished':
+      return `/api/projects/${projectId}/ai-book-polish/stream`
     case 'blurb':
       return `/api/projects/${projectId}/ai-blurb/stream`
     case 'side_dishes':

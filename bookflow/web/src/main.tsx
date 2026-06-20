@@ -13,6 +13,7 @@ import Archived from './pages/Archived'
 import Write from './pages/Write'
 import ProjectDetail from './pages/ProjectDetail'
 import Review from './pages/Review'
+import QuickRetro from './pages/QuickRetro'
 import Stub from './pages/Stub'
 import Settings from './pages/Settings'
 import Tracks from './pages/Tracks'
@@ -47,6 +48,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/published" element={<RequireAuth><Published /></RequireAuth>} />
               <Route path="/archived" element={<RequireAuth><Archived /></RequireAuth>} />
               <Route path="/review" element={<RequireAuth><Review /></RequireAuth>} />
+              <Route path="/review/quick" element={<RequireAuth><QuickRetro /></RequireAuth>} />
               <Route path="/tracks" element={<Tracks />} />
               <Route path="/playbook" element={<Playbook />} />
               <Route path="/settings" element={<Settings />} />

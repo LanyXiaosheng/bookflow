@@ -8,6 +8,7 @@ export interface SettingsView {
   model: string
   image_model: string
   duomiapi_key_set: boolean
+  duomiapi_key_masked: string
   timeout_secs: number
 }
 
