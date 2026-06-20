@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, ExternalLink, Loader2, Save } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Loader2, Save, Sparkles, Zap } from 'lucide-react'
 import {
   reviewsApi,
+  type AiAnalyzeReviewResponse,
   type PendingReview,
   type ProjectReview,
   type ReviewResult,
@@ -18,6 +19,10 @@ interface ReviewFormState {
   read_count: string
   completion_rate: string
   engagement_count: string
+  show_count: string
+  comment_count: string
+  like_count: string
+  library_count: string
   overall_result: '' | ReviewResult
   title_result: string
   hook_result: string
@@ -34,6 +39,10 @@ function emptyForm(): ReviewFormState {
     read_count: '',
     completion_rate: '',
     engagement_count: '',
+    show_count: '',
+    comment_count: '',
+    like_count: '',
+    library_count: '',
     overall_result: '',
     title_result: '',
     hook_result: '',
@@ -92,6 +101,10 @@ function formFromReview(review?: ProjectReview | null): ReviewFormState {
     read_count: review.read_count === null ? '' : String(review.read_count),
     completion_rate: review.completion_rate === null ? '' : String(review.completion_rate),
     engagement_count: review.engagement_count === null ? '' : String(review.engagement_count),
+    show_count: review.show_count === null ? '' : String(review.show_count),
+    comment_count: review.comment_count === null ? '' : String(review.comment_count),
+    like_count: review.like_count === null ? '' : String(review.like_count),
+    library_count: review.library_count === null ? '' : String(review.library_count),
     overall_result: review.overall_result ?? '',
     title_result: review.title_result ?? '',
     hook_result: review.hook_result ?? '',
@@ -125,6 +138,10 @@ function toPayload(form: ReviewFormState): UpsertProjectReviewInput {
     read_count,
     completion_rate,
     engagement_count,
+    show_count: toNullableNumber(form.show_count),
+    comment_count: toNullableNumber(form.comment_count),
+    like_count: toNullableNumber(form.like_count),
+    library_count: toNullableNumber(form.library_count),
     overall_result: form.overall_result || null,
     title_result: toNullableString(form.title_result),
     hook_result: toNullableString(form.hook_result),
@@ -233,6 +250,34 @@ export default function Review() {
     },
   })
 
+  const aiAnalyze = useMutation({
+    mutationFn: async () => {
+      if (!selectedPending) throw new Error('no selection')
+      return reviewsApi.aiAnalyze(selectedPending.project_id, selectedPending.stage, {
+        track: selectedPending.track,
+        total_words: selectedPending.total_words,
+        read_count: form.read_count ? Number(form.read_count) : 0,
+        word_number: selectedPending.total_words,
+        categories_json: null,
+      })
+    },
+    onSuccess: (data: AiAnalyzeReviewResponse) => {
+      updateForm({
+        overall_result: data.overall_result as '' | ReviewResult,
+        title_result: data.title_result,
+        hook_result: data.hook_result,
+        emotion_result: data.emotion_result,
+        success_reason: data.success_reason,
+        failure_reason: data.failure_reason,
+        next_action: data.next_action,
+      })
+      setNotice('AI 分析完成，请检查后保存')
+    },
+    onError: () => {
+      setNotice('')
+    },
+  })
+
   const selectedReview =
     projectReviews.data?.find((item) => item.stage === selectedPending?.stage) ?? null
 
@@ -252,6 +297,13 @@ export default function Review() {
           返回看板
         </Link>
         <h1 className="text-2xl font-semibold text-gray-900">复盘</h1>
+        <Link
+          to="/review/quick"
+          className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          <Zap className="h-3.5 w-3.5" />
+          快捷复盘
+        </Link>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
@@ -346,6 +398,17 @@ export default function Review() {
               </header>
 
               <div className="mt-5 grid gap-4 sm:grid-cols-3">
+                <Field label="展现量" htmlFor="review-show-count">
+                  <input
+                    id="review-show-count"
+                    data-testid="review-show-count"
+                    type="number"
+                    min="0"
+                    value={form.show_count}
+                    onChange={(e) => updateForm({ show_count: e.target.value })}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                  />
+                </Field>
                 <Field label="阅读量" htmlFor="review-read-count">
                   <input
                     id="review-read-count"
@@ -357,16 +420,49 @@ export default function Review() {
                     className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
                   />
                 </Field>
-                <Field label="完读率" htmlFor="review-completion-rate">
+                <Field label="点击率" htmlFor="review-completion-rate">
                   <input
                     id="review-completion-rate"
                     data-testid="review-completion-rate"
                     type="number"
                     min="0"
                     max="1"
-                    step="0.01"
+                    step="0.001"
                     value={form.completion_rate}
                     onChange={(e) => updateForm({ completion_rate: e.target.value })}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                  />
+                </Field>
+                <Field label="评论数" htmlFor="review-comment-count">
+                  <input
+                    id="review-comment-count"
+                    data-testid="review-comment-count"
+                    type="number"
+                    min="0"
+                    value={form.comment_count}
+                    onChange={(e) => updateForm({ comment_count: e.target.value })}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                  />
+                </Field>
+                <Field label="点赞数" htmlFor="review-like-count">
+                  <input
+                    id="review-like-count"
+                    data-testid="review-like-count"
+                    type="number"
+                    min="0"
+                    value={form.like_count}
+                    onChange={(e) => updateForm({ like_count: e.target.value })}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                  />
+                </Field>
+                <Field label="书架量" htmlFor="review-library-count">
+                  <input
+                    id="review-library-count"
+                    data-testid="review-library-count"
+                    type="number"
+                    min="0"
+                    value={form.library_count}
+                    onChange={(e) => updateForm({ library_count: e.target.value })}
                     className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
                   />
                 </Field>
@@ -484,6 +580,21 @@ export default function Review() {
               </div>
 
               <div className="mt-5 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => aiAnalyze.mutate()}
+                  disabled={aiAnalyze.isPending}
+                  className="inline-flex items-center gap-2 rounded-md border border-purple-300 bg-purple-50 px-4 py-2 text-sm font-medium text-purple-700 hover:bg-purple-100 disabled:opacity-50"
+                  data-testid="review-ai-analyze-btn"
+                >
+                  {aiAnalyze.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  AI 一键分析
+                </button>
+                {aiAnalyze.isError && (
+                  <span className="text-sm text-rose-600">
+                    {aiAnalyze.error instanceof Error ? aiAnalyze.error.message : 'AI 分析失败'}
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={() =>

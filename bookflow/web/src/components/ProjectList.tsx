@@ -4,9 +4,11 @@ import { Link } from 'react-router-dom'
 import { ArrowRight, FileText, Loader2, Rocket, Sparkles, Trash2, TriangleAlert } from 'lucide-react'
 import { projectsApi, type Project, type ProjectStatus } from '../api/projects'
 import { chaptersApi } from '../api/chapters'
+import { seedsApi } from '../api/seeds'
 import { aiJobKindLabel, useAllAiJobs, type AiJob } from '../hooks/useAiJobStore'
 import { useBatchLaunch, type BatchInput } from '../hooks/useBatchLaunch'
 import BatchLaunchPanel from './BatchLaunchPanel'
+import HeatBadge from './HeatBadge'
 import { useConfirm } from './ConfirmDialog'
 import TrackPills from './TrackPills'
 import { looksLikeTestData } from '../lib/looksLikeTestData'
@@ -58,10 +60,12 @@ const STATUS_TABS: Array<{ key: FilterStatus; label: string }> = [
 ]
 
 function renderAiJobText(job: AiJob): string {
+  const title = job.title || aiJobKindLabel(job.kind)
+  const chars = job.chars > 0 ? ` · ${job.chars.toLocaleString('zh-CN')} 字` : ''
   if (job.kind === 'full_book' && job.chapter && job.totalChapters) {
-    return `AI 生成中 · 第 ${job.chapter}/${job.totalChapters} 章 · 段 ${job.beat ?? 0}/${job.totalBeats ?? 0}`
+    return `AI 生成中 · ${title}运行中 · 第 ${job.chapter}/${job.totalChapters} 章 · 段 ${job.beat ?? 0}/${job.totalBeats ?? 0}${chars}`
   }
-  return `AI 生成中 · ${job.title || aiJobKindLabel(job.kind)}`
+  return `AI 生成中 · ${title}运行中${chars}`
 }
 
 export default function ProjectList({
@@ -110,6 +114,22 @@ export default function ProjectList({
     staleTime: 2000,
   })
 
+  // 候选历史里带的热度/推荐原因，按标题匹配回填到项目卡（项目本身不存这俩字段）
+  const drafts = useQuery({
+    queryKey: ['ai-drafts'],
+    queryFn: () => seedsApi.aiDrafts(undefined, 200),
+    staleTime: 60_000,
+  })
+  const metaByTitle = useMemo(() => {
+    const m = new Map<string, { heat?: string; reason?: string }>()
+    for (const d of drafts.data ?? []) {
+      if (d.heat || d.recommend_reason) {
+        m.set(d.title, { heat: d.heat, reason: d.recommend_reason })
+      }
+    }
+    return m
+  }, [drafts.data])
+
   const visible = useMemo(() => {
     if (!list.data) return []
     return hideTestData
@@ -117,6 +137,14 @@ export default function ProjectList({
       : list.data
   }, [list.data, hideTestData])
   const hiddenCount = (list.data?.length ?? 0) - visible.length
+  const runningJobs = useMemo(() => Object.values(aiJobs), [aiJobs])
+  const projectTitleById = useMemo(() => {
+    const titles = new Map<string, string>()
+    for (const row of list.data ?? []) {
+      titles.set(row.project.id, row.project.title)
+    }
+    return titles
+  }, [list.data])
 
   const allSelected = visible.length > 0 && visible.every((r) => selected.has(r.project.id))
   const toggleSelectAll = () =>
@@ -231,6 +259,33 @@ export default function ProjectList({
           <TriangleAlert className="h-4 w-4" /> 加载失败
         </p>
       )}
+      {runningJobs.length > 0 && (
+        <div
+          className="mb-3 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700"
+          data-testid="ai-jobs-summary"
+        >
+          <div className="mb-1 flex items-center gap-1.5 font-semibold">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            正在运行的 AI 任务
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {runningJobs.map((job) => {
+              const projectTitle = projectTitleById.get(job.projectId)
+              return (
+                <span
+                  key={`${job.projectId}-${job.startedAt}`}
+                  className="inline-flex max-w-full items-center gap-1 rounded-full border border-violet-200 bg-white px-2 py-0.5"
+                >
+                  {projectTitle && (
+                    <span className="max-w-[18rem] truncate text-violet-500">{projectTitle}</span>
+                  )}
+                  <span className="font-medium">{renderAiJobText(job)}</span>
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      )}
       {visible.length === 0 && !list.isLoading && (
         <div className="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center text-sm text-gray-500">
           {hiddenCount > 0
@@ -289,6 +344,7 @@ export default function ProjectList({
         {visible.map(({ project, chapter_count, total_words }) => {
           const next = nextStatus(project.status)
           const job = aiJobs[project.id]
+          const meta = metaByTitle.get(project.title)
           return (
             <article
               key={project.id}
@@ -313,17 +369,27 @@ export default function ProjectList({
                   {STATUS_LABEL[project.status]}
                 </span>
               </header>
+              {job && (
+                <div
+                  className="mb-3 flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-[11px] font-semibold text-violet-700"
+                  data-testid="ai-job-badge"
+                >
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                  <span className="min-w-0 truncate">{renderAiJobText(job)}</span>
+                </div>
+              )}
               <div className="mb-3">
                 <TrackPills track={project.track} compact />
               </div>
-              {job && (
-                <div
-                  className="mb-3 inline-flex items-center gap-1.5 rounded-md border border-violet-200 bg-violet-50 px-2 py-1 text-[11px] font-medium text-violet-700"
-                  data-testid="ai-job-badge"
-                >
-                  <Sparkles className="h-3 w-3 animate-pulse" />
-                  {renderAiJobText(job)}
-                  {job.chars > 0 && <span className="text-violet-500">· {job.chars} 字</span>}
+              {(meta?.heat || meta?.reason) && (
+                <div className="mb-3 space-y-1">
+                  {meta.heat && <HeatBadge heat={meta.heat} />}
+                  {meta.reason && (
+                    <p className="flex items-start gap-1 text-[11px] leading-5 text-violet-600">
+                      <Sparkles className="mt-0.5 h-3 w-3 shrink-0" />
+                      <span className="line-clamp-2">推荐：{meta.reason}</span>
+                    </p>
+                  )}
                 </div>
               )}
               <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 mb-3">

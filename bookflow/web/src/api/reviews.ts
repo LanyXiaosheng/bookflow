@@ -25,6 +25,10 @@ export interface ProjectReview {
   read_count: number | null
   completion_rate: number | null
   engagement_count: number | null
+  show_count: number | null
+  comment_count: number | null
+  like_count: number | null
+  library_count: number | null
   overall_result: ReviewResult | null
   title_result: string | null
   hook_result: string | null
@@ -43,6 +47,10 @@ export interface UpsertProjectReviewInput {
   read_count: number | null
   completion_rate: number | null
   engagement_count: number | null
+  show_count: number | null
+  comment_count: number | null
+  like_count: number | null
+  library_count: number | null
   overall_result: ReviewResult | null
   title_result: string | null
   hook_result: string | null
@@ -73,4 +81,103 @@ export const reviewsApi = {
     const { data } = await api.put<ProjectReview>(`/projects/${projectId}/reviews/${stage}`, input)
     return data
   },
+
+  async quickBatch(
+    items: QuickBatchItem[],
+  ): Promise<QuickBatchItemResult[]> {
+    const { data } = await api.post<QuickBatchItemResult[]>('/reviews/quick-batch', { items })
+    return data
+  },
+
+  async aiAnalyze(
+    projectId: string,
+    stage: ReviewStage,
+    input: AiAnalyzeReviewInput,
+  ): Promise<AiAnalyzeReviewResponse> {
+    const { data } = await api.post<AiAnalyzeReviewResponse>(
+      `/projects/${projectId}/reviews/${stage}/ai-analyze`,
+      input,
+    )
+    return data
+  },
+
+  async fanqieFetchAll(cookies: string, aid?: string): Promise<FanqieFetchAllResult> {
+    const { data } = await api.post<FanqieFetchAllResult>('/fanqie/fetch-all', {
+      cookies,
+      aid: aid || '2503',
+    })
+    return data
+  },
+
+  async fanqieFetchFromCurl(curl: string, stage: ReviewStage = '7d'): Promise<FanqieFetchFromCurlResult> {
+    const { data } = await api.post<FanqieFetchFromCurlResult>('/fanqie/fetch-from-curl', {
+      curl,
+      stage,
+    })
+    return data
+  },
+}
+
+export interface AiAnalyzeReviewInput {
+  track: string
+  total_words: number
+  read_count: number
+  word_number: number
+  categories_json: string | null
+}
+
+export interface AiAnalyzeReviewResponse {
+  overall_result: string
+  title_result: string
+  hook_result: string
+  emotion_result: string
+  success_reason: string
+  failure_reason: string
+  next_action: string
+}
+
+export interface QuickBatchItem {
+  title: string
+  read_count: number
+  word_number: number
+  categories: string[]
+  show_count?: number | null
+  comment_count?: number | null
+  like_count?: number | null
+  library_count?: number | null
+  completion_rate?: number | null
+}
+
+export interface QuickBatchItemResult {
+  title: string
+  matched: boolean
+  project_id: string | null
+  skip_reason: string | null
+  updated: boolean
+}
+
+export interface FanqieFetchAllItem {
+  book_id: string
+  title: string
+  read_count: number
+  word_number: number
+  categories: string[]
+  show_count: number | null
+  completion_rate: number | null
+  comment_count: number | null
+  like_count: number | null
+  library_count: number | null
+}
+
+export interface FanqieFetchAllResult {
+  items: FanqieFetchAllItem[]
+  total_count: number
+  detail_success: number
+  detail_failed: number
+  errors: string[]
+}
+
+export interface FanqieFetchFromCurlResult extends FanqieFetchAllResult {
+  batch_results: QuickBatchItemResult[]
+  stage: ReviewStage
 }

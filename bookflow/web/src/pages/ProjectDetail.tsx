@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   Crop,
   Download,
+  FileArchive,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -197,7 +198,7 @@ export default function ProjectDetail() {
   /** SOP 阶段 2 前期方案流：README → 角色设定（链式 SSE，自动落库） */
   const pipeline = usePipeline()
   /** 一键全流程：README → 角色设定 → 大纲 → 正文 → 全书汇总 → 配套素材 */
-  const fullPipeline = useFullPipeline()
+  const fullPipeline = useFullPipeline(projectId)
   const runProjectizeFlow = async () => {
     setPreflightDrafts(emptyPreflightDrafts())
     const ok = await pipeline.run([
@@ -486,6 +487,7 @@ export default function ProjectDetail() {
             copyable
             globalJob={aiJob}
             resumable
+            showCharCount
           />
           <ArtifactStreamCard
             projectId={projectId}
@@ -501,6 +503,7 @@ export default function ProjectDetail() {
             downloadable
             projectTitle={project.data?.title}
             globalJob={aiJob}
+            showCharCount
           />
           <ArtifactStreamCard
             projectId={projectId}
@@ -524,6 +527,13 @@ export default function ProjectDetail() {
             disabledHint="先生成 README，再生成小说配图。"
             onDone={refreshArtifacts}
             globalJob={aiJob}
+          />
+          <ProjectPackageCard
+            projectId={projectId}
+            projectTitle={project.data?.title}
+            sideDishes={sideDishes}
+            bookPolished={bookPolished}
+            storyImage={storyImage}
           />
         </div>
 
@@ -778,6 +788,25 @@ async function downloadCompositedCover(
     fit?: 'stretch' | 'cover'
   },
 ): Promise<void> {
+  const blob = await renderCompositedCoverBlob(dataUrl, options)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+async function renderCompositedCoverBlob(
+  dataUrl: string,
+  options?: {
+    format?: 'png' | 'jpg' | 'jpeg'
+    quality?: number
+    fit?: 'stretch' | 'cover'
+  },
+): Promise<Blob> {
   const img = new Image()
   const imageReady = new Promise<void>((resolve, reject) => {
     img.onload = () => resolve()
@@ -826,20 +855,150 @@ async function downloadCompositedCover(
   const format = options?.format ?? 'png'
   const mimeType = format === 'png' ? 'image/png' : 'image/jpeg'
   const quality = Math.min(0.95, Math.max(0.6, options?.quality ?? 0.88))
-  const out = format === 'png'
-    ? canvas.toDataURL(mimeType)
-    : canvas.toDataURL(mimeType, quality)
-  const a = document.createElement('a')
-  a.href = out
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (blob) resolve(blob)
+        else reject(new Error('封面导出失败：图片编码失败'))
+      },
+      mimeType,
+      format === 'png' ? undefined : quality,
+    )
+  })
 }
 
 function storyImageFilename(projectId: string, format: 'png' | 'jpg' | 'jpeg'): string {
   return `story-image-${projectId}.${format}`
 }
+
+function safeFilename(name: string): string {
+  return name.replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 120) || '未命名'
+}
+
+interface ZipEntryInput {
+  name: string
+  data: Blob | string
+}
+
+async function downloadZip(entries: ZipEntryInput[], filename: string) {
+  const blob = await createZipBlob(entries)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = safeFilename(filename).endsWith('.zip') ? safeFilename(filename) : `${safeFilename(filename)}.zip`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+async function createZipBlob(entries: ZipEntryInput[]): Promise<Blob> {
+  const encoder = new TextEncoder()
+  const fileParts: Uint8Array[] = []
+  const centralParts: Uint8Array[] = []
+  let offset = 0
+
+  for (const entry of entries) {
+    const nameBytes = encoder.encode(safeFilename(entry.name))
+    const dataBytes = entry.data instanceof Blob
+      ? new Uint8Array(await entry.data.arrayBuffer())
+      : encoder.encode(entry.data)
+    const crc = crc32(dataBytes)
+    const localHeader = zipLocalHeader(nameBytes, dataBytes.length, crc)
+    fileParts.push(localHeader, dataBytes)
+    centralParts.push(zipCentralDirectoryHeader(nameBytes, dataBytes.length, crc, offset))
+    offset += localHeader.length + dataBytes.length
+  }
+
+  const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0)
+  const centralOffset = offset
+  const end = zipEndOfCentralDirectory(entries.length, centralSize, centralOffset)
+  return new Blob(
+    [
+      ...fileParts.map((part) => new Blob([part.buffer as ArrayBuffer])),
+      ...centralParts.map((part) => new Blob([part.buffer as ArrayBuffer])),
+      new Blob([end.buffer as ArrayBuffer]),
+    ],
+    { type: 'application/zip' },
+  )
+}
+
+function zipLocalHeader(name: Uint8Array, size: number, crc: number): Uint8Array {
+  const out = new Uint8Array(30 + name.length)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, 0x04034b50, true)
+  view.setUint16(4, 20, true)
+  view.setUint16(6, 0x0800, true)
+  view.setUint16(8, 0, true)
+  view.setUint16(10, 0, true)
+  view.setUint16(12, 0, true)
+  view.setUint32(14, crc, true)
+  view.setUint32(18, size, true)
+  view.setUint32(22, size, true)
+  view.setUint16(26, name.length, true)
+  view.setUint16(28, 0, true)
+  out.set(name, 30)
+  return out
+}
+
+function zipCentralDirectoryHeader(
+  name: Uint8Array,
+  size: number,
+  crc: number,
+  localOffset: number,
+): Uint8Array {
+  const out = new Uint8Array(46 + name.length)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, 0x02014b50, true)
+  view.setUint16(4, 20, true)
+  view.setUint16(6, 20, true)
+  view.setUint16(8, 0x0800, true)
+  view.setUint16(10, 0, true)
+  view.setUint16(12, 0, true)
+  view.setUint16(14, 0, true)
+  view.setUint32(16, crc, true)
+  view.setUint32(20, size, true)
+  view.setUint32(24, size, true)
+  view.setUint16(28, name.length, true)
+  view.setUint16(30, 0, true)
+  view.setUint16(32, 0, true)
+  view.setUint16(34, 0, true)
+  view.setUint16(36, 0, true)
+  view.setUint32(38, 0, true)
+  view.setUint32(42, localOffset, true)
+  out.set(name, 46)
+  return out
+}
+
+function zipEndOfCentralDirectory(entryCount: number, centralSize: number, centralOffset: number): Uint8Array {
+  const out = new Uint8Array(22)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, 0x06054b50, true)
+  view.setUint16(4, 0, true)
+  view.setUint16(6, 0, true)
+  view.setUint16(8, entryCount, true)
+  view.setUint16(10, entryCount, true)
+  view.setUint32(12, centralSize, true)
+  view.setUint32(16, centralOffset, true)
+  view.setUint16(20, 0, true)
+  return out
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff
+  for (const byte of bytes) {
+    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ byte) & 0xff]
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+const CRC32_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let c = index
+  for (let k = 0; k < 8; k += 1) {
+    c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+  }
+  return c >>> 0
+})
 
 interface ArtifactStreamCardProps {
   projectId: string
@@ -862,6 +1021,7 @@ interface ArtifactStreamCardProps {
   notice?: React.ReactNode
   footer?: React.ReactNode
   resumable?: boolean
+  showCharCount?: boolean
 }
 
 function ArtifactStreamCard({
@@ -883,6 +1043,7 @@ function ArtifactStreamCard({
   notice,
   footer,
   resumable = false,
+  showCharCount = false,
 }: ArtifactStreamCardProps) {
   const activeJob = globalJob?.kind === kind ? globalJob : undefined
   const startedAtRef = useRef(0)
@@ -924,6 +1085,12 @@ function ArtifactStreamCard({
   const statusTitle = activeJob?.title || title
   const statusChars =
     activeJob?.chars ?? Array.from(sse.text || externalText || '').length
+  const displayChars = Array.from(display).length
+  const abortStream = () => {
+    sse.abort()
+    clearAiJob(projectId)
+    sse.reset()
+  }
 
   return (
     <section
@@ -933,6 +1100,11 @@ function ArtifactStreamCard({
       <header className="flex items-center gap-2 mb-3">
         <Sparkles className="h-4 w-4 text-violet-600" />
         <h2 className="text-sm font-semibold">{title}</h2>
+        {showCharCount && displayChars > 0 && (
+          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500">
+            {displayChars.toLocaleString('zh-CN')} 字
+          </span>
+        )}
         {artifact && !streaming && (
           <span className="text-[10px] text-gray-400">v{artifact.version}</span>
         )}
@@ -982,6 +1154,17 @@ function ArtifactStreamCard({
           )}
           {artifact ? '重新生成' : `AI 生成${title}`}
         </button>
+        {activeJob && (
+          <button
+            type="button"
+            onClick={abortStream}
+            className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+            data-testid={`ai-${kind}-abort-btn`}
+            title="中断当前生成并清除运行状态"
+          >
+            中断
+          </button>
+        )}
         {resumable && sse.status === 'error' && artifact && (
           <button
             type="button"
@@ -1560,6 +1743,93 @@ interface StoryImageCardProps {
   disabledHint: string
   onDone: () => void
   globalJob?: AiJob
+}
+
+interface ProjectPackageCardProps {
+  projectId: string
+  projectTitle?: string
+  sideDishes?: ProjectArtifact
+  bookPolished?: ProjectArtifact
+  storyImage?: ProjectArtifact
+}
+
+function ProjectPackageCard({
+  projectId,
+  projectTitle,
+  sideDishes,
+  bookPolished,
+  storyImage,
+}: ProjectPackageCardProps) {
+  const [packing, setPacking] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const payload = parseStoryImageArtifact(storyImage)
+  const missing = [
+    !sideDishes?.content ? '配套素材' : '',
+    !bookPolished?.content ? '优化升华' : '',
+    !payload?.data_url ? '小说配图' : '',
+  ].filter(Boolean)
+  const disabled = packing || missing.length > 0
+
+  const handlePackage = async () => {
+    if (!sideDishes?.content || !bookPolished?.content || !payload?.data_url) return
+    try {
+      setPacking(true)
+      setError(null)
+      const title = safeFilename(projectTitle || '未命名项目')
+      const storedAuthor = readStoryImageAuthor(projectId)
+      const authorPart = safeFilename(storedAuthor?.authorName.trim() || '封面带作者署名')
+      const packageBaseName = `${title}-${authorPart}`
+      const coverBlob = await renderCompositedCoverBlob(payload.data_url, {
+        format: 'png',
+        fit: 'cover',
+      })
+      await downloadZip(
+        [
+          { name: `${title}-配套素材.txt`, data: `\uFEFF${copyDisplayText('side_dishes', sideDishes.content)}` },
+          { name: `${title}-优化升华.txt`, data: `\uFEFF${copyDisplayText('book_polished', bookPolished.content)}` },
+          { name: `${packageBaseName}-3x4.png`, data: coverBlob },
+        ],
+        `${packageBaseName}.zip`,
+      )
+    } catch (e) {
+      setError(extractErrorMessage(e))
+    } finally {
+      setPacking(false)
+    }
+  }
+
+  return (
+    <section className="rounded-lg bg-white p-4 shadow-sm ring-1 ring-gray-200">
+      <header className="mb-3 flex items-center gap-2">
+        <FileArchive className="h-4 w-4 text-emerald-600" />
+        <h2 className="text-sm font-semibold">一键打包</h2>
+        <button
+          type="button"
+          onClick={handlePackage}
+          disabled={disabled}
+          className="ml-auto inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+          data-testid="download-project-package-btn"
+          title={missing.length > 0 ? `缺少：${missing.join('、')}` : ''}
+        >
+          {packing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+          {packing ? '打包中…' : '下载 ZIP'}
+        </button>
+      </header>
+      <p className="text-xs leading-5 text-gray-500">
+        打包配套素材、优化升华和 3:4 裁剪封面，文件名按当前项目标题生成。
+      </p>
+      {missing.length > 0 && (
+        <p className="mt-2 text-xs text-amber-600">
+          还缺：{missing.join('、')}
+        </p>
+      )}
+      {error && (
+        <p className="mt-2 inline-flex items-center gap-1 text-xs text-rose-600">
+          <TriangleAlert className="h-3 w-3" /> 打包失败：{error}
+        </p>
+      )}
+    </section>
+  )
 }
 
 function StoryImageCard({

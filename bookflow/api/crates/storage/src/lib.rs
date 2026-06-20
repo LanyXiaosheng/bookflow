@@ -735,6 +735,37 @@ impl ProjectRepo {
         })
     }
 
+    pub async fn find_by_titles(
+        &self,
+        user_id: Uuid,
+        titles: &[String],
+    ) -> Result<Vec<(String, Uuid, Option<chrono::DateTime<chrono::Utc>>)>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT title, id, published_at
+            FROM projects
+            WHERE user_id = $1
+              AND title = ANY($2)
+              AND deleted_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .bind(titles)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (
+                    r.get::<String, _>("title"),
+                    r.get::<Uuid, _>("id"),
+                    r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("published_at"),
+                )
+            })
+            .collect())
+    }
+
     pub async fn update_status(
         &self,
         user_id: Uuid,
@@ -995,6 +1026,10 @@ pub struct SeedDraft {
     pub score: Score,
     pub total_score: i32,
     pub why_buy: String,
+    #[serde(default)]
+    pub recommend_reason: String,
+    #[serde(default)]
+    pub heat: String,
     pub batch_id: Uuid,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -1005,6 +1040,8 @@ pub struct NewSeedDraft {
     pub title: String,
     pub score: Score,
     pub why_buy: String,
+    pub recommend_reason: String,
+    pub heat: String,
 }
 
 #[derive(Clone)]
@@ -1033,9 +1070,9 @@ impl SeedDraftRepo {
             let score_json = serde_json::to_value(&d.score).unwrap();
             let row = sqlx::query(
                 r#"
-                INSERT INTO ai_seed_drafts (user_id, track, title, score, total_score, why_buy, batch_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING id, track, title, score, total_score, why_buy, batch_id, created_at
+                INSERT INTO ai_seed_drafts (user_id, track, title, score, total_score, why_buy, recommend_reason, heat, batch_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                RETURNING id, track, title, score, total_score, why_buy, recommend_reason, heat, batch_id, created_at
                 "#,
             )
             .bind(user_id)
@@ -1044,6 +1081,8 @@ impl SeedDraftRepo {
             .bind(Json(score_json))
             .bind(total)
             .bind(&d.why_buy)
+            .bind(&d.recommend_reason)
+            .bind(&d.heat)
             .bind(batch_id)
             .fetch_one(&mut *tx)
             .await?;
@@ -1054,6 +1093,8 @@ impl SeedDraftRepo {
                 score: row.get::<Json<Score>, _>("score").0,
                 total_score: row.get("total_score"),
                 why_buy: row.get("why_buy"),
+                recommend_reason: row.get("recommend_reason"),
+                heat: row.get("heat"),
                 batch_id: row.get("batch_id"),
                 created_at: row.get("created_at"),
             });
@@ -1071,7 +1112,7 @@ impl SeedDraftRepo {
     ) -> Result<Vec<SeedDraft>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, track, title, score, total_score, why_buy, batch_id, created_at
+            SELECT id, track, title, score, total_score, why_buy, recommend_reason, heat, batch_id, created_at
             FROM ai_seed_drafts
             WHERE user_id = $1
               AND ($2::text IS NULL OR track = $2)
@@ -1094,14 +1135,63 @@ impl SeedDraftRepo {
                 score: r.get::<Json<Score>, _>("score").0,
                 total_score: r.get("total_score"),
                 why_buy: r.get("why_buy"),
+                recommend_reason: r.get("recommend_reason"),
+                heat: r.get("heat"),
                 batch_id: r.get("batch_id"),
                 created_at: r.get("created_at"),
             })
             .collect())
     }
-}
 
-// === 项目产物：README / 大纲 / 发布稿 / 配套 ===
+    /// 拉该用户「热度为空」的候选标题（去重，取每个标题任一赛道），用于回填
+    pub async fn titles_needing_heat(
+        &self,
+        user_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT ON (title) title, track
+            FROM ai_seed_drafts
+            WHERE user_id = $1 AND (heat = '' OR heat IS NULL)
+            ORDER BY title, created_at DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(user_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get::<String, _>("title"), r.get::<String, _>("track")))
+            .collect())
+    }
+
+    /// 按标题回填热度+推荐原因（同标题全部更新）；返回受影响行数
+    pub async fn set_heat_by_title(
+        &self,
+        user_id: Uuid,
+        title: &str,
+        heat: &str,
+        recommend_reason: &str,
+    ) -> Result<u64> {
+        let res = sqlx::query(
+            r#"
+            UPDATE ai_seed_drafts
+            SET heat = $3, recommend_reason = $4
+            WHERE user_id = $1 AND title = $2
+            "#,
+        )
+        .bind(user_id)
+        .bind(title)
+        .bind(heat)
+        .bind(recommend_reason)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+}
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1176,6 +1266,7 @@ impl ProjectReviewRepo {
             r#"
             SELECT id, project_id, stage, published_at, data_recorded,
                    read_count, completion_rate, engagement_count,
+                   show_count, comment_count, like_count, library_count,
                    overall_result, title_result, hook_result, emotion_result,
                    success_reason, failure_reason, continue_track,
                    reusable_conclusion, next_action, created_at, updated_at
@@ -1203,6 +1294,10 @@ impl ProjectReviewRepo {
         read_count: Option<i64>,
         completion_rate: Option<f64>,
         engagement_count: Option<i64>,
+        show_count: Option<i64>,
+        comment_count: Option<i64>,
+        like_count: Option<i64>,
+        library_count: Option<i64>,
         overall_result: Option<&str>,
         title_result: Option<&str>,
         hook_result: Option<&str>,
@@ -1218,6 +1313,7 @@ impl ProjectReviewRepo {
             INSERT INTO project_reviews (
                 project_id, stage, published_at, data_recorded,
                 read_count, completion_rate, engagement_count,
+                show_count, comment_count, like_count, library_count,
                 overall_result, title_result, hook_result, emotion_result,
                 success_reason, failure_reason, continue_track,
                 reusable_conclusion, next_action
@@ -1226,8 +1322,9 @@ impl ProjectReviewRepo {
                 $1, $2, $3, $4,
                 $5, $6, $7,
                 $8, $9, $10, $11,
-                $12, $13, $14,
-                $15, $16
+                $12, $13, $14, $15,
+                $16, $17, $18,
+                $19, $20
             )
             ON CONFLICT (project_id, stage) DO UPDATE SET
                 published_at = EXCLUDED.published_at,
@@ -1235,6 +1332,10 @@ impl ProjectReviewRepo {
                 read_count = EXCLUDED.read_count,
                 completion_rate = EXCLUDED.completion_rate,
                 engagement_count = EXCLUDED.engagement_count,
+                show_count = EXCLUDED.show_count,
+                comment_count = EXCLUDED.comment_count,
+                like_count = EXCLUDED.like_count,
+                library_count = EXCLUDED.library_count,
                 overall_result = EXCLUDED.overall_result,
                 title_result = EXCLUDED.title_result,
                 hook_result = EXCLUDED.hook_result,
@@ -1247,6 +1348,7 @@ impl ProjectReviewRepo {
                 updated_at = NOW()
             RETURNING id, project_id, stage, published_at, data_recorded,
                       read_count, completion_rate, engagement_count,
+                      show_count, comment_count, like_count, library_count,
                       overall_result, title_result, hook_result, emotion_result,
                       success_reason, failure_reason, continue_track,
                       reusable_conclusion, next_action, created_at, updated_at
@@ -1259,6 +1361,10 @@ impl ProjectReviewRepo {
         .bind(read_count)
         .bind(completion_rate)
         .bind(engagement_count)
+        .bind(show_count)
+        .bind(comment_count)
+        .bind(like_count)
+        .bind(library_count)
         .bind(overall_result)
         .bind(title_result)
         .bind(hook_result)
@@ -1367,6 +1473,10 @@ fn map_project_review(row: PgRow) -> Result<ProjectReview> {
         read_count: row.get("read_count"),
         completion_rate: row.get("completion_rate"),
         engagement_count: row.get("engagement_count"),
+        show_count: row.get("show_count"),
+        comment_count: row.get("comment_count"),
+        like_count: row.get("like_count"),
+        library_count: row.get("library_count"),
         overall_result: parse_review_result(
             row.get::<Option<String>, _>("overall_result").as_deref(),
         )?,

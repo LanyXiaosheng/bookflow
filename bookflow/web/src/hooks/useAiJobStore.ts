@@ -38,6 +38,8 @@ export function aiJobKindLabel(kind: AiJobKind): string {
       return '全书汇总'
     case 'book_polished':
       return '优化升华'
+    default:
+      return 'AI 任务'
   }
 }
 

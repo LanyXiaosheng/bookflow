@@ -1,13 +1,14 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, TriangleAlert, Check, Wand2, X, Loader2, Brain, ListPlus, Rocket, ArrowRight, History, ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
+import { Sparkles, TriangleAlert, Check, Wand2, X, Loader2, Brain, ListPlus, Rocket, ArrowRight, History, ChevronDown, ChevronUp, Trash2, Flame } from 'lucide-react'
 import { seedsApi, type AiScoreResponse, type AiSeedCandidate, type Score, type Tier } from '../api/seeds'
 import { projectsApi, type Project } from '../api/projects'
 import { extractErrorMessage } from '../api/errors'
 import { useConfirm } from '../components/ConfirmDialog'
 import { useBatchLaunch, type BatchInput } from '../hooks/useBatchLaunch'
 import BatchLaunchPanel from '../components/BatchLaunchPanel'
+import HeatBadge from '../components/HeatBadge'
 import TrackPills from '../components/TrackPills'
 import {
   composeTrack,
@@ -58,14 +59,6 @@ const TIER_BG: Record<Tier, string> = {
   greenlight: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   backlog: 'bg-amber-50 text-amber-700 border-amber-200',
   reject: 'bg-rose-50 text-rose-700 border-rose-200',
-}
-
-/** AI 估的目前热度标签配色 */
-const HEAT_BG: Record<string, string> = {
-  爆款在售: 'border-rose-200 bg-rose-50 text-rose-700',
-  上升期: 'border-orange-200 bg-orange-50 text-orange-700',
-  平稳: 'border-sky-200 bg-sky-50 text-sky-700',
-  冷门: 'border-slate-200 bg-slate-50 text-slate-500',
 }
 
 /** 测试垃圾启发式：以「测试 / e2e / smoke / playwright / test」开头 */
@@ -219,6 +212,31 @@ export default function Seeds() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-drafts'] }),
   })
 
+  /** AI 推荐主分类+情节组合 */
+  const aiRecommendTrack = useMutation({
+    mutationFn: () =>
+      seedsApi.aiRecommendTrack(
+        [...TRACK_PRIMARY_OPTIONS],
+        [...TRACK_PLOT_OPTIONS],
+      ),
+  })
+
+  /** 回填历史候选热度+推荐原因 */
+  const backfillHeat = useMutation({
+    mutationFn: () => seedsApi.aiBackfillHeat(),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ai-drafts'] }),
+  })
+
+  /** 应用一条推荐到当前赛道选择（只取选项里合法的值） */
+  const applyTrackRecommendation = (rec: { primary: string; plots: string[] }) => {
+    const primaryOk = (TRACK_PRIMARY_OPTIONS as readonly string[]).includes(rec.primary)
+    if (primaryOk) setTrackPrimary(rec.primary as TrackPrimary)
+    const plots = rec.plots.filter((p) =>
+      (TRACK_PLOT_OPTIONS as readonly string[]).includes(p),
+    )
+    if (plots.length > 0) setTrackPlots(plots)
+  }
+
   /** 候选历史：全部赛道、按时间倒序，跨刷新和换标签都在 */
   const drafts = useQuery({
     queryKey: ['ai-drafts'],
@@ -330,6 +348,78 @@ export default function Seeds() {
 
         {aiPanelOpen && (
           <div className="border-t border-slate-100 px-5 py-5">
+            {/* AI 推荐主分类+情节组合 */}
+            <div className="mb-4 rounded-2xl border border-violet-100 bg-violet-50/50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-violet-700">
+                    <Brain className="h-3.5 w-3.5" /> AI 推荐组合
+                  </div>
+                  <p className="mt-1 text-xs text-violet-500">
+                    不知道做什么？让 AI 按当下热度推荐「主分类 + 情节」组合，点一下直接套用。
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => aiRecommendTrack.mutate()}
+                  disabled={aiRecommendTrack.isPending}
+                  data-testid="ai-recommend-track-btn"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+                >
+                  {aiRecommendTrack.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Wand2 className="h-3.5 w-3.5" />
+                  )}
+                  {aiRecommendTrack.isPending ? 'AI 推荐中…' : 'AI 推荐组合'}
+                </button>
+              </div>
+              {aiRecommendTrack.isError && (
+                <div className="mt-3 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">
+                  <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  推荐失败：{(aiRecommendTrack.error as Error)?.message}
+                </div>
+              )}
+              {aiRecommendTrack.data && aiRecommendTrack.data.length > 0 && (
+                <ul className="mt-3 grid gap-2 sm:grid-cols-3" data-testid="track-recommend-list">
+                  {aiRecommendTrack.data.map((rec, i) => (
+                    <li
+                      key={i}
+                      className="flex flex-col rounded-xl border border-violet-200 bg-white p-3"
+                      data-testid={`track-recommend-${i}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-gray-900">{rec.primary}</span>
+                        {rec.heat && <HeatBadge heat={rec.heat} className="shrink-0" />}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {rec.plots.map((p) => (
+                          <span
+                            key={p}
+                            className="inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] text-violet-700"
+                          >
+                            {p}
+                          </span>
+                        ))}
+                      </div>
+                      {rec.reason && (
+                        <p className="mt-2 text-[11px] leading-5 text-slate-500 line-clamp-2">
+                          {rec.reason}
+                        </p>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => applyTrackRecommendation(rec)}
+                        className="mt-2 inline-flex items-center justify-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1.5 text-[11px] font-medium text-violet-700 hover:bg-violet-100"
+                        data-testid={`track-recommend-apply-${i}`}
+                      >
+                        套用这组
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
               <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="mb-3">
@@ -511,6 +601,26 @@ export default function Seeds() {
                     !finishedDraftTitles.has(d.title)
                   ).length
                 }）
+                <button
+                  type="button"
+                  onClick={() => backfillHeat.mutate()}
+                  disabled={backfillHeat.isPending}
+                  className="ml-1 inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-medium normal-case tracking-normal text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                  data-testid="backfill-heat-btn"
+                  title="给还没有热度的历史候选补全热度+推荐原因（一次最多 60 个，可多次点）"
+                >
+                  {backfillHeat.isPending ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Flame className="h-3 w-3" />
+                  )}
+                  {backfillHeat.isPending ? '补全中…' : '补全历史热度'}
+                </button>
+                {backfillHeat.data && (
+                  <span className="text-[11px] font-medium normal-case tracking-normal text-emerald-600">
+                    已补 {backfillHeat.data.updated_titles} 个标题
+                  </span>
+                )}
                 {selectedDrafts.size > 0 && (
                   <span className="ml-2 inline-flex items-center gap-2 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 normal-case tracking-normal">
                     <span className="text-[11px] font-medium text-violet-700">
@@ -553,6 +663,8 @@ export default function Seeds() {
                       title={d.title}
                       score={d.score}
                       why_buy={d.why_buy}
+                      recommendReason={d.recommend_reason}
+                      heat={d.heat}
                       track={d.track}
                       testIdPrefix="draft"
                       index={i}
@@ -1163,13 +1275,8 @@ function CandidateCard({
         </div>
       )}
       {heat && (
-        <div className="mt-1.5">
-          <span
-            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${HEAT_BG[heat] ?? 'border-slate-200 bg-slate-50 text-slate-600'}`}
-            data-testid={`${testIdPrefix}-heat-${index}`}
-          >
-            🔥 {heat}
-          </span>
+        <div className="mt-1.5" data-testid={`${testIdPrefix}-heat-${index}`}>
+          <HeatBadge heat={heat} />
         </div>
       )}
       <p className="mt-2 text-xs leading-6 text-slate-500 line-clamp-3">{why_buy}</p>

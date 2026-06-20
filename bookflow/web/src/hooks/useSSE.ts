@@ -128,6 +128,17 @@ export function useSSE(opts: UseSSEOptions = {}) {
             } catch {
               // 忽略坏帧
             }
+          } else if (ev.event === 'replace') {
+            try {
+              const { text } = JSON.parse(ev.data) as { text: string }
+              acc = text
+              optsRef.current.onDelta?.(acc)
+              if (mountedRef.current) {
+                setState((s) => ({ ...s, text: acc, retry: null }))
+              }
+            } catch {
+              // 忽略坏帧
+            }
           } else if (ev.event === 'retry') {
             try {
               const info = JSON.parse(ev.data) as SSERetry
