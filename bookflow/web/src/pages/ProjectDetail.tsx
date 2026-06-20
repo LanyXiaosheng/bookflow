@@ -291,7 +291,7 @@ export default function ProjectDetail() {
               type="button"
               onClick={() => fullPipeline.run({ projectId, target: 10 })}
               disabled={
-                fullPipeline.progress.running ||
+                (fullPipeline.progress.running && !fullPipeline.stale) ||
                 pipeline.progress.running ||
                 project.data?.status !== 'writing'
               }
@@ -299,12 +299,12 @@ export default function ProjectDetail() {
               className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50 sm:flex-none"
               data-testid="full-pipeline-btn"
             >
-              {fullPipeline.progress.running ? (
+              {fullPipeline.progress.running && !fullPipeline.stale ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
               ) : (
                 <Rocket className="h-3 w-3" />
               )}
-              {fullPipeline.progress.running
+              {fullPipeline.progress.running && !fullPipeline.stale
                 ? `第 ${fullPipeline.progress.done + 1}/${fullPipeline.progress.total} · ${
                     fullPipeline.progress.currentKey
                       ? PIPELINE_STEP_LABELS[fullPipeline.progress.currentKey]
@@ -317,9 +317,11 @@ export default function ProjectDetail() {
                         ? ` · ${fullPipeline.progress.chars}字`
                         : ''
                   }`
+                : fullPipeline.stale
+                  ? '继续全流程'
                 : 'AI 一键全流程'}
             </button>
-            {fullPipeline.progress.running && (
+            {fullPipeline.progress.running && !fullPipeline.stale && (
               <button
                 type="button"
                 onClick={fullPipeline.abort}
@@ -399,7 +401,17 @@ export default function ProjectDetail() {
               .join(' / ')}
           </div>
         )}
-        {fullPipeline.progress.running && fullPipeline.progress.stepRetry && (
+        {fullPipeline.progress.running && fullPipeline.stale && (
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-amber-600 inline-flex items-center gap-1">
+            <TriangleAlert className="h-3 w-3" />
+            全流程状态已暂停在
+            {fullPipeline.progress.currentKey
+              ? `「${PIPELINE_STEP_LABELS[fullPipeline.progress.currentKey]}」`
+              : '当前步骤'}
+            ，点击“继续全流程”会从已有产物继续。
+          </div>
+        )}
+        {fullPipeline.progress.running && !fullPipeline.stale && fullPipeline.progress.stepRetry && (
           <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-amber-600 inline-flex items-center gap-1">
             <RefreshCw className="h-3 w-3 animate-spin" />
             {fullPipeline.progress.currentKey

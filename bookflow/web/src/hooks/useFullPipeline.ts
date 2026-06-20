@@ -70,6 +70,8 @@ export interface FullPipelineProgress {
   retry: { attempt: number; max: number } | null
   /** 当前步骤整体失败后、本地正在自动重跑该步骤的信息（null = 未在重跑） */
   stepRetry: { attempt: number; max: number } | null
+  /** 最近一次进度更新时间；用于识别切页后遗留的本地运行态 */
+  updatedAt?: number
   error?: string
 }
 
@@ -86,6 +88,7 @@ const initial: FullPipelineProgress = {
 
 const STORAGE_KEY = 'bookflow.full_pipeline_jobs.v1'
 const STORAGE_EVENT = 'bookflow:full-pipeline-jobs-changed'
+const STALE_RUNNING_MS = 15_000
 
 type FullPipelineJobs = Record<string, FullPipelineProgress>
 
@@ -256,6 +259,7 @@ export function useFullPipeline(projectIdForStorage?: string) {
   const [progress, setProgressState] = useState<FullPipelineProgress>(() =>
     getStoredProgress(projectIdForStorage),
   )
+  const [, setClock] = useState(0)
   const abortRef = useRef<AbortController | null>(null)
   const fullBook = useFullBook()
   const aiJob = useAiJob(projectIdForStorage)
@@ -264,23 +268,30 @@ export function useFullPipeline(projectIdForStorage?: string) {
   storageProjectIdRef.current = projectIdForStorage
 
   const setProgress = useCallback((next: FullPipelineProgress) => {
+    const stamped = { ...next, updatedAt: Date.now() }
     const projectId = storageProjectIdRef.current
     if (projectId) {
-      setStoredProgress(projectId, next)
+      setStoredProgress(projectId, stamped)
     }
-    setProgressState(next)
+    setProgressState(stamped)
   }, [])
 
   const updateProgress = useCallback((updater: (prev: FullPipelineProgress) => FullPipelineProgress) => {
     const projectId = storageProjectIdRef.current
     if (projectId) {
-      const next = updater(getStoredProgress(projectId))
+      const next = { ...updater(getStoredProgress(projectId)), updatedAt: Date.now() }
       setStoredProgress(projectId, next)
       setProgressState(next)
       return next
     }
     setProgressState((prev) => updater(prev))
   }, [])
+
+  useEffect(() => {
+    if (!progress.running) return
+    const timer = window.setInterval(() => setClock((value) => value + 1), 1000)
+    return () => window.clearInterval(timer)
+  }, [progress.running])
 
   useEffect(() => {
     if (!projectIdForStorage) {
@@ -311,7 +322,7 @@ export function useFullPipeline(projectIdForStorage?: string) {
       target,
       forceSteps = [],
     }: RunFullPipelineOpts): Promise<boolean> => {
-      if (progress.running) return false
+      if (progress.running && !isStaleFullPipelineProgress(progress)) return false
       const ac = new AbortController()
       abortRef.current = ac
       startedAtRef.current = Date.now()
@@ -476,7 +487,13 @@ export function useFullPipeline(projectIdForStorage?: string) {
           }
       : progress
 
-  return { progress: merged, run, abort, reset }
+  const stale = isStaleFullPipelineProgress(merged)
+
+  return { progress: merged, run, abort, reset, stale }
+}
+
+function isStaleFullPipelineProgress(progress: FullPipelineProgress): boolean {
+  return progress.running && Date.now() - (progress.updatedAt ?? 0) > STALE_RUNNING_MS
 }
 
 function endpointForStep(projectId: string, step: PipelineStepKey): string {
