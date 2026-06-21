@@ -205,6 +205,14 @@ pub struct Project {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectListItem {
+    #[serde(flatten)]
+    pub project: Project,
+    pub chapter_count: i64,
+    pub total_words: i64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ReviewStage {
     #[serde(rename = "24h")]
@@ -449,7 +457,16 @@ mod tests {
 
     #[test]
     fn score_validate_range() {
-        let mut s = Score { title: 5, opening: 5, slap: 5, emotion: 5, twist: 5, hook: 5, finish: 5 };
+        let mut s = Score {
+            title: 5,
+            opening: 5,
+            slap: 5,
+            emotion: 5,
+            twist: 5,
+            hook: 5,
+            finish: 5,
+            tagfit: 0,
+        };
         assert!(s.validate().is_ok());
         s.title = 0;
         assert!(s.validate().is_err());
@@ -462,7 +479,16 @@ mod tests {
         let mut ns = NewSeed {
             title: "婚礼彩排那天伴娘群里弹出他和伴娘的开房记录".into(), // 21 字
             track: "现言婚恋火葬场".into(),
-            score: Score { title: 5, opening: 5, slap: 5, emotion: 4, twist: 4, hook: 5, finish: 5 },
+            score: Score {
+                title: 5,
+                opening: 5,
+                slap: 5,
+                emotion: 4,
+                twist: 4,
+                hook: 5,
+                finish: 5,
+                tagfit: 0,
+            },
         };
         assert!(ns.validate().is_ok());
         // 26 字超

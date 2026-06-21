@@ -12,6 +12,11 @@ export interface Project {
   updated_at: string
 }
 
+export interface ProjectListItem extends Project {
+  chapter_count: number
+  total_words: number
+}
+
 export type ArtifactKind =
   | 'readme'
   | 'character_setup'
@@ -33,8 +38,8 @@ export interface ProjectArtifact {
 }
 
 export const projectsApi = {
-  async list(status?: ProjectStatus): Promise<Project[]> {
-    const { data } = await api.get<Project[]>('/projects', {
+  async list(status?: ProjectStatus): Promise<ProjectListItem[]> {
+    const { data } = await api.get<ProjectListItem[]>('/projects', {
       params: status ? { status } : {},
     })
     return data

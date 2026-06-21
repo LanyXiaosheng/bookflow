@@ -2,8 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { ArrowRight, FileText, Loader2, Rocket, Sparkles, Trash2, TriangleAlert } from 'lucide-react'
-import { projectsApi, type Project, type ProjectStatus } from '../api/projects'
-import { chaptersApi } from '../api/chapters'
+import { projectsApi, type ProjectListItem, type ProjectStatus } from '../api/projects'
 import { seedsApi } from '../api/seeds'
 import { aiJobKindLabel, useAllAiJobs, type AiJob } from '../hooks/useAiJobStore'
 import { useBatchLaunch, type BatchInput } from '../hooks/useBatchLaunch'
@@ -43,12 +42,6 @@ interface ProjectListProps {
   title: string
   emptyHint?: string
   includeStatuses?: ProjectStatus[]
-}
-
-interface ProjectCardData {
-  project: Project
-  chapter_count: number
-  total_words: number
 }
 
 const STATUS_TABS: Array<{ key: FilterStatus; label: string }> = [
@@ -95,23 +88,13 @@ export default function ProjectList({
   const list = useQuery({
     queryKey: ['projects', status, includeStatuses?.join(',') ?? ''],
     queryFn: async () => {
-      const projects = includeStatuses?.length
+      return includeStatuses?.length
         ? (await Promise.all(includeStatuses.map((s) => projectsApi.list(s)))).flat()
         : status === 'all'
           ? await projectsApi.list()
           : await projectsApi.list(status)
-      const enriched = await Promise.all(
-        projects.map(async (p) => {
-          const chapters = await chaptersApi.listByProject(p.id)
-          const total_words = chapters.reduce((a, c) => a + c.word_count, 0)
-          return { project: p, chapter_count: chapters.length, total_words } as ProjectCardData
-        }),
-      )
-      return enriched
     },
-    // 列表查询是 N+1（每个项目再拉章节）；批量跑时失效频繁，
-    // 给 staleTime 让 2s 内的重复失效复用缓存，避免请求风暴拖卡页面
-    staleTime: 2000,
+    staleTime: 10_000,
   })
 
   // 候选历史里带的热度/推荐原因，按标题匹配回填到项目卡（项目本身不存这俩字段）
@@ -133,39 +116,39 @@ export default function ProjectList({
   const visible = useMemo(() => {
     if (!list.data) return []
     return hideTestData
-      ? list.data.filter((row) => !looksLikeTestData(row.project.title))
+      ? list.data.filter((project) => !looksLikeTestData(project.title))
       : list.data
   }, [list.data, hideTestData])
   const hiddenCount = (list.data?.length ?? 0) - visible.length
   const runningJobs = useMemo(() => Object.values(aiJobs), [aiJobs])
   const projectTitleById = useMemo(() => {
     const titles = new Map<string, string>()
-    for (const row of list.data ?? []) {
-      titles.set(row.project.id, row.project.title)
+    for (const project of list.data ?? []) {
+      titles.set(project.id, project.title)
     }
     return titles
   }, [list.data])
 
-  const allSelected = visible.length > 0 && visible.every((r) => selected.has(r.project.id))
+  const allSelected = visible.length > 0 && visible.every((project) => selected.has(project.id))
   const toggleSelectAll = () =>
     setSelected((prev) => {
-      if (visible.every((r) => prev.has(r.project.id))) {
+      if (visible.every((project) => prev.has(project.id))) {
         const next = new Set(prev)
-        visible.forEach((r) => next.delete(r.project.id))
+        visible.forEach((project) => next.delete(project.id))
         return next
       }
       const next = new Set(prev)
-      visible.forEach((r) => next.add(r.project.id))
+      visible.forEach((project) => next.add(project.id))
       return next
     })
   const runBatch = () => {
     const picks: BatchInput[] = visible
-      .filter((r) => selected.has(r.project.id))
-      .map((r) => ({
+      .filter((project) => selected.has(project.id))
+      .map((project) => ({
         kind: 'project' as const,
-        key: r.project.id,
-        title: r.project.title,
-        projectId: r.project.id,
+        key: project.id,
+        title: project.title,
+        projectId: project.id,
       }))
     if (picks.length === 0) return
     batch.run(picks, batchTarget)
@@ -341,7 +324,7 @@ export default function ProjectList({
       )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3" data-testid="project-list">
-        {visible.map(({ project, chapter_count, total_words }) => {
+        {visible.map((project: ProjectListItem) => {
           const next = nextStatus(project.status)
           const job = aiJobs[project.id]
           const meta = metaByTitle.get(project.title)
@@ -395,11 +378,11 @@ export default function ProjectList({
               <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 mb-3">
                 <div>
                   <div className="text-[11px] text-gray-400">章节</div>
-                  <div className="font-mono font-semibold text-gray-900">{chapter_count}</div>
+                  <div className="font-mono font-semibold text-gray-900">{project.chapter_count}</div>
                 </div>
                 <div>
                   <div className="text-[11px] text-gray-400">字数</div>
-                  <div className="font-mono font-semibold text-gray-900">{total_words}</div>
+                  <div className="font-mono font-semibold text-gray-900">{project.total_words}</div>
                 </div>
               </div>
               <div className="mt-auto flex items-center gap-2">

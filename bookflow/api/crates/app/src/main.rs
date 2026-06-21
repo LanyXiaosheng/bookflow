@@ -18,8 +18,8 @@ use axum::{
 };
 use bookflow_domain::{
     Beat, Chapter, DomainError, NewSeed, Notification, NotificationCategory, NotificationLevel,
-    PendingProjectReview, Project, ProjectReview, ProjectStatus, ReviewResult, ReviewStage, Seed,
-    User,
+    PendingProjectReview, Project, ProjectListItem, ProjectReview, ProjectStatus, ReviewResult,
+    ReviewStage, Seed, User,
 };
 use bookflow_storage::{
     pool, ArtifactKind, ArtifactRepo, ChapterRepo, NewSeedDraft, NotificationRepo, ProjectArtifact,
@@ -412,7 +412,7 @@ async fn list_projects(
     State(s): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<ListProjectsQ>,
-) -> Result<Json<Vec<Project>>, AppError> {
+) -> Result<Json<Vec<ProjectListItem>>, AppError> {
     let user = require_user(&s, &headers).await?;
     let st = match q.status.as_deref() {
         None | Some("") => None,
@@ -425,7 +425,7 @@ async fn list_projects(
     };
     let list = s
         .projects
-        .list(user.id, st)
+        .list_with_stats(user.id, st)
         .await
         .map_err(AppError::Storage)?;
     Ok(Json(list))

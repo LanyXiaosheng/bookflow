@@ -1,7 +1,7 @@
 use bookflow_domain::{
     count_chars, Beat, Chapter, NewSeed, Notification, NotificationCategory, NotificationLevel,
-    NotificationStatus, PendingProjectReview, Project, ProjectReview, ProjectStatus, ReviewResult,
-    ReviewStage, Score, Seed, Tier, User,
+    NotificationStatus, PendingProjectReview, Project, ProjectListItem, ProjectReview,
+    ProjectStatus, ReviewResult, ReviewStage, Score, Seed, Tier, User,
 };
 use sqlx::{
     postgres::{PgPoolOptions, PgRow},
@@ -707,6 +707,54 @@ impl ProjectRepo {
                 status: parse_status(r.get::<&str, _>("status")),
                 created_at: r.get("created_at"),
                 updated_at: r.get("updated_at"),
+            })
+            .collect())
+    }
+
+    pub async fn list_with_stats(
+        &self,
+        user_id: Uuid,
+        status: Option<ProjectStatus>,
+    ) -> Result<Vec<ProjectListItem>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT p.id,
+                   p.seed_id,
+                   p.title,
+                   p.track,
+                   p.status,
+                   p.created_at,
+                   p.updated_at,
+                   COUNT(c.id) AS chapter_count,
+                   COALESCE(SUM(c.word_count), 0) AS total_words
+            FROM projects p
+            LEFT JOIN chapters c ON c.project_id = p.id
+            WHERE p.user_id = $1
+              AND p.deleted_at IS NULL
+              AND ($2::text IS NULL OR p.status = $2)
+            GROUP BY p.id
+            ORDER BY p.updated_at DESC
+            "#,
+        )
+        .bind(user_id)
+        .bind(status.map(|s| s.as_str().to_string()))
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| ProjectListItem {
+                project: Project {
+                    id: r.get("id"),
+                    seed_id: r.get("seed_id"),
+                    title: r.get("title"),
+                    track: r.get("track"),
+                    status: parse_status(r.get::<&str, _>("status")),
+                    created_at: r.get("created_at"),
+                    updated_at: r.get("updated_at"),
+                },
+                chapter_count: r.get("chapter_count"),
+                total_words: r.get("total_words"),
             })
             .collect())
     }
