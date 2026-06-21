@@ -50,6 +50,9 @@ import { readStoryImageAuthor, writeStoryImageAuthor } from '../lib/storyImageAu
 
 type PreflightDrafts = Record<'readme' | 'character_setup', string>
 
+const DEFAULT_BODY_TARGET = 6
+const MAX_BODY_TARGET = 20
+
 const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = {
   writing: '写作中',
   ready: '待发',
@@ -162,6 +165,10 @@ export default function ProjectDetail() {
   )
   const aiJob = useAiJob(projectId)
   const bodyChars = useMemo(() => countBodyChars(chapters.data), [chapters.data])
+  const bodyTarget = useMemo(
+    () => inferBodyTarget(chapters.data, outline),
+    [chapters.data, outline],
+  )
   const [preflightDrafts, setPreflightDrafts] = useState<PreflightDrafts>(() =>
     emptyPreflightDrafts(),
   )
@@ -289,13 +296,13 @@ export default function ProjectDetail() {
             {/* AI 一键全流程：README → 角色设定 → 大纲 → 正文 → 全书汇总 → 配套素材，已有产物的步骤会跳过 */}
             <button
               type="button"
-              onClick={() => fullPipeline.run({ projectId, target: 10 })}
+              onClick={() => fullPipeline.run({ projectId, target: bodyTarget })}
               disabled={
                 (fullPipeline.progress.running && !fullPipeline.stale) ||
                 pipeline.progress.running ||
                 project.data?.status !== 'writing'
               }
-              title="串行跑完 6 步：README → 角色设定 → 大纲 → 正文 → 全书汇总 → 配套素材。已有产物的步骤会跳过。"
+              title={`串行跑完 7 步：README → 角色设定 → 大纲 → 正文（目标 ${bodyTarget} 章）→ 全书汇总 → 优化升华 → 配套素材。已有产物的步骤会跳过。`}
               className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50 sm:flex-none"
               data-testid="full-pipeline-btn"
             >
@@ -483,6 +490,7 @@ export default function ProjectDetail() {
             isWriting={project.data?.status === 'writing'}
             globalJob={aiJob}
             bodyNeedsRefresh={bodyNeedsRefresh}
+            suggestedTarget={bodyTarget}
           />
           <ArtifactStreamCard
             projectId={projectId}
@@ -720,6 +728,31 @@ function pipelineLabel(
 
 function countBodyChars(chapters?: Chapter[]): number {
   return chapters?.reduce((sum, c) => sum + Array.from(c.body ?? '').length, 0) ?? 0
+}
+
+function inferBodyTarget(chapters?: Chapter[], outline?: ProjectArtifact): number {
+  const outlineCount = countOutlineChapters(outline?.content)
+  if (outlineCount > 0) return outlineCount
+  const chapterCount = chapters?.length ?? 0
+  if (chapterCount > 0) return clampBodyTarget(chapterCount)
+  return DEFAULT_BODY_TARGET
+}
+
+function countOutlineChapters(content?: string): number {
+  if (!content) return 0
+
+  const chapterMatches = content.match(
+    /(?:^|\n)\s*(?:#{1,6}\s*)?第[一二三四五六七八九十百零〇两\d]+章/g,
+  )
+  if (chapterMatches?.length) return clampBodyTarget(chapterMatches.length)
+
+  const numberedMatches = content.match(/(?:^|\n)\s*(?:\d+|[一二三四五六七八九十]+)[.、]\s+/g)
+  const count = numberedMatches?.length ?? 0
+  return count >= 3 ? clampBodyTarget(count) : 0
+}
+
+function clampBodyTarget(n: number): number {
+  return Math.min(MAX_BODY_TARGET, Math.max(1, n))
 }
 
 function parseStoryImageArtifact(
@@ -2163,6 +2196,7 @@ interface BodyGenCardProps {
   isWriting: boolean
   globalJob?: AiJob
   bodyNeedsRefresh: boolean
+  suggestedTarget: number
 }
 
 /**
@@ -2177,10 +2211,11 @@ function BodyGenCard({
   isWriting,
   globalJob,
   bodyNeedsRefresh,
+  suggestedTarget,
 }: BodyGenCardProps) {
   const { progress, run, abort } = useFullBook()
   const confirm = useConfirm()
-  const [target, setTarget] = useState(10)
+  const [target, setTarget] = useState(suggestedTarget)
   const chapterCount = chapters?.length ?? 0
   const totalWords = chapters?.reduce((a, c) => a + c.word_count, 0) ?? 0
   const remoteRunning = globalJob?.kind === 'full_book'
@@ -2203,6 +2238,10 @@ function BodyGenCard({
     : !hasOutline
       ? '先生成 README 和大纲，再生成正文。'
       : ''
+
+  useEffect(() => {
+    if (!activeProgress.running) setTarget(suggestedTarget)
+  }, [activeProgress.running, suggestedTarget])
 
   return (
     <section
