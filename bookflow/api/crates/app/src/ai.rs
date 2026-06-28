@@ -173,7 +173,7 @@ impl AiClient {
             let body = json!({
                 "model": cfg.model,
                 "max_tokens": 4096,
-                "system": system,
+                "system": anthropic_system_field(system),
                 "messages": [{"role": "user", "content": user}],
             });
             let send = self
@@ -249,7 +249,7 @@ impl AiClient {
         let url = format!("{}/v1/chat/completions", cfg.base_url.trim_end_matches('/'));
         for attempt in 1..=MAX_AI_ATTEMPTS {
             self.throttle().await;
-            let body = json!({
+        let body = json!({
                 "model": cfg.model,
                 "temperature": 0.4,
                 "response_format": {"type": "json_object"},
@@ -552,6 +552,40 @@ fn stream_timeout(cfg: &AiConfig) -> Duration {
     cfg.timeout.max(Duration::from_secs(600))
 }
 
+/// 是否对 Anthropic 请求的 system 段打 prompt-cache 断点。
+///
+/// 默认开启：system 提示词是稳定前缀（章节写作的 system 一本书内被复用几十次），
+/// 打断点后从「每次 cache-create」变成「首次 create、后续 read」，且变动的正文留在
+/// 断点之后、不进缓存区 —— 直接消掉「整书正文被反复 cache-write 却从不命中」的浪费。
+///
+/// 上游代理若不认 content-block 形式的 system（少见），设 AI_PROMPT_CACHE=0 即刻回退
+/// 到纯字符串 system，与改造前完全一致。
+fn prompt_cache_enabled() -> bool {
+    !matches!(
+        std::env::var("AI_PROMPT_CACHE")
+            .ok()
+            .as_deref()
+            .map(str::trim),
+        Some("0") | Some("false") | Some("off") | Some("no")
+    )
+}
+
+/// 构造 Anthropic 请求体的 `system` 字段。
+/// - 开启缓存：返回单个 text content-block，并在块尾打 `cache_control: ephemeral` 断点，
+///   使「system 及之前」成为可复用的缓存前缀；变动的 user 正文在断点之后，不被缓存。
+/// - 关闭缓存：返回纯字符串，与历史行为字节级一致。
+fn anthropic_system_field(system: &str) -> serde_json::Value {
+    if prompt_cache_enabled() {
+        json!([{
+            "type": "text",
+            "text": system,
+            "cache_control": { "type": "ephemeral" }
+        }])
+    } else {
+        json!(system)
+    }
+}
+
 /// 全局限速闸门（流式专用，复用 AiClient.rate_gate）。
 async fn throttle_gate(gate: &Arc<Mutex<Instant>>) {
     let interval_ms: u64 = std::env::var("AI_MIN_INTERVAL_MS")
@@ -690,7 +724,7 @@ async fn stream_anthropic(
             "model": cfg.model,
             "max_tokens": max_tokens,
             "stream": true,
-            "system": system,
+            "system": anthropic_system_field(system),
             "messages": [{"role": "user", "content": user}],
         });
         let send = http
@@ -830,7 +864,7 @@ async fn stream_openai(
         throttle_gate(gate).await;
         let body = json!({
             "model": cfg.model,
-            "temperature": 0.4,
+            "temperature": 0.9,
             "stream": true,
             "max_tokens": max_tokens,
             "messages": [
@@ -1204,6 +1238,7 @@ const SIDE_DISHES_SYSTEM: &str = include_str!("ai_prompts/project_side_dishes.sy
 const BLURB_SYSTEM: &str = include_str!("ai_prompts/project_blurb.system.md");
 const BOOK_SUMMARY_SYSTEM: &str = include_str!("ai_prompts/project_book_summary.system.md");
 const BOOK_POLISH_SYSTEM: &str = include_str!("ai_prompts/project_book_polish.system.md");
+const ANTI_AI_RULES: &str = include_str!("ai_prompts/anti_ai_rules.md");
 
 pub async fn stream_readme(
     client: &AiClient,
@@ -1261,6 +1296,44 @@ pub async fn stream_publish_post(
     client
         .stream_text(PUBLISH_SYSTEM.to_string(), user, 8000)
         .await
+}
+
+// === 发布前QA自检 ===
+
+const PUBLISH_QA_SYSTEM: &str = include_str!("ai_prompts/publish_qa.system.md");
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublishQaResponse {
+    pub first_sentence_score: i32,
+    pub first_sentence_comment: String,
+    pub retention_score: i32,
+    pub retention_comment: String,
+    pub pacing_score: i32,
+    pub pacing_comment: String,
+    pub anti_ai_score: i32,
+    pub anti_ai_comment: String,
+    pub title_match_score: i32,
+    pub title_match_comment: String,
+    pub total_score: i32,
+    pub verdict: String,
+    #[serde(default)]
+    pub kill_reasons: Vec<String>,
+    #[serde(default)]
+    pub quick_fix: String,
+}
+
+pub async fn publish_qa_check(
+    client: &AiClient,
+    title: &str,
+    publish_text: &str,
+) -> Result<PublishQaResponse> {
+    let excerpt: String = publish_text.chars().take(2000).collect();
+    let user = format!("标题：{title}\n\n正文（前2000字）：\n{excerpt}");
+    let raw = client.complete_json(PUBLISH_QA_SYSTEM, &user).await?;
+    let json_str = extract_json(&raw).unwrap_or(&raw);
+    let resp: PublishQaResponse = serde_json::from_str(json_str)
+        .map_err(|e| anyhow!("QA 自检 JSON 解析失败: {e}\nraw: {json_str}"))?;
+    Ok(resp)
 }
 
 pub async fn stream_side_dishes(
@@ -1584,6 +1657,7 @@ pub async fn beats_for_chapter(
 // === 章节 AI 段落写作 ===
 
 const WRITE_SYSTEM: &str = include_str!("ai_prompts/chapter_write.system.md");
+const OPENINGS_REF: &str = include_str!("../../../../story_openings_ref.md");
 
 pub async fn write_paragraph(
     client: &AiClient,
@@ -1614,7 +1688,7 @@ pub async fn write_paragraph(
         "项目：{project_title}\n赛道：{track}\n章节：{chapter_title}\n\n本段 beat：{} — {}\n{prev}{setup_section}\n\n直接写正文段落。",
         beat.label, beat.note,
     );
-    let text = client.complete_json(WRITE_SYSTEM, &user).await?;
+    let text = client.complete_json(&format!("{WRITE_SYSTEM}\n\n{ANTI_AI_RULES}"), &user).await?;
     Ok(text.trim().to_string())
 }
 
@@ -1648,7 +1722,7 @@ pub async fn stream_write_paragraph(
         beat.label, beat.note,
     );
     client
-        .stream_text(WRITE_SYSTEM.to_string(), user, 1200)
+        .stream_text(format!("{WRITE_SYSTEM}\n\n{ANTI_AI_RULES}"), user, 800)
         .await
 }
 
@@ -1680,8 +1754,29 @@ pub struct AiSeedGenerated {
     pub candidates: Vec<AiSeedCandidate>,
 }
 
+// === 热词注入 ===
+/// 读取 hot_tracks.md（由外部爬虫每日更新），拼成追加段落注入选题 prompt。
+/// 文件不存在或读取失败时静默返回空串，不影响正常流程。
+fn load_hot_tracks() -> String {
+    let candidates = [
+        "hot_tracks.md",
+        "../hot_tracks.md",
+        "../../hot_tracks.md",
+    ];
+    for p in &candidates {
+        if let Ok(content) = std::fs::read_to_string(p) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                return format!("\n\n---\n以下是番茄短篇今日真实热词榜（优先围绕这些方向出题）：\n{trimmed}");
+            }
+        }
+    }
+    String::new()
+}
+
 pub async fn generate_seeds(client: &AiClient, track: &str) -> Result<AiSeedGenerated> {
-    let user = format!("赛道：{track}\n\n请按 schema 严格只回 JSON。");
+    let hot = load_hot_tracks();
+    let user = format!("赛道：{track}{hot}\n\n请按 schema 严格只回 JSON。");
     let raw = client.complete_json(GENERATOR_SYSTEM, &user).await?;
     let json_str = extract_json(&raw).with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
     let parsed: AiSeedGenerated = match serde_json::from_str(json_str) {
@@ -1746,10 +1841,12 @@ pub async fn recommend_tracks(
     primaries: &[String],
     plots: &[String],
 ) -> Result<AiTrackRecommendGenerated> {
+    let hot = load_hot_tracks();
     let user = format!(
-        "可选主分类（只能从这里选 1 个）：\n{}\n\n可选情节标签（只能从这里选 1-3 个）：\n{}\n\n请按 schema 严格只回 JSON。",
+        "可选主分类（只能从这里选 1 个）：\n{}\n\n可选情节标签（只能从这里选 1-3 个）：\n{}\n{}\n请按 schema 严格只回 JSON。",
         primaries.join("、"),
         plots.join("、"),
+        hot,
     );
     let raw = client.complete_json(TRACK_RECOMMEND_SYSTEM, &user).await?;
     let json_str = extract_json(&raw).with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
@@ -1886,12 +1983,15 @@ impl DuoMiClient {
             let resp = self
                 .http
                 .post(format!("{}/api/gemini/nano-banana", DOMIAPI_BASE))
-                
                 .json(&body)
                 .send()
                 .await
                 .context("nano-banana 请求失败")?;
+            let status = resp.status();
             let text = resp.text().await.context("读 nano-banana 响应失败")?;
+            if !status.is_success() {
+                return Err(anyhow!("多米 nano-banana {} 错误: {}", status, text.chars().take(200).collect::<String>()));
+            }
             let parsed: serde_json::Value =
                 serde_json::from_str(&text).context("解析 nano-banana 响应失败")?;
             let task_id = parsed["data"]["task_id"]
@@ -1914,12 +2014,16 @@ impl DuoMiClient {
                     "{}/v1/images/generations?async=true",
                     DOMIAPI_BASE
                 ))
-                
+
                 .json(&body)
                 .send()
                 .await
                 .context("gpt-image-2 请求失败")?;
+            let status = resp.status();
             let text = resp.text().await.context("读 gpt-image-2 响应失败")?;
+            if !status.is_success() {
+                return Err(anyhow!("多米生图接口 {} 错误: {}", status, text.chars().take(200).collect::<String>()));
+            }
             let parsed: serde_json::Value =
                 serde_json::from_str(&text).context("解析 gpt-image-2 响应失败")?;
             let task_id = parsed["id"]
@@ -1949,7 +2053,11 @@ impl DuoMiClient {
             .send()
             .await
             .context("nano-banana-edit 请求失败")?;
+        let status = resp.status();
         let text = resp.text().await.context("读 nano-banana-edit 响应失败")?;
+        if !status.is_success() {
+            return Err(anyhow!("多米 nano-banana-edit {} 错误: {}", status, text.chars().take(200).collect::<String>()));
+        }
         let parsed: serde_json::Value =
             serde_json::from_str(&text).context("解析 nano-banana-edit 响应失败")?;
         let task_id = parsed["data"]["task_id"]
@@ -1980,7 +2088,11 @@ impl DuoMiClient {
             .send()
             .await
             .context("pix 视频请求失败")?;
+        let status = resp.status();
         let text = resp.text().await.context("读 pix 视频响应失败")?;
+        if !status.is_success() {
+            return Err(anyhow!("多米 pix 视频 {} 错误: {}", status, text.chars().take(200).collect::<String>()));
+        }
         let parsed: serde_json::Value =
             serde_json::from_str(&text).context("解析 pix 视频响应失败")?;
         let task_id = parsed["data"]["task_id"]
@@ -1998,7 +2110,11 @@ impl DuoMiClient {
             .send()
             .await
             .context("查询任务失败")?;
+        let status = resp.status();
         let text = resp.text().await.context("读查询任务响应失败")?;
+        if !status.is_success() {
+            return Err(anyhow!("多米查询任务 {} 错误: {}", status, text.chars().take(200).collect::<String>()));
+        }
         serde_json::from_str(&text)
             .with_context(|| format!("解析查询任务响应失败: {text}"))
     }
@@ -2015,7 +2131,11 @@ impl DuoMiClient {
             .send()
             .await
             .context("查询视频任务失败")?;
+        let status = resp.status();
         let text = resp.text().await.context("读查询视频响应失败")?;
+        if !status.is_success() {
+            return Err(anyhow!("多米查询视频 {} 错误: {}", status, text.chars().take(200).collect::<String>()));
+        }
         serde_json::from_str(&text)
             .with_context(|| format!("解析查询视频响应失败: {text}"))
     }
@@ -2103,6 +2223,8 @@ pub struct ReviewAnalyzeResponse {
     pub title_result: String,
     pub hook_result: String,
     pub emotion_result: String,
+    #[serde(default)]
+    pub dropout_analysis: String,
     pub success_reason: String,
     pub failure_reason: String,
     pub next_action: String,
@@ -2269,6 +2391,24 @@ mod tests {
     }
 
     #[test]
+    fn system_field_toggles_cache_breakpoint() {
+        // env 是进程级共享，本测试内串行设/清，避免污染其他用例。
+        std::env::set_var("AI_PROMPT_CACHE", "1");
+        let on = anthropic_system_field("SYS");
+        assert_eq!(on[0]["text"], "SYS");
+        assert_eq!(on[0]["cache_control"]["type"], "ephemeral");
+
+        std::env::set_var("AI_PROMPT_CACHE", "0");
+        let off = anthropic_system_field("SYS");
+        assert_eq!(off, serde_json::json!("SYS"));
+        assert!(off.get(0).is_none(), "关闭时应是纯字符串、无 content-block");
+
+        std::env::remove_var("AI_PROMPT_CACHE");
+        // 缺省（未设）视为开启
+        assert!(anthropic_system_field("SYS")[0]["cache_control"].is_object());
+    }
+
+    #[test]
     fn official_openai_gpt_5_models_use_responses_api() {
         let cfg = AiConfig {
             provider: Provider::Openai,
@@ -2286,7 +2426,7 @@ mod tests {
     fn openai_compatible_gateway_gpt_5_models_keep_chat_completions_by_default() {
         let cfg = AiConfig {
             provider: Provider::Openai,
-            base_url: "http://43.133.47.36:8080".into(),
+            base_url: "http://70.39.197.121:8080".into(),
             api_key: "sk-test".into(),
             model: "gpt-5.5".into(),
             image_model: "gpt-image-2".into(),
@@ -2300,7 +2440,7 @@ mod tests {
     fn anthropic_claude_models_never_use_openai_responses_api() {
         let cfg = AiConfig {
             provider: Provider::Anthropic,
-            base_url: "http://43.133.47.36:8080".into(),
+            base_url: "http://70.39.197.121:8080".into(),
             api_key: "sk-test".into(),
             model: "claude-opus-4-8".into(),
             image_model: "gpt-image-2".into(),
