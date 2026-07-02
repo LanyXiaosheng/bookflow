@@ -58,6 +58,8 @@ export interface AiJob {
   liveBody?: { chapterId: string; text: string }
   previewText?: string
   startedAt: number
+  /** 正文重复检测警告 */
+  warning?: string
 }
 
 type AiJobs = Record<string, AiJob>
@@ -99,13 +101,21 @@ function stripLiveBody(job: AiJob): PersistedAiJob {
   return persisted
 }
 
+// Throttle the CustomEvent so 20 concurrent pipelines don't each fire a
+// subscriber re-render on every step start — one notification per 200 ms is enough.
+let eventTimer: ReturnType<typeof setTimeout> | null = null
+
 function write(jobs: PersistedAiJobs) {
   try {
     localStorage.setItem(KEY, JSON.stringify(jobs))
   } catch {
     // ignore quota
   }
-  window.dispatchEvent(new CustomEvent(EVENT))
+  if (eventTimer !== null) return
+  eventTimer = setTimeout(() => {
+    eventTimer = null
+    window.dispatchEvent(new CustomEvent(EVENT))
+  }, 200)
 }
 
 export function setAiJob(job: AiJob) {

@@ -95,7 +95,13 @@ export function useSSE(opts: UseSSEOptions = {}) {
         signal: ac.signal,
       })
       if (!resp.ok || !resp.body) {
-        const msg = `HTTP ${resp.status}`
+        let msg = `HTTP ${resp.status}`
+        try {
+          const j = (await resp.json()) as { detail?: string; error?: string }
+          msg = j.detail ?? j.error ?? msg
+        } catch {
+          // ignore non-JSON error bodies
+        }
         if (mountedRef.current) {
           setState({ status: 'error', text: '', error: msg, retry: null })
         }

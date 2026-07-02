@@ -16,7 +16,7 @@ import { seedsApi, type Score } from '../api/seeds'
 import { extractErrorMessage } from '../api/errors'
 import { runProjectPipeline, type PipelineStepKey } from '../lib/runPipeline'
 
-export const BATCH_CONCURRENCY = 20
+export const BATCH_CONCURRENCY = 3
 
 export type BatchItemStatus =
   | 'pending'
@@ -75,11 +75,28 @@ export function useBatchLaunch() {
     qc.invalidateQueries({ queryKey: ['seeds'] })
   }, [qc])
 
+  // Batch rapid-fire updates into a single setState per animation frame to avoid
+  // re-rendering the item list on every step/progress callback from 20 concurrent pipelines.
+  const pendingPatchesRef = useRef<Map<string, Partial<BatchItem>>>(new Map())
+  const rafRef = useRef<number | null>(null)
+
   const update = useCallback((key: string, patch: Partial<BatchItem>) => {
-    setState((s) => ({
-      ...s,
-      items: s.items.map((it) => (it.key === key ? { ...it, ...patch } : it)),
-    }))
+    const cur = pendingPatchesRef.current.get(key) ?? {}
+    pendingPatchesRef.current.set(key, { ...cur, ...patch })
+    if (rafRef.current === null) {
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null
+        const patches = pendingPatchesRef.current
+        pendingPatchesRef.current = new Map()
+        setState((s) => ({
+          ...s,
+          items: s.items.map((it) => {
+            const p = patches.get(it.key)
+            return p ? { ...it, ...p } : it
+          }),
+        }))
+      })
+    }
   }, [])
 
   const abort = useCallback(() => {
