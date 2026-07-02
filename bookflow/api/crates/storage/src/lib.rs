@@ -1019,7 +1019,7 @@ impl ProjectRepo {
               GROUP BY project_id
             ) pr ON pr.project_id = p.id
             WHERE p.user_id = $1 AND p.deleted_at IS NULL
-            GROUP BY COALESCE(p.author, '未署名')
+            GROUP BY COALESCE(NULLIF(TRIM(p.author), ''), '未署名')
             ORDER BY project_count DESC
             "#,
         )
