@@ -13,6 +13,13 @@ test.beforeEach(async ({ page }) => {
       },
     })
   })
+  await page.route('**/api/notifications**', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ json: { unread_count: 0, items: [] } })
+      return
+    }
+    await route.fulfill({ status: 204 })
+  })
 })
 
 test('选题：绿灯评分 → 自动立项 → 跳到项目明细页', async ({ page }) => {
@@ -22,8 +29,8 @@ test('选题：绿灯评分 → 自动立项 → 跳到项目明细页', async (
   await page.goto('/seeds')
   await expect(page.locator('h1')).toContainText('选题评分卡')
 
-  // 默认 5+5+5+4+4+5+5 = 33 → greenlight
-  await expect(page.getByTestId('score-total')).toHaveText('33')
+  // 默认 4 维 8+8+7+7 = 30 → greenlight
+  await expect(page.getByTestId('score-total')).toHaveText('30')
   await expect(page.getByTestId('tier-label')).toHaveText('立项')
 
   await page.getByTestId('seed-title').fill(title)
@@ -36,11 +43,11 @@ test('选题：绿灯评分 → 自动立项 → 跳到项目明细页', async (
   await expect(page.getByTestId('character_setup-card')).toBeVisible()
 })
 
-test('评分 < 23 → tier 显示 不做', async ({ page }) => {
+test('评分 < 22 → tier 显示 不做', async ({ page }) => {
   await page.goto('/seeds')
-  // 把 7 个 slider 全设为 1 → 7 分 → reject
+  // 把 4 个 slider 全设为 1 → 4 分 → reject
   // React 的受控 input 不认 el.value 直接赋值，要用 native setter 才能触发 state
-  for (const k of ['title', 'opening', 'slap', 'emotion', 'twist', 'hook', 'finish']) {
+  for (const k of ['title_ctr', 'conflict', 'tagfit', 'novelty']) {
     const sl = page.getByTestId(`slider-${k}`)
     await sl.evaluate((el: HTMLInputElement) => {
       const setter = Object.getOwnPropertyDescriptor(
@@ -51,7 +58,7 @@ test('评分 < 23 → tier 显示 不做', async ({ page }) => {
       el.dispatchEvent(new Event('input', { bubbles: true }))
     })
   }
-  await expect(page.getByTestId('score-total')).toHaveText('7')
+  await expect(page.getByTestId('score-total')).toHaveText('4')
   await expect(page.getByTestId('tier-label')).toHaveText('不做')
 })
 
@@ -166,7 +173,7 @@ test('最近选题：已立项的 seed 点击跳到项目明细页', async ({ pa
   await page.goto('/seeds')
   const stamp = Date.now().toString().slice(-6)
   await page.getByTestId('seed-title').fill(`流程自动立项${stamp}`)
-  // 默认评分 5/5/5/4/4/5/5 = 33 分，绿灯
+  // 默认评分 8+8+7+7 = 30 分，绿灯
   await page.getByTestId('submit-seed').click()
   await page.waitForURL(/\/projects\/[^/]+$/, { timeout: 15_000 })
   // 回 seeds 页，验证最近选题里这条带「进项目明细」hint 且可点击

@@ -52,13 +52,8 @@ INSERT INTO seeds (
     user_id,
     title,
     track,
-    score_title,
-    score_opening,
-    score_slap,
-    score_emotion,
-    score_twist,
-    score_hook,
-    score_finish,
+    score,
+    total_score,
     tier,
     created_at
 )
@@ -68,7 +63,8 @@ VALUES
         :'demo_user_id',
         '替身新娘反杀局',
         '现代言情·豪门/替身逆袭',
-        5, 5, 4, 5, 4, 5, 4,
+        '{"title_ctr":8,"conflict":9,"tagfit":8,"novelty":7}'::jsonb,
+        32,
         'greenlight',
         TIMESTAMPTZ '2026-06-01 09:00:00+08'
     ),
@@ -77,7 +73,8 @@ VALUES
         :'demo_user_id',
         '规则怪谈：夜班电梯',
         '悬疑惊悚·规则怪谈/密闭空间',
-        5, 5, 4, 4, 5, 5, 4,
+        '{"title_ctr":8,"conflict":8,"tagfit":9,"novelty":7}'::jsonb,
+        32,
         'greenlight',
         TIMESTAMPTZ '2026-06-01 09:30:00+08'
     ),
@@ -86,7 +83,8 @@ VALUES
         :'demo_user_id',
         '离婚后我爆红了',
         '现代言情·娱乐圈/追妻火葬场',
-        5, 4, 5, 5, 4, 4, 5,
+        '{"title_ctr":8,"conflict":8,"tagfit":8,"novelty":6}'::jsonb,
+        30,
         'greenlight',
         TIMESTAMPTZ '2026-06-01 10:00:00+08'
     ),
@@ -95,8 +93,9 @@ VALUES
         :'demo_user_id',
         '冷宫皇后今天翻盘了吗',
         '古代言情·宫斗/逆风翻盘',
-        4, 4, 5, 5, 4, 4, 4,
-        'greenlight',
+        '{"title_ctr":7,"conflict":7,"tagfit":7,"novelty":5}'::jsonb,
+        26,
+        'backlog',
         TIMESTAMPTZ '2026-06-01 10:30:00+08'
     ),
     (
@@ -104,7 +103,8 @@ VALUES
         :'demo_user_id',
         '重生后我改写婆媳剧本',
         '现实情感·家庭/女性成长',
-        4, 4, 4, 5, 3, 4, 4,
+        '{"title_ctr":6,"conflict":6,"tagfit":6,"novelty":5}'::jsonb,
+        23,
         'backlog',
         TIMESTAMPTZ '2026-06-01 11:00:00+08'
     ),
@@ -113,7 +113,8 @@ VALUES
         :'demo_user_id',
         '他在雨夜说爱我',
         '现代言情·都市/虐恋误会',
-        2, 3, 2, 3, 2, 3, 2,
+        '{"title_ctr":3,"conflict":3,"tagfit":4,"novelty":3}'::jsonb,
+        13,
         'reject',
         TIMESTAMPTZ '2026-06-01 11:30:00+08'
     )
@@ -121,13 +122,8 @@ ON CONFLICT (id) DO UPDATE
 SET user_id = EXCLUDED.user_id,
     title = EXCLUDED.title,
     track = EXCLUDED.track,
-    score_title = EXCLUDED.score_title,
-    score_opening = EXCLUDED.score_opening,
-    score_slap = EXCLUDED.score_slap,
-    score_emotion = EXCLUDED.score_emotion,
-    score_twist = EXCLUDED.score_twist,
-    score_hook = EXCLUDED.score_hook,
-    score_finish = EXCLUDED.score_finish,
+    score = EXCLUDED.score,
+    total_score = EXCLUDED.total_score,
     tier = EXCLUDED.tier,
     created_at = EXCLUDED.created_at;
 

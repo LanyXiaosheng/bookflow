@@ -147,7 +147,7 @@ test('端到端：seed → project → 章节 → 定稿 → 待发列表', asyn
   const title = `流程${Date.now()}冲喜替嫁那夜他先掀红盖头`.slice(0, 25)
 
   await page.goto('/seeds')
-  // 默认 33 分 = greenlight，提交后会自动 createFromSeed 并跳到 /projects/:id
+  // 默认 30 分 = greenlight，提交后会自动 createFromSeed 并跳到 /projects/:id
   await page.getByTestId('seed-title').fill(title)
   await page.getByTestId('submit-seed').click()
 
