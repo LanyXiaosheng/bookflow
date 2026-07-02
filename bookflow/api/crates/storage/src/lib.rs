@@ -1006,7 +1006,7 @@ impl ProjectRepo {
               SUM(CASE WHEN p.status = 'ready'    THEN 1 ELSE 0 END)::bigint AS ready,
               SUM(CASE WHEN p.status = 'published'THEN 1 ELSE 0 END)::bigint AS published,
               SUM(CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END)::bigint AS archived,
-              AVG(pr.read_count)           AS avg_read_count,
+              AVG(pr.read_count)::float8   AS avg_read_count,
               SUM(CASE WHEN pr.overall_result = '爆' THEN 1 ELSE 0 END)::bigint AS explode,
               SUM(CASE WHEN pr.overall_result = '平' THEN 1 ELSE 0 END)::bigint AS flat,
               SUM(CASE WHEN pr.overall_result = '扑' THEN 1 ELSE 0 END)::bigint AS flop
