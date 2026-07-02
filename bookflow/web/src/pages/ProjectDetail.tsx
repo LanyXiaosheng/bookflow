@@ -8,7 +8,6 @@ import {
   Crop,
   Download,
   FileArchive,
-  FileText,
   Image as ImageIcon,
   Loader2,
   Pencil,
@@ -50,7 +49,7 @@ import { readStoryImageAuthor, writeStoryImageAuthor } from '../lib/storyImageAu
 
 type PreflightDrafts = Record<'readme' | 'character_setup', string>
 
-const DEFAULT_BODY_TARGET = 6
+const DEFAULT_BODY_TARGET = 10
 const MAX_BODY_TARGET = 20
 
 const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = {
@@ -430,7 +429,7 @@ export default function ProjectDetail() {
         )}
       </header>
 
-      <main className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <main className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div className="flex flex-col gap-4">
           <WorkflowStrip
             hasReadme={!!readme}
@@ -556,40 +555,6 @@ export default function ProjectDetail() {
             storyImage={storyImage}
           />
         </div>
-
-        <aside className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4 h-fit">
-          <header className="flex items-center gap-2 mb-3">
-            <FileText className="h-4 w-4 text-blue-600" />
-            <span className="text-sm font-semibold">章节</span>
-            <span className="ml-auto text-xs text-gray-400">
-              {chapters.data
-                ? `${chapters.data.length} 章 · ${chapters.data.reduce((a, c) => a + c.word_count, 0)} 字`
-                : ''}
-            </span>
-          </header>
-          {chapters.isLoading && <p className="text-xs text-gray-500">加载中…</p>}
-          {chapters.data && chapters.data.length === 0 && (
-            <p className="text-xs text-gray-400">
-              还没有章节。去「进入写作」开始第 1 章。
-            </p>
-          )}
-          <ul className="flex flex-col gap-1">
-            {chapters.data?.map((c) => (
-              <li
-                key={c.id}
-                className="rounded-md border border-gray-200 px-2 py-1.5"
-              >
-                <div className="flex items-center gap-2 text-sm">
-                  <span className="font-mono text-xs text-gray-400">#{c.idx}</span>
-                  <span className="flex-1 truncate">
-                    {c.title || '（未命名）'}
-                  </span>
-                  <span className="text-[10px] text-gray-400">{c.word_count}字</span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </aside>
       </main>
     </div>
   )
@@ -1741,7 +1706,7 @@ function OutlineCard({
       endpoint={`/api/projects/${projectId}/ai-outline/stream`}
       disabled={disabled}
       disabledHint={disabledHint}
-      emptyHint="基于 README 生成 6 章左右的章节大纲，每章一段（标题 + 主要冲突 + 钩子）。"
+      emptyHint="基于 README 生成 10 章左右的章节大纲，每章一段（标题 + 主要冲突 + 钩子）。"
       onDone={onDone}
       globalJob={globalJob}
       notice={

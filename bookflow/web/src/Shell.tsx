@@ -12,6 +12,7 @@ const NAV: Array<{ to: string; label: string }> = [
   { to: '/projects', label: '项目' },
   { to: '/published', label: '已发' },
   { to: '/review', label: '复盘' },
+  { to: '/account-review', label: '账号复盘' },
   { to: '/tracks', label: '赛道' },
   { to: '/playbook', label: '手册' },
   { to: '/settings', label: '设置' },

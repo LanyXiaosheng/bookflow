@@ -1,8 +1,21 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Sparkles, TriangleAlert, Check, Wand2, X, Loader2, Brain, ListPlus, Rocket, ArrowRight, History, ChevronDown, ChevronUp, Trash2, Flame } from 'lucide-react'
-import { seedsApi, type AiScoreResponse, type AiSeedCandidate, type Score, type Tier } from '../api/seeds'
+import {
+  seedsApi,
+  SCORE_V2_DIMS,
+  isScoreV2,
+  totalOfScore,
+  tierOfScore,
+  tierOfV2,
+  toScoreV2,
+  type AiScoreResponse,
+  type AnyScore,
+  type LegacyScore,
+  type Score,
+  type Tier,
+} from '../api/seeds'
 import { projectsApi, type Project } from '../api/projects'
 import { extractErrorMessage } from '../api/errors'
 import { useConfirm } from '../components/ConfirmDialog'
@@ -22,18 +35,30 @@ import {
 } from '../lib/tracks'
 import { looksLikeTestData } from '../lib/looksLikeTestData'
 
-const DIM_LABELS: Record<keyof Score, string> = {
-  title: '标题张力',
-  opening: '开篇钩子',
-  slap: '打脸力度',
-  emotion: '情绪饱和度',
-  twist: '反转锐度',
-  hook: '章末钩子',
-  finish: '结局解恨度',
-}
+const DIM_LABELS = Object.fromEntries(SCORE_V2_DIMS.map((d) => [d.key, d.label])) as Record<
+  keyof Score,
+  string
+>
 
-const DIM_KEYS = Object.keys(DIM_LABELS) as Array<keyof Score>
-const DEFAULT_SCORE: Score = { title: 5, opening: 5, slap: 5, emotion: 4, twist: 4, hook: 5, finish: 5 }
+const DIM_DESC = Object.fromEntries(SCORE_V2_DIMS.map((d) => [d.key, d.desc])) as Record<
+  keyof Score,
+  string
+>
+
+const DIM_KEYS = SCORE_V2_DIMS.map((d) => d.key)
+const DEFAULT_SCORE: Score = { title_ctr: 8, conflict: 8, tagfit: 7, novelty: 7 }
+
+/** 旧版 7 维标签，仅用于历史数据（含 title 字段）的展示。 */
+const LEGACY_DIM_LABELS: Record<keyof LegacyScore, string> = {
+  title: '标题点击感',
+  opening: '开局炸裂度',
+  slap: '打脸清晰度',
+  emotion: '情绪强度',
+  twist: '反转空间',
+  hook: '试读卡点',
+  finish: '完读驱动',
+  tagfit: '赛道辨识度',
+}
 
 const TRACK_PILL_TONES = [
   'border-orange-200 bg-orange-50 text-orange-700',
@@ -49,9 +74,7 @@ function toneForIndex(index: number): string {
 }
 
 function tierOf(total: number): Tier {
-  if (total >= 32) return 'greenlight'
-  if (total >= 26) return 'backlog'
-  return 'reject'
+  return tierOfV2(total)
 }
 
 const TIER_LABEL: Record<Tier, string> = { greenlight: '立项', backlog: '备选', reject: '不做' }
@@ -107,10 +130,10 @@ export default function Seeds() {
       navigate(`/projects/${proj.id}`)
     },
   })
-  /** AI 候选「直接立项」：先 createSeed 再视情况自动 projectize */
+  /** AI 候选「直接立项」：先 createSeed 再视情况自动 projectize。score 统一规整成新版 4 维。 */
   const adoptAndCreate = useMutation({
-    mutationFn: async (c: AiSeedCandidate) => {
-      const seed = await seedsApi.create({ title: c.title, track, score: c.score })
+    mutationFn: async (c: { title: string; score: AnyScore }) => {
+      const seed = await seedsApi.create({ title: c.title, track, score: toScoreV2(c.score) })
       return seed
     },
     onSuccess: (seed) => {
@@ -125,10 +148,26 @@ export default function Seeds() {
   const [trackPrimary, setTrackPrimary] = useState<TrackPrimary>(DEFAULT_TRACK_PRIMARY)
   const [trackPlots, setTrackPlots] = useState<string[]>([DEFAULT_TRACK_PLOT])
   const track = useMemo(() => composeTrack(trackPrimary, trackPlots), [trackPrimary, trackPlots])
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // 从账号复盘「推荐选题池」跳来时，?title= 预填标题（用一次即清掉，避免刷新重填）
+  useEffect(() => {
+    const preset = searchParams.get('title')
+    if (preset) {
+      setTitle(preset)
+      const next = new URLSearchParams(searchParams)
+      next.delete('title')
+      setSearchParams(next, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
+
   const [score, setScore] = useState<Score>(DEFAULT_SCORE)
   const [drawer, setDrawer] = useState(false)
   const [aiPanelOpen, setAiPanelOpen] = useState(false)
   const [hideTestData, setHideTestData] = useState(true)
+  const [whyBuy, setWhyBuy] = useState('')
+  const [source, setSource] = useState('脑洞')
+  const [romanceType, setRomanceType] = useState<'angsty' | 'sweet' | 'mixed'>('angsty')
 
   // 批量立项
   const batch = useBatchLaunch()
@@ -190,13 +229,13 @@ export default function Seeds() {
   const runBatchDrafts = () => {
     const byTitle = drafts.data ?? []
     const picks: BatchInput[] = byTitle
-      .filter((d) => selectedDrafts.has(d.id) && d.total_score >= 23)
+      .filter((d) => selectedDrafts.has(d.id) && d.total_score >= 22)
       .map((d) => ({
         kind: 'draft' as const,
         key: d.id,
         title: d.title,
         track: d.track,
-        score: d.score,
+        score: toScoreV2(d.score),
       }))
     if (picks.length === 0) return
     batch.run(picks, batchTarget)
@@ -295,9 +334,9 @@ export default function Seeds() {
     )
   }
 
-  function adoptCandidate(c: AiSeedCandidate) {
+  function adoptCandidate(c: { title: string; score: AnyScore; why_buy?: string }) {
     setTitle(c.title)
-    setScore(c.score)
+    setScore(toScoreV2(c.score))
     aiScore.reset()
     // 滚到评分卡
     document.querySelector('[data-testid="seed-title"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -676,12 +715,11 @@ export default function Seeds() {
                         adoptAndCreate.mutate({
                           title: d.title,
                           score: d.score,
-                          why_buy: d.why_buy,
                         })
                       }
                       isLaunching={false}
                       disabled={adoptAndCreate.isPending || projectize.isPending}
-                      selectable={d.total_score >= 23}
+                      selectable={d.total_score >= 22}
                       selected={selectedDrafts.has(d.id)}
                       onToggleSelect={() => toggleSelectDraft(d.id)}
                     />
@@ -699,7 +737,7 @@ export default function Seeds() {
             <Sparkles className="h-5 w-5 text-violet-600" />
             <h1 className="text-lg font-semibold">选题评分卡</h1>
             <span className="hidden rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-500 sm:inline-flex">
-              8 维 · 每维 1-5 · 立项 ≥32 / 备选 ≥26
+              4 维 · 每维 1-10 · 立项 ≥30 / 备选 ≥22
             </span>
             <button
               type="button"
@@ -754,6 +792,38 @@ export default function Seeds() {
                 AI 试评
               </button>
             </div>
+          </label>
+
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-sm font-medium text-gray-700">来源</span>
+              <select
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+                data-testid="seed-source"
+              >
+                {['脑洞', '爆款标题拆解', '评论区痛点', '对标账号'].map((v) => (
+                  <option key={v} value={v}>{v}</option>
+                ))}
+              </select>
+            </label>
+            <div className="flex items-end">
+              <span className="text-xs text-gray-400">赛道由下方配置生成</span>
+            </div>
+          </div>
+
+          <label className="block mt-4">
+            <span className="text-sm font-medium text-gray-700">一句话卖点</span>
+            <textarea
+              value={whyBuy}
+              onChange={(e) => setWhyBuy(e.target.value)}
+              rows={2}
+              placeholder="谁 + 在什么死局里 + 怎么反杀"
+              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+              data-testid="seed-why-buy"
+            />
+            <p className="mt-1 text-xs text-gray-400">格式：角色 + 处境 + 动作</p>
           </label>
 
           <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
@@ -837,37 +907,65 @@ export default function Seeds() {
             </p>
           </label>
 
-          <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
-            {DIM_KEYS.map((k) => (
-              <div key={k}>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-700">{DIM_LABELS[k]}</span>
-                  <span className="font-mono font-semibold text-gray-900" data-testid={`score-${k}`}>
+          <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">4 维度评分</h3>
+                <p className="mt-0.5 text-xs text-gray-500">每项 1-10 · 满分 40</p>
+              </div>
+              <div className="text-right">
+                <div className={`text-3xl font-bold font-mono ${tier === 'greenlight' ? 'text-emerald-600' : tier === 'backlog' ? 'text-amber-600' : 'text-rose-600'}`} data-testid="score-total">{total}</div>
+                <div className={`text-xs font-semibold ${tier === 'greenlight' ? 'text-emerald-700' : tier === 'backlog' ? 'text-amber-700' : 'text-rose-700'}`} data-testid="tier-label">{TIER_LABEL[tier]}</div>
+              </div>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {DIM_KEYS.map((k) => (
+                <div key={k} className="grid grid-cols-[1fr_auto_2fr_auto] items-center gap-3 px-5 py-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-gray-900">{DIM_LABELS[k]}</div>
+                    <div className="mt-0.5 text-xs text-gray-500 truncate">{DIM_DESC[k]}</div>
+                  </div>
+                  <span className={`inline-flex h-6 w-6 items-center justify-center rounded-md text-xs font-semibold ${score[k] >= 9 ? 'bg-emerald-100 text-emerald-700' : score[k] >= 7 ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`} data-testid={`score-${k}`}>
                     {score[k]}
                   </span>
+                  <input
+                    type="range" min={1} max={10} value={score[k]}
+                    onChange={(e) => setScore({ ...score, [k]: Number(e.target.value) })}
+                    className="w-full"
+                    data-testid={`slider-${k}`}
+                    aria-label={DIM_LABELS[k]}
+                  />
+                  <span className="w-5 text-xs text-gray-400">/10</span>
                 </div>
-                <input
-                  type="range"
-                  min={1}
-                  max={5}
-                  value={score[k]}
-                  onChange={(e) => setScore({ ...score, [k]: Number(e.target.value) })}
-                  className="mt-1 w-full"
-                  data-testid={`slider-${k}`}
-                  aria-label={DIM_LABELS[k]}
-                />
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
 
-          <div className="mt-6 flex items-center gap-3 border-t border-slate-100 pt-4">
-            <span className="text-sm text-gray-500">总分</span>
-            <span className="text-3xl font-bold text-gray-900 font-mono" data-testid="score-total">
-              {total}
-            </span>
-            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${TIER_BG[tier]}`} data-testid="tier-label">
-              {TIER_LABEL[tier]}
-            </span>
+          {/* 言情向附加 */}
+          <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <div className="border-b border-slate-100 px-5 py-3">
+              <h3 className="text-sm font-semibold text-gray-900">言情向附加</h3>
+              <p className="mt-0.5 text-xs text-gray-500">现言/古言赛道填写</p>
+            </div>
+            <div className="p-5">
+              <div className="text-sm font-medium text-gray-700 mb-2">类型</div>
+              <div className="flex flex-wrap gap-2">
+                {(['angsty', 'sweet', 'mixed'] as const).map((t) => {
+                  const label = { angsty: '虐爽向', sweet: '甜宠向', mixed: '虐爽转甜宠' }[t]
+                  return (
+                    <label key={t} className={`inline-flex cursor-pointer items-center rounded-full border px-3 py-1.5 text-sm transition ${
+                      romanceType === t ? 'border-blue-300 bg-blue-50 font-medium text-blue-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                    }`}>
+                      <input type="radio" name="romance-type" checked={romanceType === t} onChange={() => setRomanceType(t)} className="mr-1.5 h-3.5 w-3.5" />
+                      {label}
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
             <button
               type="button"
               disabled={!canSubmit}
@@ -1139,7 +1237,7 @@ export default function Seeds() {
                   <span className="text-3xl font-bold font-mono text-gray-900" data-testid="ai-total">
                     {aiTotal}
                   </span>
-                  <span className="text-sm text-gray-500">/ 35</span>
+                  <span className="text-sm text-gray-500">/ 40</span>
                   {aiTier && (
                     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${TIER_BG[aiTier]}`}>
                       {TIER_LABEL[aiTier]}
@@ -1157,6 +1255,13 @@ export default function Seeds() {
                     </div>
                   ))}
                 </div>
+
+                {aiScore.data.benchmark && (
+                  <div className="rounded-md border border-violet-200 bg-violet-50 p-3 text-xs leading-relaxed text-violet-700" data-testid="ai-benchmark">
+                    <span className="font-semibold">对标爆款：</span>
+                    {aiScore.data.benchmark}
+                  </div>
+                )}
 
                 <div className="rounded-md bg-gray-50 border border-gray-200 p-3 text-sm leading-relaxed text-gray-700">
                   {aiScore.data.rationale}
@@ -1204,7 +1309,7 @@ export default function Seeds() {
 
 interface CandidateCardProps {
   title: string
-  score: Score
+  score: AnyScore
   why_buy: string
   index: number
   testIdPrefix: 'gen' | 'draft'
@@ -1242,8 +1347,14 @@ function CandidateCard({
   recommendReason,
   heat,
 }: CandidateCardProps) {
-  const total = DIM_KEYS.reduce((a, k) => a + score[k], 0)
-  const t = tierOf(total)
+  const total = totalOfScore(score)
+  const t = tierOfScore(score)
+  // 新旧版本各自渲染对应维度（旧草稿仍是 7 维 1-5）
+  const dimEntries: Array<[string, number]> = isScoreV2(score)
+    ? SCORE_V2_DIMS.map((d) => [d.label, score[d.key]])
+    : (Object.keys(LEGACY_DIM_LABELS) as Array<keyof LegacyScore>)
+        .filter((k) => typeof (score as LegacyScore)[k] === 'number')
+        .map((k) => [LEGACY_DIM_LABELS[k], (score as LegacyScore)[k] as number])
   return (
     <li
       data-testid={`${testIdPrefix}-candidate-${index}`}
@@ -1290,14 +1401,13 @@ function CandidateCard({
         </p>
       )}
       <div className="mt-3 flex flex-wrap gap-1">
-        {DIM_KEYS.map((k) => (
+        {dimEntries.map(([label, val]) => (
           <span
-            key={k}
+            key={label}
             className="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600 ring-1 ring-slate-200"
-            title={DIM_LABELS[k]}
+            title={label}
           >
-            {DIM_LABELS[k][0]}
-            {DIM_LABELS[k][1] ?? ''} {score[k]}
+            {label.slice(0, 2)} {val}
           </span>
         ))}
       </div>

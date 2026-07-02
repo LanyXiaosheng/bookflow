@@ -32,7 +32,7 @@ import {
   Terminal,
   TriangleAlert,
 } from 'lucide-react'
-import { dashboardApi, type PipelineStage } from '../api/dashboard'
+import { dashboardApi, type PipelineStage, type AuthorStat } from '../api/dashboard'
 import { reviewsApi, type PendingReview } from '../api/reviews'
 import type { Seed } from '../api/seeds'
 import type { Project } from '../api/projects'
@@ -126,7 +126,12 @@ export default function Dashboard() {
         wcWarningDetail={data?.health.wc_warning_detail ?? ''}
       />
 
-      {/* ⑤ Lanes 3 栏 */}
+      {/* ⑤ 作者统计 */}
+      {data?.author_stats && data.author_stats.length > 0 && (
+        <AuthorStats stats={data.author_stats} />
+      )}
+
+      {/* ⑥ Lanes 3 栏 */}
       <section className="mb-8 grid grid-cols-1 gap-5 xl:grid-cols-3">
         <WritingMaterials />
         <RecentOutput recentProjects={data?.recent_projects ?? []} recentSeeds={data?.recent_seeds ?? []} />
@@ -664,6 +669,51 @@ function HealthCard({
       <div className="mt-5 text-3xl font-bold text-gray-900">{value}</div>
       <div className="mt-2 text-sm font-medium text-gray-500">{sub}</div>
     </div>
+  )
+}
+
+// ============ ⑤ 作者统计 ============
+function AuthorStats({ stats }: { stats: AuthorStat[] }) {
+  return (
+    <section className="mb-8 overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
+      <div className="border-b border-gray-100 px-6 py-4">
+        <h2 className="text-base font-semibold text-gray-900">作者统计</h2>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-100 text-sm">
+          <thead className="bg-gray-50 text-xs text-gray-500">
+            <tr>
+              <th className="px-4 py-2 text-left font-medium">作者</th>
+              <th className="px-4 py-2 text-right font-medium">项目数</th>
+              <th className="px-4 py-2 text-right font-medium">写作中</th>
+              <th className="px-4 py-2 text-right font-medium">待发</th>
+              <th className="px-4 py-2 text-right font-medium">已发</th>
+              <th className="px-4 py-2 text-right font-medium">归档</th>
+              <th className="px-4 py-2 text-right font-medium">均阅读</th>
+              <th className="px-4 py-2 text-right font-medium">爆</th>
+              <th className="px-4 py-2 text-right font-medium">平</th>
+              <th className="px-4 py-2 text-right font-medium">扑</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {stats.map((s) => (
+              <tr key={s.author} className="hover:bg-gray-50">
+                <td className="px-4 py-2 font-medium text-gray-900">{s.author}</td>
+                <td className="px-4 py-2 text-right font-mono text-gray-700">{s.project_count}</td>
+                <td className="px-4 py-2 text-right text-blue-700">{s.writing}</td>
+                <td className="px-4 py-2 text-right text-amber-700">{s.ready}</td>
+                <td className="px-4 py-2 text-right text-emerald-700">{s.published}</td>
+                <td className="px-4 py-2 text-right text-slate-500">{s.archived}</td>
+                <td className="px-4 py-2 text-right font-mono text-gray-700">{s.avg_read_count}</td>
+                <td className="px-4 py-2 text-right text-emerald-600">{s.explode}</td>
+                <td className="px-4 py-2 text-right text-gray-500">{s.flat}</td>
+                <td className="px-4 py-2 text-right text-rose-600">{s.flop}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   )
 }
 

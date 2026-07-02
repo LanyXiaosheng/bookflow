@@ -3,16 +3,20 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowRight,
+  BookOpen,
   Check,
   ChevronLeft,
+  ClipboardCheck,
+  ExternalLink,
   Loader2,
   Plus,
   Rocket,
   Sparkles,
   TriangleAlert,
   Wand2,
+  X,
 } from 'lucide-react'
-import { projectsApi } from '../api/projects'
+import { projectsApi, type PublishQaResult } from '../api/projects'
 import { chaptersApi, type Beat, type Chapter } from '../api/chapters'
 import { useSSE } from '../hooks/useSSE'
 import { useFullBook } from '../hooks/useFullBook'
@@ -24,6 +28,9 @@ function isAbortError(e: unknown): boolean {
   const err = e as { name?: string; code?: string }
   return err.name === 'AbortError' || err.name === 'CanceledError' || err.code === 'ERR_CANCELED'
 }
+
+/** 章节 idx 1/3/5/8/10 为爆点章 */
+const EXPLOSIVE_IDXS = new Set([1, 3, 5, 8, 10])
 
 export default function Write() {
   const { id } = useParams<{ id: string }>()
@@ -78,6 +85,13 @@ export default function Write() {
       qc.invalidateQueries({ queryKey: ['dashboard'] })
       navigate('/ready')
     },
+  })
+
+  const [qaResult, setQaResult] = useState<PublishQaResult | null>(null)
+  const [qaOpen, setQaOpen] = useState(false)
+  const publishQa = useMutation({
+    mutationFn: () => projectsApi.publishQa(projectId),
+    onSuccess: (r) => { setQaResult(r); setQaOpen(true) },
   })
 
   /** AI 一键全篇：编排在 useFullBook hook 里 */
@@ -154,7 +168,20 @@ export default function Write() {
                 const need = 10000
                 const enough = total >= need
                 return (
-                  <button
+                  <>
+                    {enough && (
+                      <button
+                        type="button"
+                        onClick={() => publishQa.mutate()}
+                        disabled={publishQa.isPending}
+                        data-testid="qa-check-btn"
+                        className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        {publishQa.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ClipboardCheck className="h-3 w-3" />}
+                        QA 自检
+                      </button>
+                    )}
+                    <button
                     type="button"
                     onClick={async () => {
                       const ok = await confirm({
@@ -192,6 +219,7 @@ export default function Write() {
                       ? '定稿 → 待发'
                       : `定稿 (${total}/${need})`}
                   </button>
+                  </>
                 )
               })()}
             </>
@@ -205,8 +233,14 @@ export default function Write() {
         </div>
       </header>
 
+      {/* QA 自检结果横幅 */}
+      {qaOpen && qaResult && <QaBanner result={qaResult} onClose={() => setQaOpen(false)} />}
+
+      {/* 字数进度条 */}
+      <WordCountBar chapters={chapters.data ?? []} />
+
       <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)_400px]">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[240px_minmax(0,1fr)_300px]">
           {/* 左栏：章节列表 */}
           <aside className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-3 h-fit">
             <header className="flex items-center mb-2">
@@ -227,7 +261,9 @@ export default function Write() {
               </button>
             </header>
             <ul className="flex flex-col gap-1">
-              {chapters.data?.map((c) => (
+              {chapters.data?.map((c) => {
+                const explosive = EXPLOSIVE_IDXS.has(c.idx)
+                return (
                 <li key={c.id}>
                   <button
                     type="button"
@@ -238,14 +274,19 @@ export default function Write() {
                         : 'text-gray-700 hover:bg-gray-50'
                     }`}
                   >
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs text-gray-400">#{c.idx}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded text-[10px] font-semibold ${
+                        explosive ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'
+                      }`}>
+                        {explosive ? '★' : c.idx}
+                      </span>
                       <span className="flex-1 truncate">{c.title || '（未命名）'}</span>
                       <span className="text-[10px] text-gray-400">{c.word_count}字</span>
                     </div>
                   </button>
                 </li>
-              ))}
+                )
+              })}
             </ul>
             {chapters.data?.length === 0 && (
               <p className="text-xs text-gray-400 px-2 py-3">点「新章」开始第 1 章</p>
@@ -272,13 +313,16 @@ export default function Write() {
             )}
           </section>
 
-          {/* 右栏：AI 抽屉 */}
-          <aside className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4 h-fit">
-            {active ? (
-              <AiPanel chapter={active} disabled={project.data?.status !== 'writing'} />
-            ) : (
-              <p className="text-xs text-gray-400">先选一章。</p>
-            )}
+          {/* 右栏：AI 助手 + playbook */}
+          <aside className="space-y-3 lg:sticky lg:top-[100px] lg:self-start lg:max-h-[calc(100vh-120px)] lg:overflow-y-auto">
+            <div className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4">
+              {active ? (
+                <AiPanel chapter={active} disabled={project.data?.status !== 'writing'} />
+              ) : (
+                <p className="text-xs text-gray-400">先选一章。</p>
+              )}
+            </div>
+            <PlaybookLinks />
           </aside>
         </div>
       </main>
@@ -288,6 +332,121 @@ export default function Write() {
 
 function totalWords(list: Chapter[]) {
   return list.reduce((a, c) => a + c.word_count, 0)
+}
+
+function WordCountBar({ chapters }: { chapters: Chapter[] }) {
+  const total = totalWords(chapters)
+  const need = 10000
+  const pct = Math.min(100, Math.round((total / need) * 100))
+  const done = total >= need
+  return (
+    <div className={`sticky top-[104px] z-10 border-b ${done ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-1.5">
+        <div className="flex items-center gap-3 text-xs overflow-x-auto">
+          {!done && <TriangleAlert className="h-3.5 w-3.5 text-amber-600 shrink-0" />}
+          <span className={`font-medium shrink-0 ${done ? 'text-emerald-800' : 'text-amber-800'}`}>
+            {total.toLocaleString('zh-CN')} / {need.toLocaleString('zh-CN')} 字
+          </span>
+          <div className="w-20 shrink-0">
+            <div className={`h-1.5 w-full rounded-full overflow-hidden ${done ? 'bg-emerald-100' : 'bg-amber-100'}`}>
+              <div className={`h-full rounded-full ${done ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+          <span className="text-gray-300 shrink-0">·</span>
+          <div className="flex items-center gap-1 overflow-x-auto">
+            {chapters.map((c) => (
+              <span key={c.id} className={`px-1.5 py-0.5 rounded font-mono shrink-0 text-[11px] ${
+                c.word_count > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'
+              }`}>
+                {c.idx}:{c.word_count > 0 ? c.word_count : '—'}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const QA_DIMS: Array<{ label: string; sk: keyof PublishQaResult; ck: keyof PublishQaResult }> = [
+  { label: '首句冲击力', sk: 'first_sentence_score', ck: 'first_sentence_comment' },
+  { label: '前200字留人率', sk: 'retention_score', ck: 'retention_comment' },
+  { label: '节奏密度', sk: 'pacing_score', ck: 'pacing_comment' },
+  { label: 'AI味浓度', sk: 'anti_ai_score', ck: 'anti_ai_comment' },
+  { label: '标题匹配度', sk: 'title_match_score', ck: 'title_match_comment' },
+]
+const VERDICT_STYLE = {
+  pass:   { wrap: 'bg-emerald-50 border-emerald-200', text: 'text-emerald-900', badge: 'bg-emerald-100 text-emerald-800', label: '通过' },
+  revise: { wrap: 'bg-amber-50 border-amber-200',   text: 'text-amber-900',   badge: 'bg-amber-100 text-amber-800',   label: '需修改' },
+  reject: { wrap: 'bg-rose-50 border-rose-200',     text: 'text-rose-900',    badge: 'bg-rose-100 text-rose-800',     label: '不发' },
+}
+
+function QaBanner({ result, onClose }: { result: PublishQaResult; onClose: () => void }) {
+  const s = VERDICT_STYLE[result.verdict]
+  return (
+    <div className={`border-b ${s.wrap} ${s.text}`}>
+      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-3">
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="text-sm font-bold font-mono">{result.total_score}/50</span>
+              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${s.badge}`}>{s.label}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs sm:grid-cols-5">
+              {QA_DIMS.map((d) => (
+                <div key={d.label}>
+                  <div className="font-medium">{d.label} <span className="font-mono">{result[d.sk] as number}</span></div>
+                  <div className="mt-0.5 opacity-75 leading-relaxed">{result[d.ck] as string}</div>
+                </div>
+              ))}
+            </div>
+            {result.verdict !== 'pass' && (result.kill_reasons.length > 0 || result.quick_fix) && (
+              <div className="mt-2 space-y-0.5 text-xs">
+                {result.kill_reasons.length > 0 && (
+                  <div><span className="font-semibold">❌ 致命问题：</span>{result.kill_reasons.join(' · ')}</div>
+                )}
+                {result.quick_fix && (
+                  <div><span className="font-semibold">🔧 快速修复：</span>{result.quick_fix}</div>
+                )}
+              </div>
+            )}
+          </div>
+          <button type="button" onClick={onClose} className="shrink-0 rounded p-1 hover:bg-black/10">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const PLAYBOOK_LINKS = [
+  { label: '去 AI 味 · 短句节奏', color: 'text-amber-600' },
+  { label: '爆点节奏 · 高潮设计', color: 'text-emerald-600' },
+  { label: '代入感 · 场景优先', color: 'text-blue-600' },
+  { label: '钩子 · 章尾悬念', color: 'text-violet-600' },
+]
+
+function PlaybookLinks() {
+  return (
+    <div className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-gray-900">Playbook 参考</h3>
+        <a href="/playbook" className="text-xs text-blue-600 hover:underline">全部</a>
+      </div>
+      <div className="p-2 space-y-0.5">
+        {PLAYBOOK_LINKS.map((l) => (
+          <a key={l.label} href="/playbook" className="flex items-center justify-between rounded-md px-2.5 py-2 hover:bg-gray-50 text-xs">
+            <span className="flex items-center gap-2 text-gray-700">
+              <BookOpen className={`h-3.5 w-3.5 shrink-0 ${l.color}`} />
+              {l.label}
+            </span>
+            <ExternalLink className="h-3 w-3 text-gray-400 shrink-0" />
+          </a>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 interface ChapterEditorProps {
