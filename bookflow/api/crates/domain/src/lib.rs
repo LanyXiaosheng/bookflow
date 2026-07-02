@@ -23,18 +23,19 @@ pub enum Dimension {
     Finish,   // 结局解恨度
 }
 
-/// 立项段位（≥28 立项 / 23-27 备选 / <23 不做），对齐 SOP.md
+/// 立项段位（选题评分 V2：≥30 立项 / 22-29 备选 / <22 不做）。
+/// 满分 40（4 维 × 10）。对齐 .hermes/plans/seed-scoring-v2.md。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
-    Greenlight, // ≥ 28
-    Backlog,    // 23-27
-    Reject,     // < 23
+    Greenlight, // ≥ 30
+    Backlog,    // 22-29
+    Reject,     // < 22
 }
 
 impl Tier {
-    pub const GREENLIGHT_THRESHOLD: i32 = 28;
-    pub const BACKLOG_THRESHOLD: i32 = 23;
+    pub const GREENLIGHT_THRESHOLD: i32 = 30;
+    pub const BACKLOG_THRESHOLD: i32 = 22;
 
     pub fn from_total(total: i32) -> Self {
         if total >= Self::GREENLIGHT_THRESHOLD {
@@ -45,46 +46,50 @@ impl Tier {
             Tier::Reject
         }
     }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Tier::Greenlight => "greenlight",
+            Tier::Backlog => "backlog",
+            Tier::Reject => "reject",
+        }
+    }
 }
 
+/// 选题评分 V2：只评「光看标题能判断的」4 个维度，每维 1-10。
+/// 去掉了 opening/slap/emotion/twist/hook/finish（这些看标题评不了）。
+/// 旧库里的 7 维历史数据以 jsonb 原样保留，前后端按字段是否含 `title_ctr` 区分新旧版本。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Score {
-    pub title: i16,
-    pub opening: i16,
-    pub slap: i16,
-    pub emotion: i16,
-    pub twist: i16,
-    pub hook: i16,
-    pub finish: i16,
-    #[serde(default)]
+    /// 标题点击欲 1-10：推荐流里看到会不会点
+    pub title_ctr: i16,
+    /// 冲突明确度 1-10：一眼能否看出核心矛盾
+    pub conflict: i16,
+    /// 赛道辨识度 1-10：是否自带品类关键词
     pub tagfit: i16,
+    /// 差异化 1-10：跟现有爆款撞车程度（越不撞越高）
+    pub novelty: i16,
 }
 
 impl Score {
     pub fn total(&self) -> i32 {
-        self.title as i32
-            + self.opening as i32
-            + self.slap as i32
-            + self.emotion as i32
-            + self.twist as i32
-            + self.hook as i32
-            + self.finish as i32
-            + self.tagfit as i32
+        self.title_ctr as i32 + self.conflict as i32 + self.tagfit as i32 + self.novelty as i32
     }
 
-    /// 每维 1-5，超出范围拒收
+    pub fn tier(&self) -> Tier {
+        Tier::from_total(self.total())
+    }
+
+    /// 每维 1-10，超出范围拒收
     pub fn validate(&self) -> Result<(), DomainError> {
         let dims = [
-            ("title", self.title),
-            ("opening", self.opening),
-            ("slap", self.slap),
-            ("emotion", self.emotion),
-            ("twist", self.twist),
-            ("hook", self.hook),
-            ("finish", self.finish),
+            ("title_ctr", self.title_ctr),
+            ("conflict", self.conflict),
+            ("tagfit", self.tagfit),
+            ("novelty", self.novelty),
         ];
         for (name, v) in dims {
-            if !(1..=5).contains(&v) {
+            if !(1..=10).contains(&v) {
                 return Err(DomainError::ScoreOutOfRange {
                     dim: name.into(),
                     value: v,
@@ -100,7 +105,9 @@ pub struct Seed {
     pub id: Uuid,
     pub title: String,
     pub track: String,
-    pub score: Score,
+    /// 评分原样透传（jsonb）：新数据是 4 维（含 title_ctr），旧数据是 7 维。
+    /// 用 Value 而非 Score，以兼容历史 7 维行；total_score/tier 为权威列。
+    pub score: serde_json::Value,
     pub total_score: i32,
     pub tier: Tier,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -135,7 +142,7 @@ pub enum DomainError {
     TitleLength { len: usize },
     #[error("track is empty")]
     EmptyTrack,
-    #[error("score {dim} = {value} out of 1..=5")]
+    #[error("score {dim} = {value} out of 1..=10")]
     ScoreOutOfRange { dim: String, value: i16 },
     #[error("invalid status transition {from} → {to}")]
     BadTransition { from: String, to: String },
@@ -447,30 +454,26 @@ mod tests {
 
     #[test]
     fn tier_thresholds() {
-        assert_eq!(Tier::from_total(35), Tier::Greenlight);
-        assert_eq!(Tier::from_total(28), Tier::Greenlight);
-        assert_eq!(Tier::from_total(27), Tier::Backlog);
-        assert_eq!(Tier::from_total(23), Tier::Backlog);
-        assert_eq!(Tier::from_total(22), Tier::Reject);
-        assert_eq!(Tier::from_total(7), Tier::Reject);
+        assert_eq!(Tier::from_total(40), Tier::Greenlight);
+        assert_eq!(Tier::from_total(30), Tier::Greenlight);
+        assert_eq!(Tier::from_total(29), Tier::Backlog);
+        assert_eq!(Tier::from_total(22), Tier::Backlog);
+        assert_eq!(Tier::from_total(21), Tier::Reject);
+        assert_eq!(Tier::from_total(4), Tier::Reject);
     }
 
     #[test]
     fn score_validate_range() {
         let mut s = Score {
-            title: 5,
-            opening: 5,
-            slap: 5,
-            emotion: 5,
-            twist: 5,
-            hook: 5,
-            finish: 5,
-            tagfit: 0,
+            title_ctr: 10,
+            conflict: 8,
+            tagfit: 7,
+            novelty: 5,
         };
         assert!(s.validate().is_ok());
-        s.title = 0;
+        s.title_ctr = 0;
         assert!(s.validate().is_err());
-        s.title = 6;
+        s.title_ctr = 11;
         assert!(s.validate().is_err());
     }
 
@@ -480,14 +483,10 @@ mod tests {
             title: "婚礼彩排那天伴娘群里弹出他和伴娘的开房记录".into(), // 21 字
             track: "现言婚恋火葬场".into(),
             score: Score {
-                title: 5,
-                opening: 5,
-                slap: 5,
-                emotion: 4,
-                twist: 4,
-                hook: 5,
-                finish: 5,
-                tagfit: 0,
+                title_ctr: 9,
+                conflict: 9,
+                tagfit: 8,
+                novelty: 6,
             },
         };
         assert!(ns.validate().is_ok());

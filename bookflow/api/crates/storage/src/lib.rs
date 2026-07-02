@@ -186,6 +186,174 @@ impl UserRepo {
             created_at: r.get("created_at"),
         }))
     }
+
+    /// 读账号复盘策略 jsonb，空/未设置时返回 `{}`
+    pub async fn get_strategy(&self, user_id: Uuid) -> Result<serde_json::Value> {
+        let row = sqlx::query(
+            r#"
+            SELECT COALESCE(strategy, '{}'::jsonb) AS strategy
+            FROM users
+            WHERE id = $1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| StorageError::NotFound(format!("user {user_id}")))?;
+        Ok(row.get::<Json<serde_json::Value>, _>("strategy").0)
+    }
+
+    /// 整体替换账号复盘策略 jsonb，返回写入后的值
+    pub async fn update_strategy(
+        &self,
+        user_id: Uuid,
+        strategy: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let row = sqlx::query(
+            r#"
+            UPDATE users
+            SET strategy = $2
+            WHERE id = $1
+            RETURNING strategy AS strategy
+            "#,
+        )
+        .bind(user_id)
+        .bind(Json(strategy))
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| StorageError::NotFound(format!("user {user_id}")))?;
+        Ok(row.get::<Json<serde_json::Value>, _>("strategy").0)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FanqieStat {
+    pub book_id: String,
+    pub title: String,
+    pub category: Vec<String>,
+    pub sign_status: String,
+    pub read_count: i64,
+    pub show_count: i64,
+    pub click_rate: f64,
+    pub digg_count: i64,
+    pub comment_count: i64,
+    pub shelf_count: i64,
+    pub read_count_increase: i64,
+    pub show_count_increase: i64,
+    pub douyin_pay_rate: f64,
+    pub fanqie_created_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// 番茄作品数据汇总，给账号复盘总览卡用
+#[derive(Debug, Clone, Default)]
+pub struct FanqieStatsSummary {
+    pub total_works: i64,
+    pub total_reads: i64,
+    pub total_shows: i64,
+    /// 加权平均 CTR = 总点击 / 总曝光（这里用 read/show 近似曝光转化）
+    pub avg_ctr: f64,
+    pub works_over_10k: i64,
+    pub works_over_1k: i64,
+    /// 今日阅读增量合计
+    pub total_read_increase: i64,
+    /// 有付费率数据的作品里的平均付费率
+    pub avg_douyin_pay_rate: f64,
+}
+
+#[derive(Clone)]
+pub struct FanqieStatsRepo {
+    pool: PgPool,
+}
+
+impl FanqieStatsRepo {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// 列出某用户全部番茄作品，按阅读量降序
+    pub async fn list(&self, user_id: Uuid) -> Result<Vec<FanqieStat>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT book_id, title,
+                   COALESCE(category, ARRAY[]::text[]) AS category,
+                   COALESCE(sign_status, '')           AS sign_status,
+                   COALESCE(read_count, 0)             AS read_count,
+                   COALESCE(show_count, 0)             AS show_count,
+                   COALESCE(click_rate, 0)             AS click_rate,
+                   COALESCE(digg_count, 0)             AS digg_count,
+                   COALESCE(comment_count, 0)          AS comment_count,
+                   COALESCE(shelf_count, 0)            AS shelf_count,
+                   COALESCE(read_count_increase, 0)    AS read_count_increase,
+                   COALESCE(show_count_increase, 0)    AS show_count_increase,
+                   COALESCE(douyin_pay_rate, 0)        AS douyin_pay_rate,
+                   fanqie_created_at,
+                   recorded_at
+            FROM fanqie_stats
+            WHERE user_id = $1
+            ORDER BY read_count DESC
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| FanqieStat {
+                book_id: r.get("book_id"),
+                title: r.get("title"),
+                category: r.get("category"),
+                sign_status: r.get("sign_status"),
+                read_count: r.get("read_count"),
+                show_count: r.get("show_count"),
+                click_rate: r.get("click_rate"),
+                digg_count: r.get("digg_count"),
+                comment_count: r.get("comment_count"),
+                shelf_count: r.get("shelf_count"),
+                read_count_increase: r.get("read_count_increase"),
+                show_count_increase: r.get("show_count_increase"),
+                douyin_pay_rate: r.get("douyin_pay_rate"),
+                fanqie_created_at: r.get("fanqie_created_at"),
+                recorded_at: r.get("recorded_at"),
+            })
+            .collect())
+    }
+
+    /// 汇总统计：总阅读/曝光/作品数/加权 CTR/爆款数 等
+    pub async fn summary(&self, user_id: Uuid) -> Result<FanqieStatsSummary> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+              COUNT(*)::bigint                                            AS total_works,
+              COALESCE(SUM(read_count), 0)::bigint                        AS total_reads,
+              COALESCE(SUM(show_count), 0)::bigint                        AS total_shows,
+              COALESCE(SUM(read_count_increase), 0)::bigint               AS total_read_increase,
+              SUM(CASE WHEN read_count >= 10000 THEN 1 ELSE 0 END)::bigint AS works_over_10k,
+              SUM(CASE WHEN read_count >= 1000  THEN 1 ELSE 0 END)::bigint AS works_over_1k,
+              AVG(NULLIF(click_rate, 0))                                  AS avg_ctr,
+              AVG(NULLIF(douyin_pay_rate, 0))                             AS avg_douyin_pay_rate
+            FROM fanqie_stats
+            WHERE user_id = $1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(FanqieStatsSummary {
+            total_works: row.get("total_works"),
+            total_reads: row.get("total_reads"),
+            total_shows: row.get("total_shows"),
+            total_read_increase: row.get("total_read_increase"),
+            works_over_10k: row.get("works_over_10k"),
+            works_over_1k: row.get("works_over_1k"),
+            avg_ctr: row.get::<Option<f64>, _>("avg_ctr").unwrap_or(0.0),
+            avg_douyin_pay_rate: row
+                .get::<Option<f64>, _>("avg_douyin_pay_rate")
+                .unwrap_or(0.0),
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -413,35 +581,22 @@ impl SeedRepo {
     pub async fn insert(&self, user_id: Uuid, ns: &NewSeed) -> Result<Seed> {
         let id = Uuid::new_v4();
         let total = ns.score.total();
-        let tier = match Tier::from_total(total) {
-            Tier::Greenlight => "greenlight",
-            Tier::Backlog => "backlog",
-            Tier::Reject => "reject",
-        };
+        let tier = Tier::from_total(total).as_str();
+        let score_json = serde_json::to_value(&ns.score).unwrap();
         let row = sqlx::query(
             r#"
             INSERT INTO seeds
-              (id, user_id, title, track, score_title, score_opening, score_slap,
-               score_emotion, score_twist, score_hook, score_finish, tier)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-            RETURNING id, title, track,
-                      score_title, score_opening, score_slap,
-                      score_emotion, score_twist, score_hook, score_finish,
-                      total_score,
-                      tier, created_at
+              (id, user_id, title, track, score, total_score, tier)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            RETURNING id, title, track, score, total_score, tier, created_at
             "#,
         )
         .bind(id)
         .bind(user_id)
         .bind(&ns.title)
         .bind(&ns.track)
-        .bind(ns.score.title)
-        .bind(ns.score.opening)
-        .bind(ns.score.slap)
-        .bind(ns.score.emotion)
-        .bind(ns.score.twist)
-        .bind(ns.score.hook)
-        .bind(ns.score.finish)
+        .bind(Json(score_json))
+        .bind(total)
         .bind(tier)
         .fetch_one(&self.pool)
         .await?;
@@ -450,16 +605,7 @@ impl SeedRepo {
             id: row.get("id"),
             title: row.get("title"),
             track: row.get("track"),
-            score: Score {
-                title: row.get("score_title"),
-                opening: row.get("score_opening"),
-                slap: row.get("score_slap"),
-                emotion: row.get("score_emotion"),
-                twist: row.get("score_twist"),
-                hook: row.get("score_hook"),
-                finish: row.get("score_finish"),
-                tagfit: 0,
-            },
+            score: row.get::<Json<serde_json::Value>, _>("score").0,
             total_score: row.get("total_score"),
             tier: parse_tier(row.get::<&str, _>("tier")),
             created_at: row.get("created_at"),
@@ -469,11 +615,7 @@ impl SeedRepo {
     pub async fn get(&self, user_id: Uuid, id: Uuid) -> Result<Seed> {
         let row = sqlx::query(
             r#"
-            SELECT id, title, track,
-                   score_title, score_opening, score_slap,
-                   score_emotion, score_twist, score_hook, score_finish,
-                   total_score,
-                   tier, created_at
+            SELECT id, title, track, score, total_score, tier, created_at
             FROM seeds
             WHERE id = $1 AND user_id = $2
             "#,
@@ -486,16 +628,7 @@ impl SeedRepo {
             id: row.get("id"),
             title: row.get("title"),
             track: row.get("track"),
-            score: Score {
-                title: row.get("score_title"),
-                opening: row.get("score_opening"),
-                slap: row.get("score_slap"),
-                emotion: row.get("score_emotion"),
-                twist: row.get("score_twist"),
-                hook: row.get("score_hook"),
-                finish: row.get("score_finish"),
-                tagfit: 0,
-            },
+            score: row.get::<Json<serde_json::Value>, _>("score").0,
             total_score: row.get("total_score"),
             tier: parse_tier(row.get::<&str, _>("tier")),
             created_at: row.get("created_at"),
@@ -505,11 +638,7 @@ impl SeedRepo {
     pub async fn list(&self, user_id: Uuid) -> Result<Vec<Seed>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, title, track,
-                   score_title, score_opening, score_slap,
-                   score_emotion, score_twist, score_hook, score_finish,
-                   total_score,
-                   tier, created_at
+            SELECT id, title, track, score, total_score, tier, created_at
             FROM seeds
             WHERE user_id = $1
             ORDER BY created_at DESC
@@ -525,16 +654,7 @@ impl SeedRepo {
                 id: r.get("id"),
                 title: r.get("title"),
                 track: r.get("track"),
-                score: Score {
-                    title: r.get("score_title"),
-                    opening: r.get("score_opening"),
-                    slap: r.get("score_slap"),
-                    emotion: r.get("score_emotion"),
-                    twist: r.get("score_twist"),
-                    hook: r.get("score_hook"),
-                    finish: r.get("score_finish"),
-                tagfit: 0,
-                },
+                score: r.get::<Json<serde_json::Value>, _>("score").0,
                 total_score: r.get("total_score"),
                 tier: parse_tier(r.get::<&str, _>("tier")),
                 created_at: r.get("created_at"),
@@ -551,11 +671,7 @@ impl SeedRepo {
     ) -> Result<Option<Seed>> {
         let row = sqlx::query(
             r#"
-            SELECT id, title, track,
-                   score_title, score_opening, score_slap,
-                   score_emotion, score_twist, score_hook, score_finish,
-                   total_score,
-                   tier, created_at
+            SELECT id, title, track, score, total_score, tier, created_at
             FROM seeds
             WHERE user_id = $1 AND title = $2 AND track = $3
             ORDER BY created_at DESC
@@ -571,16 +687,7 @@ impl SeedRepo {
             id: r.get("id"),
             title: r.get("title"),
             track: r.get("track"),
-            score: Score {
-                title: r.get("score_title"),
-                opening: r.get("score_opening"),
-                slap: r.get("score_slap"),
-                emotion: r.get("score_emotion"),
-                twist: r.get("score_twist"),
-                hook: r.get("score_hook"),
-                finish: r.get("score_finish"),
-                tagfit: 0,
-            },
+            score: r.get::<Json<serde_json::Value>, _>("score").0,
             total_score: r.get("total_score"),
             tier: parse_tier(r.get::<&str, _>("tier")),
             created_at: r.get("created_at"),
@@ -887,6 +994,68 @@ impl ProjectRepo {
             .map(|r| (r.get("status"), r.get::<i64, _>("n")))
             .collect())
     }
+
+    /// 按作者署名聚合统计，给 dashboard 健康面板用
+    pub async fn author_stats(&self, user_id: Uuid) -> Result<Vec<AuthorStat>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+              COALESCE(NULLIF(TRIM(p.author), ''), '未署名') AS author,
+              COUNT(p.id)::bigint          AS project_count,
+              SUM(CASE WHEN p.status = 'writing'  THEN 1 ELSE 0 END)::bigint AS writing,
+              SUM(CASE WHEN p.status = 'ready'    THEN 1 ELSE 0 END)::bigint AS ready,
+              SUM(CASE WHEN p.status = 'published'THEN 1 ELSE 0 END)::bigint AS published,
+              SUM(CASE WHEN p.status = 'archived' THEN 1 ELSE 0 END)::bigint AS archived,
+              AVG(pr.read_count)           AS avg_read_count,
+              SUM(CASE WHEN pr.overall_result = '爆' THEN 1 ELSE 0 END)::bigint AS explode,
+              SUM(CASE WHEN pr.overall_result = '平' THEN 1 ELSE 0 END)::bigint AS flat,
+              SUM(CASE WHEN pr.overall_result = '扑' THEN 1 ELSE 0 END)::bigint AS flop
+            FROM projects p
+            LEFT JOIN (
+              SELECT project_id,
+                     MAX(read_count)     AS read_count,
+                     MAX(overall_result) AS overall_result
+              FROM project_reviews
+              GROUP BY project_id
+            ) pr ON pr.project_id = p.id
+            WHERE p.user_id = $1 AND p.deleted_at IS NULL
+            GROUP BY COALESCE(p.author, '未署名')
+            ORDER BY project_count DESC
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| AuthorStat {
+                author: r.get("author"),
+                project_count: r.get("project_count"),
+                writing: r.get("writing"),
+                ready: r.get("ready"),
+                published: r.get("published"),
+                archived: r.get("archived"),
+                avg_read_count: r.get("avg_read_count"),
+                explode: r.get("explode"),
+                flat: r.get("flat"),
+                flop: r.get("flop"),
+            })
+            .collect())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthorStat {
+    pub author: String,
+    pub project_count: i64,
+    pub writing: i64,
+    pub ready: i64,
+    pub published: i64,
+    pub archived: i64,
+    pub avg_read_count: Option<f64>,
+    pub explode: i64,
+    pub flat: i64,
+    pub flop: i64,
 }
 
 #[derive(Clone)]
@@ -1071,7 +1240,8 @@ pub struct SeedDraft {
     pub id: Uuid,
     pub track: String,
     pub title: String,
-    pub score: Score,
+    /// 评分原样透传（jsonb）：新数据 4 维、旧草稿 7 维，前端按 title_ctr 区分。
+    pub score: serde_json::Value,
     pub total_score: i32,
     pub why_buy: String,
     #[serde(default)]
@@ -1138,7 +1308,7 @@ impl SeedDraftRepo {
                 id: row.get("id"),
                 track: row.get("track"),
                 title: row.get("title"),
-                score: row.get::<Json<Score>, _>("score").0,
+                score: row.get::<Json<serde_json::Value>, _>("score").0,
                 total_score: row.get("total_score"),
                 why_buy: row.get("why_buy"),
                 recommend_reason: row.get("recommend_reason"),
@@ -1180,7 +1350,7 @@ impl SeedDraftRepo {
                 id: r.get("id"),
                 track: r.get("track"),
                 title: r.get("title"),
-                score: r.get::<Json<Score>, _>("score").0,
+                score: r.get::<Json<serde_json::Value>, _>("score").0,
                 total_score: r.get("total_score"),
                 why_buy: r.get("why_buy"),
                 recommend_reason: r.get("recommend_reason"),

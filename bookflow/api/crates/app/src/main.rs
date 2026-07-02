@@ -22,9 +22,9 @@ use bookflow_domain::{
     ReviewStage, Seed, User,
 };
 use bookflow_storage::{
-    pool, ArtifactKind, ArtifactRepo, ChapterRepo, NewSeedDraft, NotificationRepo, ProjectArtifact,
-    ProjectRepo, ProjectReviewRepo, SeedDraft, SeedDraftRepo, SeedRepo, UpsertNotification,
-    UserRepo,
+    pool, ArtifactKind, ArtifactRepo, AuthorStat, ChapterRepo, FanqieStat, FanqieStatsRepo,
+    FanqieStatsSummary, NewSeedDraft, NotificationRepo, ProjectArtifact, ProjectRepo,
+    ProjectReviewRepo, SeedDraft, SeedDraftRepo, SeedRepo, UpsertNotification, UserRepo,
 };
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
@@ -44,7 +44,8 @@ mod settings;
 use ai::{
     backfill_heat, beats_for_chapter, generate_seeds, recommend_tracks, score_seed, stream_blurb,
     stream_book_polish, stream_book_summary_chapters, stream_character_setup, stream_outline,
-    stream_publish_post, stream_readme, stream_side_dishes, stream_write_paragraph,
+    stream_publish_post, stream_readme, stream_side_dishes, stream_write_full_chapter,
+    stream_write_paragraph,
     write_paragraph, AiClient, AiConfig, AiScoreRequest, AiScoreResponse, AiSeedGenerated,
     AiTrackRecommendGenerated, DuoMiClient, GeneratedImage, ReviewAnalyzeResponse, StreamEvent, analyze_review,
 };
@@ -66,6 +67,7 @@ struct AppState {
     chapters: ChapterRepo,
     artifacts: ArtifactRepo,
     notifications: NotificationRepo,
+    fanqie_stats: FanqieStatsRepo,
     ai: AiClient,
     duomi: DuoMiClient,
     settings: SettingsRepo,
@@ -85,6 +87,7 @@ impl Clone for AppState {
             chapters: self.chapters.clone(),
             artifacts: self.artifacts.clone(),
             notifications: self.notifications.clone(),
+            fanqie_stats: self.fanqie_stats.clone(),
             ai: self.ai.clone(),
             duomi: self.duomi.clone(),
             settings: self.settings.clone(),
@@ -145,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
         chapters: ChapterRepo::new(pool.clone()),
         artifacts: ArtifactRepo::new(pool.clone()),
         notifications: NotificationRepo::new(pool.clone()),
+        fanqie_stats: FanqieStatsRepo::new(pool.clone()),
         pool,
         ai,
         duomi: DuoMiClient::new(duomi_key),
@@ -168,6 +172,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/auth/me", get(me))
         .route("/api/auth/profile", put(update_profile))
         .route("/api/auth/logout", post(logout_user))
+        .route(
+            "/api/users/me/strategy",
+            get(get_my_strategy).put(put_my_strategy),
+        )
+        .route("/api/users/me/fanqie-stats", get(get_my_fanqie_stats))
         .route("/api/projects", post(create_project).get(list_projects))
         .route("/api/projects/:id", get(get_project).delete(delete_project))
         .route("/api/projects/:id/transition", post(transition_project))
@@ -223,6 +232,7 @@ async fn main() -> anyhow::Result<()> {
             post(ai_blurb_stream),
         )
         .route("/api/projects/:id/ai-story-image", post(ai_story_image))
+        .route("/api/projects/:id/ai-publish-qa", post(ai_publish_qa))
         .route(
             "/api/projects/:id/ai-duomi-image",
             post(ai_duomi_image),
@@ -258,6 +268,11 @@ async fn main() -> anyhow::Result<()> {
             "/api/chapters/:id/ai-write/stream",
             post(ai_chapter_write_stream),
         )
+        .route(
+            "/api/chapters/:id/ai-write-full/stream",
+            post(ai_chapter_write_full_stream),
+        )
+        .route("/api/chapters/:id/ai-qa", post(ai_chapter_qa))
         .route("/api/dashboard/summary", get(dashboard_summary))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/notifications", get(list_notifications))
@@ -1479,6 +1494,123 @@ async fn ai_chapter_write_stream(
     Ok(sse_from_stream(rx, |_full| async move { Ok(()) }))
 }
 
+/// 整章写作请求体。force 预留（强制重写语义由前端控制，后端始终覆盖 body）。
+#[derive(Debug, Default, Deserialize)]
+struct AiWriteFullBody {
+    #[serde(default)]
+    #[allow(dead_code)]
+    force: bool,
+}
+
+/// 整章一次性写作：读大纲单章描述 + 角色设定(截断800) + 上一章尾段 → 流式写完 → 落库 chapter.body。
+async fn ai_chapter_write_full_stream(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(chapter_id): Path<Uuid>,
+    body: Option<Json<AiWriteFullBody>>,
+) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, AppError> {
+    let _ = body; // force 语义由前端控制，后端整章写完始终覆盖 body
+    let (_, chapter, project) = require_chapter_project(&s, &headers, chapter_id).await?;
+    let character_setup = load_character_setup(&s, project.id).await;
+
+    // 读大纲 artifact，抽当前章对应段落
+    let artifacts = s
+        .artifacts
+        .latest_all(project.id)
+        .await
+        .map_err(AppError::Storage)?;
+    let outline = artifacts
+        .iter()
+        .find(|a| a.kind == ArtifactKind::Outline)
+        .map(|a| a.content.clone())
+        .unwrap_or_default();
+    let outline_excerpt = extract_chapter_outline(&outline, chapter.idx);
+
+    // 取上一章结尾 300 字衔接
+    let prev_tail = {
+        let chapters = s
+            .chapters
+            .list_by_project(project.id)
+            .await
+            .map_err(AppError::Storage)?;
+        chapters
+            .iter()
+            .filter(|c| c.idx < chapter.idx && !c.body.trim().is_empty())
+            .max_by_key(|c| c.idx)
+            .map(|c| {
+                let n = c.body.chars().count();
+                let start = n.saturating_sub(300);
+                c.body.chars().skip(start).collect::<String>()
+            })
+            .unwrap_or_default()
+    };
+
+    let rx = stream_write_full_chapter(
+        &s.ai,
+        &project.title,
+        &project.track,
+        &chapter.title,
+        chapter.idx,
+        &outline_excerpt,
+        &prev_tail,
+        &character_setup,
+    )
+    .await;
+
+    let chapters = s.chapters.clone();
+    let chapter_title = chapter.title.clone();
+    Ok(sse_from_stream(rx, move |full| async move {
+        chapters
+            .update_body(chapter_id, &chapter_title, full.trim())
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("{e:#}"))
+    }))
+}
+
+/// 章级 QA：对单章 body 调发布前自检，返回打分。前端可据此决定是否重写。
+async fn ai_chapter_qa(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(chapter_id): Path<Uuid>,
+) -> Result<Json<ai::PublishQaResponse>, AppError> {
+    let (_, chapter, project) = require_chapter_project(&s, &headers, chapter_id).await?;
+    if chapter.body.trim().is_empty() {
+        return Err(AppError::Storage(bookflow_storage::StorageError::Conflict(
+            "本章还没有正文，先写正文再做章级自检".into(),
+        )));
+    }
+    let resp = ai::publish_qa_check(&s.ai, &project.title, &chapter.body)
+        .await
+        .map_err(|e| AppError::Ai(anyhow::anyhow!("{e:#}")))?;
+    Ok(Json(resp))
+}
+
+/// 从大纲 markdown 抽出指定章节的描述段。
+/// 匹配 `### 第N章 ...` 起，到下一个 `### ` / `## ` 标题（或文末）止。
+/// 找不到对应章节时返回空串（调用方会回退到「按标题自由发挥」）。
+fn extract_chapter_outline(outline: &str, idx: i16) -> String {
+    let needle = format!("第{idx}章");
+    let lines: Vec<&str> = outline.lines().collect();
+    let Some(start) = lines.iter().position(|l| {
+        let t = l.trim_start();
+        t.starts_with("### ") && t.contains(&needle)
+    }) else {
+        return String::new();
+    };
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, l)| {
+            let t = l.trim_start();
+            t.starts_with("### ") || t.starts_with("## ")
+        })
+        .map(|(i, _)| i)
+        .unwrap_or(lines.len());
+    lines[start..end].join("\n").trim().to_string()
+}
+
 // === Dashboard ===
 
 #[derive(Debug, Serialize)]
@@ -1525,6 +1657,37 @@ struct LlmStatus {
 }
 
 #[derive(Debug, Serialize)]
+struct AuthorStatView {
+    author: String,
+    project_count: i64,
+    writing: i64,
+    ready: i64,
+    published: i64,
+    archived: i64,
+    avg_read_count: Option<f64>,
+    explode: i64,
+    flat: i64,
+    flop: i64,
+}
+
+impl From<AuthorStat> for AuthorStatView {
+    fn from(s: AuthorStat) -> Self {
+        Self {
+            author: s.author,
+            project_count: s.project_count,
+            writing: s.writing,
+            ready: s.ready,
+            published: s.published,
+            archived: s.archived,
+            avg_read_count: s.avg_read_count,
+            explode: s.explode,
+            flat: s.flat,
+            flop: s.flop,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct DashboardSummary {
     counts: DashboardCounts,
     pipeline: Vec<PipelineStage>,
@@ -1532,6 +1695,7 @@ struct DashboardSummary {
     llm: LlmStatus,
     recent_seeds: Vec<Seed>,
     recent_projects: Vec<Project>,
+    author_stats: Vec<AuthorStatView>,
 }
 
 async fn dashboard_summary(
@@ -1681,6 +1845,14 @@ async fn dashboard_summary(
 
     let recent_seeds = seeds.into_iter().take(5).collect();
     let recent_projects = projects_all.into_iter().take(5).collect();
+    let author_stats = s
+        .projects
+        .author_stats(user.id)
+        .await
+        .map_err(AppError::Storage)?
+        .into_iter()
+        .map(AuthorStatView::from)
+        .collect();
     Ok(Json(DashboardSummary {
         counts,
         pipeline,
@@ -1688,6 +1860,7 @@ async fn dashboard_summary(
         llm,
         recent_seeds,
         recent_projects,
+        author_stats,
     }))
 }
 
@@ -1924,7 +2097,12 @@ async fn ai_generate_seeds(
     if req.track.trim().is_empty() {
         return Err(AppError::Domain(DomainError::TitleLength { len: 0 }));
     }
-    let r = generate_seeds(&s.ai, &req.track)
+    let strategy = s
+        .users
+        .get_strategy(user.id)
+        .await
+        .map_err(AppError::Storage)?;
+    let r = generate_seeds(&s.ai, &req.track, Some(&strategy))
         .await
         .map_err(AppError::Ai)?;
     // 落到候选历史表（失败不阻塞返回）
@@ -2054,7 +2232,12 @@ async fn ai_launch_seed(
     if req.track.trim().is_empty() {
         return Err(AppError::Domain(DomainError::TitleLength { len: 0 }));
     }
-    let r = generate_seeds(&s.ai, &req.track)
+    let strategy = s
+        .users
+        .get_strategy(user.id)
+        .await
+        .map_err(AppError::Storage)?;
+    let r = generate_seeds(&s.ai, &req.track, Some(&strategy))
         .await
         .map_err(AppError::Ai)?;
     // 顺手落候选历史
@@ -2080,7 +2263,7 @@ async fn ai_launch_seed(
         .max_by_key(|c| c.score.total())
         .ok_or_else(|| AppError::Ai(anyhow::anyhow!("AI 没生成任何候选")))?;
     let total = best.score.total();
-    if total < 23 {
+    if total < 22 {
         return Err(AppError::Ai(anyhow::anyhow!(
             "AI 生成的候选评分不足（{}分），换个赛道或者手动改一下",
             total
@@ -2555,6 +2738,136 @@ async fn update_profile(
     Ok(Json(AuthView { user }))
 }
 
+// === 账号复盘：策略 + 番茄作品数据 ===
+
+/// GET /api/users/me/strategy — 返回账号复盘策略 jsonb（空则 `{}`）
+async fn get_my_strategy(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let user = require_user(&s, &headers).await?;
+    let strategy = s
+        .users
+        .get_strategy(user.id)
+        .await
+        .map_err(AppError::Storage)?;
+    Ok(Json(strategy))
+}
+
+/// PUT /api/users/me/strategy — 整体替换账号复盘策略 jsonb
+async fn put_my_strategy(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let user = require_user(&s, &headers).await?;
+    if !body.is_object() {
+        return Err(AppError::BadRequest("strategy 必须是 JSON 对象".into()));
+    }
+    let saved = s
+        .users
+        .update_strategy(user.id, &body)
+        .await
+        .map_err(AppError::Storage)?;
+    Ok(Json(saved))
+}
+
+#[derive(Debug, Serialize)]
+struct FanqieStatView {
+    book_id: String,
+    title: String,
+    category: Vec<String>,
+    sign_status: String,
+    read_count: i64,
+    show_count: i64,
+    click_rate: f64,
+    digg_count: i64,
+    comment_count: i64,
+    shelf_count: i64,
+    read_count_increase: i64,
+    show_count_increase: i64,
+    douyin_pay_rate: f64,
+    fanqie_created_at: Option<chrono::DateTime<chrono::Utc>>,
+    recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<FanqieStat> for FanqieStatView {
+    fn from(s: FanqieStat) -> Self {
+        Self {
+            book_id: s.book_id,
+            title: s.title,
+            category: s.category,
+            sign_status: s.sign_status,
+            read_count: s.read_count,
+            show_count: s.show_count,
+            click_rate: s.click_rate,
+            digg_count: s.digg_count,
+            comment_count: s.comment_count,
+            shelf_count: s.shelf_count,
+            read_count_increase: s.read_count_increase,
+            show_count_increase: s.show_count_increase,
+            douyin_pay_rate: s.douyin_pay_rate,
+            fanqie_created_at: s.fanqie_created_at,
+            recorded_at: s.recorded_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct FanqieStatsSummaryView {
+    total_works: i64,
+    total_reads: i64,
+    total_shows: i64,
+    avg_ctr: f64,
+    works_over_10k: i64,
+    works_over_1k: i64,
+    total_read_increase: i64,
+    avg_douyin_pay_rate: f64,
+}
+
+impl From<FanqieStatsSummary> for FanqieStatsSummaryView {
+    fn from(s: FanqieStatsSummary) -> Self {
+        Self {
+            total_works: s.total_works,
+            total_reads: s.total_reads,
+            total_shows: s.total_shows,
+            avg_ctr: s.avg_ctr,
+            works_over_10k: s.works_over_10k,
+            works_over_1k: s.works_over_1k,
+            total_read_increase: s.total_read_increase,
+            avg_douyin_pay_rate: s.avg_douyin_pay_rate,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct FanqieStatsView {
+    summary: FanqieStatsSummaryView,
+    works: Vec<FanqieStatView>,
+}
+
+/// GET /api/users/me/fanqie-stats — 番茄作品列表（按阅读降序）+ 汇总
+async fn get_my_fanqie_stats(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<FanqieStatsView>, AppError> {
+    let user = require_user(&s, &headers).await?;
+    let works = s
+        .fanqie_stats
+        .list(user.id)
+        .await
+        .map_err(AppError::Storage)?;
+    let summary = s
+        .fanqie_stats
+        .summary(user.id)
+        .await
+        .map_err(AppError::Storage)?;
+    Ok(Json(FanqieStatsView {
+        summary: summary.into(),
+        works: works.into_iter().map(FanqieStatView::from).collect(),
+    }))
+}
+
 async fn sync_notifications_for_user(s: &AppState, user: &User) -> Result<(), AppError> {
     let ready_projects = s
         .projects
@@ -2747,6 +3060,67 @@ struct StoryImageBody {
     show_author: Option<bool>,
 }
 
+/// 有些模型（尤其长结构化输出，如角色设定/大纲）会把正文包进
+/// `<tool_call>{"name":"write_file","arguments":{"path":"x.md","content":"..."}}</tool_call>`
+/// 信封里，导致 artifact 落库成工具调用文本而非 markdown。这里在落库前把信封拆开，
+/// 取出 `arguments.content`。不是这种信封就原样返回；JSON 截断/解析失败也原样返回（绝不丢内容）。
+fn strip_tool_call_envelope(text: String) -> String {
+    let looks_wrapped =
+        text.contains("write_file") && (text.contains("<tool_call>") || text.trim_start().starts_with('{'));
+    if !looks_wrapped {
+        return text;
+    }
+    let Some(start) = text.find('{') else {
+        return text;
+    };
+    // 从第一个 { 起做括号深度扫描（尊重字符串与转义），找到配对的 }。
+    // 花括号/引号/反斜杠都是 ASCII，字节偏移落在 char 边界上，切片安全。
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut end_rel: Option<usize> = None;
+    for (i, &b) in text[start..].as_bytes().iter().enumerate() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end_rel = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(end_rel) = end_rel else {
+        return text; // 花括号没配平（多半 max_tokens 截断），原样保留
+    };
+    let json_slice = &text[start..start + end_rel + 1];
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json_slice) else {
+        return text;
+    };
+    // 兼容 {"name":"write_file","arguments":{"content":...}} 与直接 {"content":...}
+    let content = v
+        .pointer("/arguments/content")
+        .or_else(|| v.pointer("/content"))
+        .and_then(|c| c.as_str());
+    match content {
+        Some(c) if !c.trim().is_empty() => c.to_string(),
+        _ => text,
+    }
+}
+
 /// 把 mpsc::Receiver<StreamEvent> 转 axum SSE。
 /// - Delta 转 `event: delta` + `data: {"text":"..."}`（用 JSON 编码避免换行/特殊字符破坏 SSE 协议）
 /// - Done 转 `event: done`，前端收到后关闭 EventSource
@@ -2796,7 +3170,8 @@ where
             }
         }
         if had_error.is_none() && !acc.is_empty() {
-            let final_text = transform(acc);
+            // 先跑调用方的 transform，再统一拆 tool_call 信封，最后落库 + replace 都用干净文本
+            let final_text = strip_tool_call_envelope(transform(acc));
             match on_complete(final_text.clone()).await {
                 Ok(()) => {
                     let payload = serde_json::json!({"text": final_text}).to_string();
@@ -2855,7 +3230,7 @@ async fn ai_readme_stream(
         .get(user.id, project.seed_id)
         .await
         .map_err(AppError::Storage)?;
-    let total = seed.score.total();
+    let total = seed.total_score;
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let rx = stream_readme(&s.ai, &seed.title, &seed.track, total, &today).await;
     let artifacts = s.artifacts.clone();
@@ -3242,6 +3617,36 @@ async fn ai_duomi_query_task(
     }
 }
 
+async fn ai_publish_qa(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<ai::PublishQaResponse>, AppError> {
+    let (_, project) = require_project(&s, &headers, project_id).await?;
+    let artifacts = s
+        .artifacts
+        .latest_all(project_id)
+        .await
+        .map_err(AppError::Storage)?;
+    // 优先用 publish artifact，没有就用 book_polished，再没有用 book_summary
+    let publish_text = artifacts
+        .iter()
+        .find(|a| a.kind == ArtifactKind::PublishPost)
+        .or_else(|| artifacts.iter().find(|a| a.kind == ArtifactKind::BookPolished))
+        .or_else(|| artifacts.iter().find(|a| a.kind == ArtifactKind::BookSummary))
+        .map(|a| a.content.clone())
+        .unwrap_or_default();
+    if publish_text.trim().is_empty() {
+        return Err(AppError::Storage(bookflow_storage::StorageError::Conflict(
+            "先生成发布稿或完成正文，才能做发布前自检".into(),
+        )));
+    }
+    let resp = ai::publish_qa_check(&s.ai, &project.title, &publish_text)
+        .await
+        .map_err(|e| AppError::Ai(anyhow::anyhow!("{e:#}")))?;
+    Ok(Json(resp))
+}
+
 async fn ai_story_image(
     State(s): State<AppState>,
     headers: HeaderMap,
@@ -3441,27 +3846,60 @@ fn build_story_image_prompt(
             s.to_string()
         }
     };
+
+    // 按赛道关键词动态匹配色调（覆盖全部已知赛道）
+    let mood = if track.contains("宫斗") || track.contains("权谋") {
+        "深红朱砂+暗金主色调，宫廷压迫感，烛光侧打，阴影浓重"
+    } else if track.contains("仙侠") || track.contains("玄幻") || track.contains("升级") {
+        "青白仙气+金色光晕，飘逸空灵，云雾缭绕，仙境质感"
+    } else if track.contains("悬疑") || track.contains("惊悚") || track.contains("怪谈") || track.contains("密闭") {
+        "深蓝黑主色调，冷白高光，阴影强烈，窒息压迫感"
+    } else if track.contains("娱乐圈") {
+        "都市霓虹感，冷白聚光灯打亮主角，背景虚化城市夜景"
+    } else if track.contains("豪门") || track.contains("替身") || track.contains("逆袭") {
+        "冷奢感，深灰+金色点缀，高级商务质感，强气场光影"
+    } else if track.contains("末日") || track.contains("科幻") || track.contains("游戏") || track.contains("无限流") {
+        "深色科技感，蓝绿荧光点缀，赛博朋克边缘光，末世压迫"
+    } else if track.contains("大女主") || track.contains("女性成长") || track.contains("打脸") {
+        "冷白+金色高光，强气场，主角占据画面中心，凌厉感"
+    } else if track.contains("虐") || track.contains("火葬场") || track.contains("复仇") || track.contains("误会") {
+        "冷青灰主色调，暗红点缀，压抑张力感，硬光侧打"
+    } else if track.contains("甜宠") || track.contains("闪婚") || track.contains("先婚后爱") || track.contains("糙汉") {
+        "暖橙金主色调，柔光晕染，温柔氛围感"
+    } else if track.contains("古") || track.contains("宫") || track.contains("冲喜") || track.contains("穿越") || track.contains("重生") {
+        "古朴青绿或朱红主色调，水墨晕染边缘，古典质感"
+    } else if track.contains("婚姻") || track.contains("家庭") || track.contains("现实") {
+        "冷暖对比写实风，家居或都市背景，情绪张力来自人物表情"
+    } else if track.contains("破镜") || track.contains("失忆") || track.contains("虐心") {
+        "冷蓝灰+暗金，破碎感，双人对立构图，情绪撕裂"
+    } else {
+        "电影感光影，色调服务于最强情绪冲突，写实质感"
+    };
+
     let author_line = author_name
         .filter(|n| !n.trim().is_empty())
-        .map(|n| format!("\n作者署名：{n}（紧贴书名正下方、小一号字，居中，不要放到画面底部以免被裁切）"))
+        .map(|n| format!("\n作者：{n}（书名正下方，小一号字，居中）"))
         .unwrap_or_default();
+
     format!(
-        "中文短篇小说封面配图：竖版构图、电影感光影、强情绪强冲突、人物关系明确。\
-书名「{title}」醒目放在画面上方三分之一处（大字），\
-画面聚焦最具戏剧性的一幕，突出主角表情和身份张力。\
-禁止：英文水印、中文书名以外的任何文字、拼贴风、低幼漫画。{author_line}\n\
+        "竖版封面，3:4构图，写实电影质感（非动漫非油画）。\
+色调：{mood}。\
+构图：聚焦最强冲突或情绪转折一幕，主角占画面60%以上，面部表情/动作有强烈戏剧张力，人物身份感鲜明。\
+书名「{title}」置于画面上方，字体清晰可辨，与场景融合自然。{author_line}\n\
+禁止：英文水印、两人对视+背景虚化的平庸构图、卡通低幼风格、过度磨皮滤镜、拼贴感、书名以外的杂乱文字。\n\
 赛道：{track}\n\
 README：{readme}\n\
 角色：{character_setup}\n\
 大纲：{outline}\n\
 配套封面提示词：{side_dishes}\n\
-优先执行配套里的封面描述，否则聚焦最强冲突一幕。",
+优先执行配套里的封面描述；如无则聚焦最强冲突一幕。",
+        mood = mood,
         title = title,
         author_line = author_line,
         track = track,
-        readme = truncate(readme, 500),
-        character_setup = truncate(character_setup, 500),
-        outline = truncate(outline, 500),
+        readme = truncate(readme, 400),
+        character_setup = truncate(character_setup, 400),
+        outline = truncate(outline, 400),
         side_dishes = truncate(side_dishes, 400),
     )
 }
@@ -3511,8 +3949,36 @@ fn build_full_book_source(chapters: Vec<Chapter>) -> Option<String> {
 mod tests {
     use super::{build_full_book_source, looks_like_chapter_heading, review_stage_priority};
     use super::parse_fanqie_detail_stats;
+    use super::strip_tool_call_envelope;
     use bookflow_domain::Chapter;
     use uuid::Uuid;
+
+    #[test]
+    fn strip_tool_call_unwraps_write_file_envelope() {
+        let raw = "\n<tool_call>\n{\"name\": \"write_file\", \"arguments\": {\"path\": \"大纲.md\", \"content\": \"# 大纲\\n\\n### 第1章 相亲局\\n- 事件\"}}\n</tool_call>\n大纲已写入。";
+        let got = strip_tool_call_envelope(raw.to_string());
+        assert_eq!(got, "# 大纲\n\n### 第1章 相亲局\n- 事件");
+    }
+
+    #[test]
+    fn strip_tool_call_leaves_plain_markdown_untouched() {
+        let md = "# 大纲：测试\n\n### 第1章 开局\n- 场景";
+        assert_eq!(strip_tool_call_envelope(md.to_string()), md);
+    }
+
+    #[test]
+    fn strip_tool_call_keeps_truncated_envelope_verbatim() {
+        // 花括号没配平（max_tokens 截断）→ 原样保留，绝不丢内容
+        let truncated = "<tool_call>\n{\"name\":\"write_file\",\"arguments\":{\"content\":\"# 大纲\\n### 第1章";
+        assert_eq!(strip_tool_call_envelope(truncated.to_string()), truncated);
+    }
+
+    #[test]
+    fn strip_tool_call_ignores_prose_mentioning_write_file() {
+        // 正文里恰好提到 write_file 但不是信封 → 不动
+        let prose = "他在终端敲下 write_file 命令，屏幕闪了一下。";
+        assert_eq!(strip_tool_call_envelope(prose.to_string()), prose);
+    }
 
     #[test]
     fn chapter_heading_detection_accepts_prefixed_titles() {

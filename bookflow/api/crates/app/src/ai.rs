@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
-use bookflow_domain::{Beat, Score};
+use bookflow_domain::{Beat, Score, Tier};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -144,16 +144,29 @@ impl AiClient {
         // 优先走多米 API（如果 key 已配置）
         if !cfg.duomiapi_key.is_empty() {
             let duomi = DuoMiClient::new(cfg.duomiapi_key.clone());
-            return duomi
+            match duomi
                 .blocking_generate_image(&cfg.image_model, prompt, size, quality)
-                .await;
+                .await
+            {
+                Ok(img) => return Ok(img),
+                Err(e) => {
+                    // 多米异步接口失败，fallback 到标准 OpenAI 同步接口（用 duomiapi_key 鉴权）
+                    tracing::warn!(err = %e, "多米生图失败，fallback 到 OpenAI 同步接口");
+                    let mut fallback_cfg = cfg.clone();
+                    fallback_cfg.api_key = cfg.duomiapi_key.clone();
+                    return self.generate_openai_image(&fallback_cfg, prompt, size, quality).await;
+                }
+            }
         }
         match cfg.provider {
             Provider::Openai => {
                 self.generate_openai_image(&cfg, prompt, size, quality)
                     .await
             }
-            Provider::Anthropic => Err(anyhow!("当前 provider 不支持生图，请切到 OpenAI 或在设置中配置多米 API Key")),
+            Provider::Anthropic => {
+                // Anthropic provider 不支持生图，但如果 base_url 兼容 OpenAI 格式，尝试走 OpenAI 路径
+                self.generate_openai_image(&cfg, prompt, size, quality).await
+            }
         }
     }
 
@@ -1182,6 +1195,15 @@ pub struct AiScoreRequest<'a> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AiScoreResponse {
     pub score: Score,
+    /// 总分（4 维之和，满分 40）。后端权威重算，不信 AI 自报。
+    #[serde(default)]
+    pub total: i32,
+    /// 立项段位，后端按 total 重算。
+    #[serde(default)]
+    pub tier: String,
+    /// 对标真实爆款：点名 hot_tracks 里最相似的标题 + 差异点。
+    #[serde(default)]
+    pub benchmark: String,
     pub rationale: String,
     pub suggestions: Vec<String>,
 }
@@ -1189,31 +1211,125 @@ pub struct AiScoreResponse {
 const SCORE_SYSTEM: &str = include_str!("ai_prompts/seed_scorer.system.md");
 
 pub async fn score_seed(client: &AiClient, req: &AiScoreRequest<'_>) -> Result<AiScoreResponse> {
+    let hot = load_hot_tracks();
     let user = format!(
-        "标题：{}\n赛道：{}\n\n请按 schema 严格只回 JSON。",
-        req.title, req.track
+        "标题：{}\n赛道：{}{}\n\n请对标上面的真实热词榜数据给分，并按 schema 严格只回 JSON。",
+        req.title, req.track, hot
     );
     let raw = client.complete_json(SCORE_SYSTEM, &user).await?;
     let json_str = extract_json(&raw).with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
-    let parsed: AiScoreResponse =
+    let mut parsed: AiScoreResponse =
         serde_json::from_str(json_str).with_context(|| format!("AI JSON 解析失败：{json_str}"))?;
-    // 兜底：让分数落在 1..=5
-    let s = &parsed.score;
-    for (name, v) in [
-        ("title", s.title),
-        ("opening", s.opening),
-        ("slap", s.slap),
-        ("emotion", s.emotion),
-        ("twist", s.twist),
-        ("hook", s.hook),
-        ("finish", s.finish),
-        ("tagfit", s.tagfit),
-    ] {
-        if !(1..=5).contains(&v) {
-            return Err(anyhow!("AI 给出 {} = {} 越界", name, v));
-        }
-    }
+    // 校验：4 维都落在 1..=10
+    parsed
+        .score
+        .validate()
+        .map_err(|e| anyhow!("AI 评分越界：{e}"))?;
+    // 代码层硬规则（不靠 AI）：标题超长、无数字锚点、跟爆款撞车强制扣分
+    apply_hard_rules(req.title, &mut parsed.score);
+    // total / tier 后端权威重算
+    parsed.total = parsed.score.total();
+    parsed.tier = Tier::from_total(parsed.total).as_str().to_string();
     Ok(parsed)
+}
+
+/// 硬规则校验（代码层面，不靠 AI），就地修改 score：
+/// - 标题 >25 字 → title_ctr -2
+/// - 标题无数字/时间锚点 → title_ctr -1
+/// - 跟 hot_tracks 标题 jaccard 相似度 >0.6 → novelty 强制 ≤3（撞车）
+/// 所有维度最终钳制在 1..=10。
+fn apply_hard_rules(title: &str, score: &mut Score) {
+    if title.chars().count() > 25 {
+        score.title_ctr -= 2;
+    }
+    if !has_number_or_time_anchor(title) {
+        score.title_ctr -= 1;
+    }
+    if max_similarity_with_hot_tracks(title) > 0.6 {
+        score.novelty = score.novelty.min(3);
+    }
+    // 钳制到 1..=10
+    score.title_ctr = score.title_ctr.clamp(1, 10);
+    score.conflict = score.conflict.clamp(1, 10);
+    score.tagfit = score.tagfit.clamp(1, 10);
+    score.novelty = score.novelty.clamp(1, 10);
+}
+
+/// 标题是否含数字 / 时间锚点（阿拉伯数字、中文数字、年代/时间词）。
+fn has_number_or_time_anchor(title: &str) -> bool {
+    const CN_NUM: &str = "零一二三四五六七八九十百千万亿两";
+    const TIME_WORDS: [&str; 12] = [
+        "年", "天", "夜", "月", "日", "岁", "周", "分钟", "小时", "那晚", "当天", "第",
+    ];
+    if title.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    if title.chars().any(|c| CN_NUM.contains(c)) {
+        return true;
+    }
+    TIME_WORDS.iter().any(|w| title.contains(w))
+}
+
+/// 跟 hot_tracks 里所有标题逐一算字符级 Jaccard 相似度，取最大值。
+/// hot_tracks 文件缺失 / 无标题时返回 0.0（不触发撞车惩罚）。
+fn max_similarity_with_hot_tracks(title: &str) -> f64 {
+    let hot_titles = hot_track_titles();
+    hot_titles
+        .iter()
+        .map(|h| jaccard_char_similarity(title, h))
+        .fold(0.0_f64, f64::max)
+}
+
+/// 字符集 Jaccard：|A∩B| / |A∪B|，忽略标点和空白。两边都空时算 0。
+fn jaccard_char_similarity(a: &str, b: &str) -> f64 {
+    use std::collections::HashSet;
+    let norm = |s: &str| -> HashSet<char> {
+        s.chars()
+            .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
+            .filter(|c| !"，。！？、：；「」『』（）·…—".contains(*c))
+            .collect()
+    };
+    let sa = norm(a);
+    let sb = norm(b);
+    if sa.is_empty() || sb.is_empty() {
+        return 0.0;
+    }
+    let inter = sa.intersection(&sb).count() as f64;
+    let union = sa.union(&sb).count() as f64;
+    if union == 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
+}
+
+/// 解析 hot_tracks.md 表格，抽出「标题」列（每个表格的第一列内容行）。
+/// 跳过表头行（含「标题」「阅读量」等）和分隔行（---）。
+fn hot_track_titles() -> Vec<String> {
+    let content = read_hot_tracks_raw();
+    let mut titles = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if !line.starts_with('|') {
+            continue;
+        }
+        let cells: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
+        let Some(first) = cells.first() else {
+            continue;
+        };
+        let first = *first;
+        // 跳过分隔行（----）和表头（标题/阅读量/标签/数据/开头钩子）
+        if first.is_empty()
+            || first.chars().all(|c| c == '-' || c == ':')
+            || first == "标题"
+            || first.contains("阅读")
+            || first.contains("数据")
+        {
+            continue;
+        }
+        titles.push(first.to_string());
+    }
+    titles
 }
 
 /// 从模型可能夹了 markdown 围栏 / 多余前后缀的输出里抠出 {...}
@@ -1331,8 +1447,19 @@ pub async fn publish_qa_check(
     let user = format!("标题：{title}\n\n正文（前2000字）：\n{excerpt}");
     let raw = client.complete_json(PUBLISH_QA_SYSTEM, &user).await?;
     let json_str = extract_json(&raw).unwrap_or(&raw);
-    let resp: PublishQaResponse = serde_json::from_str(json_str)
-        .map_err(|e| anyhow!("QA 自检 JSON 解析失败: {e}\nraw: {json_str}"))?;
+    let resp: PublishQaResponse = match serde_json::from_str(json_str) {
+        Ok(p) => p,
+        Err(first_err) => {
+            // 兜底：让 AI 把上次输出修成合法 JSON（多见于内引号未转义），跟 beats_for_chapter 一致
+            let fix_user = format!(
+                "下面这段 JSON 有解析错误（{first_err}），请把它修成合法 JSON 后原样返回。\n注意：字符串字面量里的引号要换成中文「」或『』，不要用英文 \" 否则继续坏。\n\n{json_str}"
+            );
+            let fixed_raw = client.complete_json(PUBLISH_QA_SYSTEM, &fix_user).await?;
+            let fixed = extract_json(&fixed_raw).unwrap_or(&fixed_raw);
+            serde_json::from_str::<PublishQaResponse>(fixed)
+                .map_err(|e| anyhow!("QA 自检 JSON 修复后仍解析失败: {e}\nraw: {fixed}"))?
+        }
+    };
     Ok(resp)
 }
 
@@ -1657,6 +1784,7 @@ pub async fn beats_for_chapter(
 // === 章节 AI 段落写作 ===
 
 const WRITE_SYSTEM: &str = include_str!("ai_prompts/chapter_write.system.md");
+const FULL_WRITE_SYSTEM: &str = include_str!("ai_prompts/chapter_write_full.system.md");
 const OPENINGS_REF: &str = include_str!("../../../../story_openings_ref.md");
 
 pub async fn write_paragraph(
@@ -1718,11 +1846,59 @@ pub async fn stream_write_paragraph(
             })
     };
     let user = format!(
-        "项目：{project_title}\n赛道：{track}\n章节：{chapter_title}\n\n本段 beat：{} — {}\n{prev}{setup_section}\n\n直接写正文段落。",
+        "项目：{project_title}\n赛道：{track}\n章节：{chapter_title}\n\n本段 beat：{} — {}\n{prev}{setup_section}\n\n直接写正文段落。\n\n⚠️ 硬性字数：本段 400-600 字，写完即停。超过 600 字=不合格。番茄短篇读者 3 分钟看完一章，别注水。",
         beat.label, beat.note,
     );
     client
         .stream_text(format!("{WRITE_SYSTEM}\n\n{ANTI_AI_RULES}"), user, 800)
+        .await
+}
+
+// === 章节 AI 整章写作（一口气写完，替代逐 beat 分段）===
+
+/// 整章一次性写作。给大纲单章描述 + 精简角色提示 + 上一章结尾，目标 1500-2000 字。
+/// 角色设定截断 800 字（只取核心人设/命名），prev_tail 取衔接用的上一章尾段。
+pub async fn stream_write_full_chapter(
+    client: &AiClient,
+    project_title: &str,
+    track: &str,
+    chapter_title: &str,
+    chapter_idx: i16,
+    outline_excerpt: &str,
+    prev_tail: &str,
+    character_setup: &str,
+) -> mpsc::Receiver<StreamEvent> {
+    let outline = outline_excerpt.trim();
+    let outline_section = if outline.is_empty() {
+        "（大纲未提供本章描述，按章节标题自由发挥，但要承接上一章）".to_string()
+    } else {
+        format!("本章大纲（要完成的事，别被细节牵着展开）：\n{outline}")
+    };
+
+    let prev = if prev_tail.trim().is_empty() {
+        "（这是第一章，无上文）".to_string()
+    } else {
+        format!("上一章结尾（衔接用，别复述）：\n{}", prev_tail.trim())
+    };
+
+    let setup = character_setup.trim();
+    let setup_section = if setup.is_empty() {
+        String::new()
+    } else {
+        // 只取前 800 字核心人设 + 命名，避免全量 5000 字让模型展开过度
+        let trimmed = if setup.chars().count() > 800 {
+            format!("{}…（下略）", setup.chars().take(800).collect::<String>())
+        } else {
+            setup.to_string()
+        };
+        format!("\n角色提示（只看这个写，包括人称、姓名、关系，不要展开）：\n{trimmed}")
+    };
+
+    let user = format!(
+        "项目：{project_title}\n赛道：{track}\n第{chapter_idx}章：{chapter_title}\n\n{outline_section}\n{prev}{setup_section}\n\n现在一口气写完这一章。\n\n⚠️ 硬性字数：全章 1500-2000 字，连贯成篇，不分小标题、不分 beat。低于 1200 字内容不够，超过 2000 字算注水。番茄读者 3 分钟看完一章，章尾必须留钩子。",
+    );
+    client
+        .stream_text(format!("{FULL_WRITE_SYSTEM}\n\n{ANTI_AI_RULES}"), user, 600)
         .await
 }
 
@@ -1755,31 +1931,129 @@ pub struct AiSeedGenerated {
 }
 
 // === 热词注入 ===
-/// 读取 hot_tracks.md（由外部爬虫每日更新），拼成追加段落注入选题 prompt。
-/// 文件不存在或读取失败时静默返回空串，不影响正常流程。
-fn load_hot_tracks() -> String {
-    let candidates = [
-        "hot_tracks.md",
-        "../hot_tracks.md",
-        "../../hot_tracks.md",
-    ];
+/// 读 hot_tracks.md 原始内容（由外部爬虫每日更新）。文件不存在 / 为空时返回空串。
+/// 评分用的标题解析（hot_track_titles）和选题注入（load_hot_tracks）共用这个读取器。
+fn read_hot_tracks_raw() -> String {
+    let candidates = ["hot_tracks.md", "../hot_tracks.md", "../../hot_tracks.md"];
     for p in &candidates {
         if let Ok(content) = std::fs::read_to_string(p) {
             let trimmed = content.trim();
             if !trimmed.is_empty() {
-                return format!("\n\n---\n以下是番茄短篇今日真实热词榜（优先围绕这些方向出题）：\n{trimmed}");
+                return trimmed.to_string();
             }
         }
     }
     String::new()
 }
 
-pub async fn generate_seeds(client: &AiClient, track: &str) -> Result<AiSeedGenerated> {
-    let hot = load_hot_tracks();
-    let user = format!("赛道：{track}{hot}\n\n请按 schema 严格只回 JSON。");
+/// 读取 hot_tracks.md，拼成追加段落注入选题 / 评分 prompt。
+/// 文件不存在或读取失败时静默返回空串，不影响正常流程。
+fn load_hot_tracks() -> String {
+    let raw = read_hot_tracks_raw();
+    if raw.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n---\n以下是番茄短篇今日真实热词榜（优先围绕这些方向出题 / 对标评分）：\n{raw}")
+    }
+}
+
+/// 读取 my_track_analysis.md（作者自身作品数据复盘），注入选题 prompt。
+/// 文件不存在或读取失败时静默返回空串。
+fn load_my_track_analysis() -> String {
+    let candidates = [
+        "my_track_analysis.md",
+        "../my_track_analysis.md",
+        "../../my_track_analysis.md",
+    ];
+    for p in &candidates {
+        if let Ok(content) = std::fs::read_to_string(p) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                return format!("\n\n---\n以下是作者自己作品的数据复盘，选题时必须参考：\n{trimmed}");
+            }
+        }
+    }
+    String::new()
+}
+
+/// 把用户账号复盘策略（已验证公式 / 优势赛道 / 禁用赛道）拼成提示词追加段，注入选题 prompt。
+/// 策略为空对象或缺字段时静默跳过对应小节。
+fn format_strategy_for_prompt(strategy: &serde_json::Value) -> String {
+    let obj = match strategy.as_object() {
+        Some(o) if !o.is_empty() => o,
+        _ => return String::new(),
+    };
+
+    // 取字符串数组（["a","b"]）的辅助
+    let str_list = |v: &serde_json::Value| -> Vec<String> {
+        v.as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let mut sections: Vec<String> = Vec::new();
+
+    if let Some(formula) = obj.get("proven_formula").and_then(|v| v.as_object()) {
+        let mut lines: Vec<String> = Vec::new();
+        if let Some(p) = formula.get("title_pattern").and_then(|v| v.as_str()) {
+            if !p.trim().is_empty() {
+                lines.push(format!("已验证标题公式：{}", p.trim()));
+            }
+        }
+        let best_tracks = formula
+            .get("best_tracks")
+            .map(str_list)
+            .unwrap_or_default();
+        if !best_tracks.is_empty() {
+            lines.push(format!("优势赛道（优先围绕这些出题）：{}", best_tracks.join("、")));
+        }
+        let examples = formula.get("examples").map(str_list).unwrap_or_default();
+        if !examples.is_empty() {
+            lines.push(format!("过往爆款标题示例：{}", examples.join("｜")));
+        }
+        if !lines.is_empty() {
+            sections.push(lines.join("\n"));
+        }
+    }
+
+    // 顶层 best_tracks 作为兜底（结构示例里 best_tracks 在 proven_formula 内，但容错处理）
+    let top_best = obj.get("best_tracks").map(str_list).unwrap_or_default();
+    if !top_best.is_empty() {
+        sections.push(format!("优势赛道（优先围绕这些出题）：{}", top_best.join("、")));
+    }
+
+    let banned = obj.get("banned_tracks").map(str_list).unwrap_or_default();
+    if !banned.is_empty() {
+        sections.push(format!("禁止赛道（绝对不要出这些方向的题）：{}", banned.join("、")));
+    }
+
+    if sections.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\n---\n以下是本账号的复盘策略，出题时必须遵守：\n{}",
+        sections.join("\n")
+    )
+}
+
+pub async fn generate_seeds(
+    client: &AiClient,
+    track: &str,
+    strategy: Option<&serde_json::Value>,
+) -> Result<AiSeedGenerated> {    let hot = load_hot_tracks();
+    let my_analysis = load_my_track_analysis();
+    let strategy_block = strategy.map(format_strategy_for_prompt).unwrap_or_default();
+    let user = format!(
+        "赛道：{track}{hot}{my_analysis}{strategy_block}\n\n请按 schema 严格只回 JSON。"
+    );
     let raw = client.complete_json(GENERATOR_SYSTEM, &user).await?;
     let json_str = extract_json(&raw).with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
-    let parsed: AiSeedGenerated = match serde_json::from_str(json_str) {
+    let mut parsed: AiSeedGenerated = match serde_json::from_str(json_str) {
         Ok(p) => p,
         Err(first_err) => {
             // 兜底修复一次
@@ -1796,23 +2070,12 @@ pub async fn generate_seeds(client: &AiClient, track: &str) -> Result<AiSeedGene
     if parsed.candidates.is_empty() {
         return Err(anyhow!("AI 没生成任何候选选题"));
     }
-    // 兜底：评分都落在 1..=5
-    for c in &parsed.candidates {
-        let s = &c.score;
-        for (name, v) in [
-            ("title", s.title),
-            ("opening", s.opening),
-            ("slap", s.slap),
-            ("emotion", s.emotion),
-            ("twist", s.twist),
-            ("hook", s.hook),
-            ("finish", s.finish),
-            ("tagfit", s.tagfit),
-        ] {
-            if !(1..=5).contains(&v) {
-                return Err(anyhow!("AI 给出 {} = {} 越界 (标题: {})", name, v, c.title));
-            }
-        }
+    // 校验 + 硬规则：4 维落在 1..=10，再按代码层硬规则修正撞车 / 超长 / 无锚点
+    for c in &mut parsed.candidates {
+        c.score
+            .validate()
+            .map_err(|e| anyhow!("AI 给候选「{}」的评分越界：{e}", c.title))?;
+        apply_hard_rules(&c.title, &mut c.score);
     }
     Ok(parsed)
 }
@@ -1842,11 +2105,13 @@ pub async fn recommend_tracks(
     plots: &[String],
 ) -> Result<AiTrackRecommendGenerated> {
     let hot = load_hot_tracks();
+    let my_analysis = load_my_track_analysis();
     let user = format!(
-        "可选主分类（只能从这里选 1 个）：\n{}\n\n可选情节标签（只能从这里选 1-3 个）：\n{}\n{}\n请按 schema 严格只回 JSON。",
+        "可选主分类（只能从这里选 1 个）：\n{}\n\n可选情节标签（只能从这里选 1-3 个）：\n{}\n{}{}\n请按 schema 严格只回 JSON。",
         primaries.join("、"),
         plots.join("、"),
         hot,
+        my_analysis,
     );
     let raw = client.complete_json(TRACK_RECOMMEND_SYSTEM, &user).await?;
     let json_str = extract_json(&raw).with_context(|| format!("AI 输出找不到 JSON 块：{raw}"))?;
@@ -2259,10 +2524,38 @@ mod tests {
 
     #[test]
     fn extract_handles_fenced_json() {
-        let raw = "```json\n{\"score\":{\"title\":5,\"opening\":4,\"slap\":4,\"emotion\":4,\"twist\":4,\"hook\":4,\"finish\":4},\"rationale\":\"x\",\"suggestions\":[]}\n```";
+        let raw = "```json\n{\"score\":{\"title_ctr\":8,\"conflict\":7,\"tagfit\":8,\"novelty\":6},\"total\":29,\"tier\":\"backlog\",\"benchmark\":\"x\",\"rationale\":\"x\",\"suggestions\":[]}\n```";
         let j = extract_json(raw).unwrap();
         let r: AiScoreResponse = serde_json::from_str(j).unwrap();
-        assert_eq!(r.score.title, 5);
+        assert_eq!(r.score.title_ctr, 8);
+        assert_eq!(r.score.total(), 29);
+    }
+
+    #[test]
+    fn hard_rules_penalize_long_and_anchorless_titles() {
+        // 超 25 字 + 无数字锚点 → title_ctr 连扣 3（10 - 2 - 1 = 7）
+        let mut s = Score { title_ctr: 10, conflict: 8, tagfit: 8, novelty: 8 };
+        let long_no_anchor = "他在某个寻常的午后忽然意识到这段感情早已悄悄走到了尽头却无人察觉真相";
+        apply_hard_rules(long_no_anchor, &mut s);
+        assert_eq!(s.title_ctr, 7);
+    }
+
+    #[test]
+    fn anchor_detection_catches_numbers_and_time_words() {
+        assert!(has_number_or_time_anchor("中了8987万那晚妻子让我装穷"));
+        assert!(has_number_or_time_anchor("重生1977我把丈夫还给妹妹"));
+        assert!(has_number_or_time_anchor("等了师父八十年"));
+        assert!(has_number_or_time_anchor("签字那天他才知道"));
+        assert!(!has_number_or_time_anchor("他在雨里说爱我"));
+    }
+
+    #[test]
+    fn jaccard_flags_near_duplicate_titles() {
+        let a = "重生1977我把丈夫还给妹妹";
+        let b = "重生1977，我把丈夫还给妹妹";
+        assert!(jaccard_char_similarity(a, b) > 0.6);
+        let c = "悬疑规则怪谈夜班电梯";
+        assert!(jaccard_char_similarity(a, c) < 0.6);
     }
 
     #[test]
