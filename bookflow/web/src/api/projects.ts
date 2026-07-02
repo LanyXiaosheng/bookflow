@@ -63,4 +63,25 @@ export const projectsApi = {
     const { data } = await api.get<ProjectArtifact[]>(`/projects/${id}/artifacts`)
     return data
   },
+  async publishQa(id: string): Promise<PublishQaResult> {
+    const { data } = await api.post<PublishQaResult>(`/projects/${id}/ai-publish-qa`, {})
+    return data
+  },
+}
+
+export interface PublishQaResult {
+  first_sentence_score: number
+  first_sentence_comment: string
+  retention_score: number
+  retention_comment: string
+  pacing_score: number
+  pacing_comment: string
+  anti_ai_score: number
+  anti_ai_comment: string
+  title_match_score: number
+  title_match_comment: string
+  total_score: number
+  verdict: 'pass' | 'revise' | 'reject'
+  kill_reasons: string[]
+  quick_fix: string
 }

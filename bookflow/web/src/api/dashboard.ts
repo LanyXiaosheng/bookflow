@@ -38,6 +38,19 @@ export interface LlmStatus {
   model: string
 }
 
+export interface AuthorStat {
+  author: string
+  project_count: number
+  writing: number
+  ready: number
+  published: number
+  archived: number
+  avg_read_count: number
+  explode: number
+  flat: number
+  flop: number
+}
+
 export interface DashboardSummary {
   counts: DashboardCounts
   pipeline: PipelineStage[]
@@ -45,6 +58,7 @@ export interface DashboardSummary {
   llm: LlmStatus
   recent_seeds: Seed[]
   recent_projects: Project[]
+  author_stats?: AuthorStat[]
 }
 
 export const dashboardApi = {

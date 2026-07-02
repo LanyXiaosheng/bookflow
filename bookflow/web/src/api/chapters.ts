@@ -1,4 +1,5 @@
 import { api } from './client'
+import type { PublishQaResult } from './projects'
 
 export interface Beat {
   id: string
@@ -48,5 +49,18 @@ export const chaptersApi = {
   },
   aiWriteStreamUrl(id: string): string {
     return `/api/chapters/${id}/ai-write/stream`
+  },
+  /** 整章一次性写作（SSE）：后端写完直接落库 chapter.body */
+  aiWriteFullStreamUrl(id: string): string {
+    return `/api/chapters/${id}/ai-write-full/stream`
+  },
+  /** 章级发布前自检：对本章 body 打分 */
+  async aiQa(id: string, signal?: AbortSignal): Promise<PublishQaResult> {
+    const { data } = await api.post<PublishQaResult>(
+      `/chapters/${id}/ai-qa`,
+      {},
+      { timeout: 120_000, signal },
+    )
+    return data
   },
 }
