@@ -1,1 +1,8 @@
+target/
+node_modules/
+dist/
+.env
 .DS_Store
+.dev/
+web/test-results/
+web/playwright-report/
