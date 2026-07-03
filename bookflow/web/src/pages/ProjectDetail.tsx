@@ -158,10 +158,6 @@ export default function ProjectDetail() {
     () => pickLatest(artifacts.data, 'book_summary'),
     [artifacts.data],
   )
-  const bookPolished = useMemo(
-    () => pickLatest(artifacts.data, 'book_polished'),
-    [artifacts.data],
-  )
   const aiJob = useAiJob(projectId)
   const bodyChars = useMemo(() => countBodyChars(chapters.data), [chapters.data])
   const bodyTarget = useMemo(
@@ -301,7 +297,7 @@ export default function ProjectDetail() {
                 pipeline.progress.running ||
                 project.data?.status !== 'writing'
               }
-              title={`串行跑完 7 步：README → 角色设定 → 大纲 → 正文（目标 ${bodyTarget} 章）→ 全书汇总 → 优化升华 → 配套素材。已有产物的步骤会跳过。`}
+              title={`串行跑完 6 步：README → 角色设定 → 大纲 → 正文（目标 ${bodyTarget} 章）→ 全书汇总 → 配套素材。已有产物的步骤会跳过。`}
               className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50 sm:flex-none"
               data-testid="full-pipeline-btn"
             >
@@ -510,22 +506,6 @@ export default function ProjectDetail() {
           />
           <ArtifactStreamCard
             projectId={projectId}
-            kind="book_polished"
-            title="优化升华"
-            artifact={bookPolished}
-            endpoint={`/api/projects/${projectId}/ai-book-polish/stream`}
-            disabled={!bookSummary}
-            disabledHint="先生成全书汇总，再做优化升华。"
-            emptyHint="AI 会做去 AI 味、增强代入感、优化阅读节奏，不改剧情不走结局。"
-            onDone={refreshArtifacts}
-            copyable
-            downloadable
-            projectTitle={project.data?.title}
-            globalJob={aiJob}
-            showCharCount
-          />
-          <ArtifactStreamCard
-            projectId={projectId}
             kind="side_dishes"
             title="配套素材"
             artifact={sideDishes}
@@ -551,7 +531,7 @@ export default function ProjectDetail() {
             projectId={projectId}
             projectTitle={project.data?.title}
             sideDishes={sideDishes}
-            bookPolished={bookPolished}
+            bookSummary={bookSummary}
             storyImage={storyImage}
           />
         </div>
@@ -782,7 +762,7 @@ function copyDisplayText(kind: ArtifactKind, display: string): string {
     case 'side_dishes':
     case 'blurb':
     case 'book_summary':
-    case 'book_polished':
+    case 'book_summary':
       return renderedMarkdownToPlainText(display)
     case 'story_image':
       return display
@@ -1759,7 +1739,7 @@ interface ProjectPackageCardProps {
   projectId: string
   projectTitle?: string
   sideDishes?: ProjectArtifact
-  bookPolished?: ProjectArtifact
+  bookSummary?: ProjectArtifact
   storyImage?: ProjectArtifact
 }
 
@@ -1767,7 +1747,7 @@ function ProjectPackageCard({
   projectId,
   projectTitle,
   sideDishes,
-  bookPolished,
+  bookSummary,
   storyImage,
 }: ProjectPackageCardProps) {
   const [packing, setPacking] = useState(false)
@@ -1775,13 +1755,13 @@ function ProjectPackageCard({
   const payload = parseStoryImageArtifact(storyImage)
   const missing = [
     !sideDishes?.content ? '配套素材' : '',
-    !bookPolished?.content ? '优化升华' : '',
+    !bookSummary?.content ? '全书汇总' : '',
     !payload?.data_url ? '小说配图' : '',
   ].filter(Boolean)
   const disabled = packing || missing.length > 0
 
   const handlePackage = async () => {
-    if (!sideDishes?.content || !bookPolished?.content || !payload?.data_url) return
+    if (!sideDishes?.content || !bookSummary?.content || !payload?.data_url) return
     try {
       setPacking(true)
       setError(null)
@@ -1796,7 +1776,7 @@ function ProjectPackageCard({
       await downloadZip(
         [
           { name: `${title}-配套素材.txt`, data: `\uFEFF${copyDisplayText('side_dishes', sideDishes.content)}` },
-          { name: `${title}-优化升华.txt`, data: `\uFEFF${copyDisplayText('book_polished', bookPolished.content)}` },
+          { name: `${title}-全书汇总.txt`, data: `\uFEFF${copyDisplayText('book_summary', bookSummary.content)}` },
           { name: `${packageBaseName}-3x4.png`, data: coverBlob },
         ],
         `${packageBaseName}.zip`,
@@ -1826,7 +1806,7 @@ function ProjectPackageCard({
         </button>
       </header>
       <p className="text-xs leading-5 text-gray-500">
-        打包配套素材、优化升华和 3:4 裁剪封面，文件名按当前项目标题生成。
+        打包配套素材、全书汇总和 3:4 裁剪封面，文件名按当前项目标题生成。
       </p>
       {missing.length > 0 && (
         <p className="mt-2 text-xs text-amber-600">

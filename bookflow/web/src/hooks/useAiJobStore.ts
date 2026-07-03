@@ -37,7 +37,7 @@ export function aiJobKindLabel(kind: AiJobKind): string {
     case 'book_summary':
       return '全书汇总'
     case 'book_polished':
-      return '优化升华'
+      return '优化升华（已废弃）'
     default:
       return 'AI 任务'
   }

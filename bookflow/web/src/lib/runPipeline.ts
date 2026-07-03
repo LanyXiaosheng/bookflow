@@ -1,7 +1,7 @@
 /**
  * 无 hook 依赖的「AI 一键全流程」运行器，供批量立项并发调用。
  *
- *   README → 角色设定 → 大纲 → 正文 → 全书汇总 → 优化升华 → 配套素材
+ *   README → 角色设定 → 大纲 → 正文 → 全书汇总 → 配套素材
  *
  * 与 useFullPipeline 的区别：纯函数、不吃 React state，进度通过回调 + aiJobStore
  * 暴露，因此可以同时跑 N 个项目。每步失败带退避自动重试。
@@ -16,7 +16,6 @@ export type PipelineStepKey =
   | 'outline'
   | 'body'
   | 'book_summary'
-  | 'book_polished'
   | 'side_dishes'
 
 export const RUN_STEPS: PipelineStepKey[] = [
@@ -25,7 +24,6 @@ export const RUN_STEPS: PipelineStepKey[] = [
   'outline',
   'body',
   'book_summary',
-  'book_polished',
   'side_dishes',
 ]
 
@@ -48,7 +46,6 @@ const ARTIFACT_KIND_BY_STEP: Partial<Record<PipelineStepKey, ArtifactKind>> = {
   character_setup: 'character_setup',
   outline: 'outline',
   book_summary: 'book_summary',
-  book_polished: 'book_polished',
   side_dishes: 'side_dishes',
 }
 
@@ -350,8 +347,6 @@ function endpointForStep(projectId: string, step: PipelineStepKey): string {
       return `/api/projects/${projectId}/ai-outline/stream`
     case 'book_summary':
       return `/api/projects/${projectId}/ai-book-summary/stream`
-    case 'book_polished':
-      return `/api/projects/${projectId}/ai-book-polish/stream`
     case 'side_dishes':
       return `/api/projects/${projectId}/ai-side-dishes/stream`
     case 'body':
