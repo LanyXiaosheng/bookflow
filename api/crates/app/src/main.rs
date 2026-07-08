@@ -1,5 +1,7 @@
 use std::net::SocketAddr;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use anyhow::Context;
 use argon2::{
@@ -28,7 +30,7 @@ use bookflow_storage::{
 };
 use futures_util::stream::Stream;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -69,7 +71,7 @@ struct AppState {
     notifications: NotificationRepo,
     fanqie_stats: FanqieStatsRepo,
     ai: AiClient,
-    duomi: DuoMiClient,
+    duomi: Arc<RwLock<DuoMiClient>>,
     settings: SettingsRepo,
     tracks: DocRoot,
     playbook: DocRoot,
@@ -151,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
         fanqie_stats: FanqieStatsRepo::new(pool.clone()),
         pool,
         ai,
-        duomi: DuoMiClient::new(duomi_key),
+        duomi: Arc::new(RwLock::new(DuoMiClient::new(duomi_key))),
         settings: settings_repo,
         tracks: DocRoot::discover("tracks"),
         playbook: DocRoot::discover("playbook"),
@@ -378,8 +380,10 @@ struct AiScoreBody {
 
 async fn ai_score_seed(
     State(s): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<AiScoreBody>,
 ) -> Result<Json<AiScoreResponse>, AppError> {
+    require_user(&s, &headers).await?;
     if body.title.trim().is_empty() {
         return Err(AppError::Domain(DomainError::TitleLength { len: 0 }));
     }
@@ -1992,7 +1996,11 @@ async fn fetch_project_published_at(
     })
 }
 
-async fn get_settings(State(s): State<AppState>) -> Result<Json<SettingsView>, AppError> {
+async fn get_settings(
+    State(s): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SettingsView>, AppError> {
+    require_user(&s, &headers).await?;
     let cfg = s.ai.snapshot().await;
     Ok(Json(SettingsView {
         provider: cfg.provider.as_str().into(),
@@ -2008,9 +2016,11 @@ async fn get_settings(State(s): State<AppState>) -> Result<Json<SettingsView>, A
 }
 
 async fn put_settings(
-    State(mut s): State<AppState>,
+    State(s): State<AppState>,
+    headers: HeaderMap,
     Json(patch): Json<SettingsPatch>,
 ) -> Result<Json<SettingsView>, AppError> {
+    require_user(&s, &headers).await?;
     let cur = s
         .settings
         .read()
@@ -2041,9 +2051,8 @@ async fn put_settings(
     };
     let saved = s.settings.upsert(&next).await.map_err(AppError::Ai)?;
     s.ai.reload(saved.to_ai_config()).await;
-    // 同步更新 duomi client 的 key
     let cfg = s.ai.snapshot().await;
-    s.duomi = DuoMiClient::new(cfg.duomiapi_key.clone());
+    *s.duomi.write().await = DuoMiClient::new(cfg.duomiapi_key.clone());
     Ok(Json(SettingsView {
         provider: cfg.provider.as_str().into(),
         base_url: cfg.base_url.clone(),
@@ -2275,16 +2284,60 @@ async fn ai_launch_seed(
         score: best.score,
     };
     new_seed.validate().map_err(AppError::Domain)?;
-    let seed = s
-        .seeds
-        .insert(user.id, &new_seed)
+    let mut tx = s.pool.begin().await.map_err(|e| AppError::Storage(e.into()))?;
+    let seed = {
+        let id = Uuid::new_v4();
+        let total = new_seed.score.total();
+        let tier = bookflow_domain::Tier::from_total(total).as_str();
+        let score_json = serde_json::to_value(&new_seed.score).unwrap();
+        let row = sqlx::query(
+            r#"INSERT INTO seeds (id, user_id, title, track, score, total_score, tier)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)
+               RETURNING id, title, track, score, total_score, tier, created_at"#,
+        )
+        .bind(id)
+        .bind(user.id)
+        .bind(&new_seed.title)
+        .bind(&new_seed.track)
+        .bind(sqlx::types::Json(score_json))
+        .bind(total)
+        .bind(tier)
+        .fetch_one(&mut *tx)
         .await
-        .map_err(AppError::Storage)?;
-    let project = s
-        .projects
-        .create_from_seed(user.id, seed.id)
+        .map_err(|e| AppError::Storage(e.into()))?;
+        Seed {
+            id: row.get("id"),
+            title: row.get("title"),
+            track: row.get("track"),
+            score: row.get::<sqlx::types::Json<serde_json::Value>, _>("score").0,
+            total_score: row.get("total_score"),
+            tier: bookflow_domain::Tier::from_total(row.get::<i32, _>("total_score")),
+            created_at: row.get("created_at"),
+        }
+    };
+    let project = {
+        let row = sqlx::query(
+            r#"INSERT INTO projects (user_id, seed_id, title, track)
+               SELECT user_id, id, title, track FROM seeds WHERE id = $1 AND user_id = $2
+               RETURNING id, seed_id, title, track, status, created_at, updated_at"#,
+        )
+        .bind(seed.id)
+        .bind(user.id)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(AppError::Storage)?;
+        .map_err(|e| AppError::Storage(e.into()))?
+        .ok_or_else(|| AppError::Storage(bookflow_storage::StorageError::NotFound(format!("seed {}", seed.id))))?;
+        Project {
+            id: row.get("id"),
+            seed_id: row.get("seed_id"),
+            title: row.get("title"),
+            track: row.get("track"),
+            status: ProjectStatus::Writing,
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        }
+    };
+    tx.commit().await.map_err(|e| AppError::Storage(e.into()))?;
     Ok(Json(project))
 }
 
@@ -2466,6 +2519,8 @@ async fn character_name_apply(
     .await?
     .0;
 
+    let mut tx = s.pool.begin().await.map_err(|e| AppError::Storage(e.into()))?;
+
     let artifacts = s
         .artifacts
         .latest_all(project_id)
@@ -2484,10 +2539,22 @@ async fn character_name_apply(
         if let Some(next) =
             apply_exact_replacement(&artifact.content, &body.old_name, &body.new_name)
         {
-            s.artifacts
-                .save(project_id, artifact.kind, &next)
-                .await
-                .map_err(AppError::Storage)?;
+            sqlx::query(
+                r#"
+                INSERT INTO project_artifacts (project_id, kind, version, content)
+                VALUES (
+                    $1, $2,
+                    COALESCE((SELECT MAX(version) FROM project_artifacts WHERE project_id = $1 AND kind = $2), 0) + 1,
+                    $3
+                )
+                "#,
+            )
+            .bind(project_id)
+            .bind(artifact.kind.as_str())
+            .bind(&next)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::Storage(e.into()))?;
         }
     }
 
@@ -2500,13 +2567,21 @@ async fn character_name_apply(
         if let Some(next) =
             apply_exact_replacement(&chapter.body, &body.old_name, &body.new_name)
         {
-            s.chapters
-                .update_body(chapter.id, &chapter.title, &next)
-                .await
-                .map_err(AppError::Storage)?;
+            let wc = next.chars().count() as i32;
+            sqlx::query(
+                "UPDATE chapters SET title = $2, body = $3, word_count = $4 WHERE id = $1",
+            )
+            .bind(chapter.id)
+            .bind(&chapter.title)
+            .bind(&next)
+            .bind(wc)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::Storage(e.into()))?;
         }
     }
 
+    tx.commit().await.map_err(|e| AppError::Storage(e.into()))?;
     Ok(Json(preview))
 }
 
@@ -3550,6 +3625,8 @@ async fn ai_duomi_image(
     require_project(&s, &headers, project_id).await?;
     let task_id = s
         .duomi
+        .read()
+        .await
         .create_image(&body.model, &body.prompt, &body.size, &body.quality)
         .await
         .map_err(|e| AppError::Ai(anyhow::anyhow!("{}", e)))?;
@@ -3570,6 +3647,8 @@ async fn ai_duomi_image_edit(
     require_project(&s, &headers, project_id).await?;
     let task_id = s
         .duomi
+        .read()
+        .await
         .create_image_edit(&body.model, &body.prompt, &body.image_url)
         .await
         .map_err(|e| AppError::Ai(anyhow::anyhow!("{}", e)))?;
@@ -3588,8 +3667,8 @@ async fn ai_duomi_video(
     Json(body): Json<DuoMiVideoBody>,
 ) -> Result<Json<DuoMiTaskResp>, AppError> {
     require_project(&s, &headers, project_id).await?;
-    let task_id = s
-        .duomi
+    let duomi = s.duomi.read().await;
+    let task_id = duomi
         .create_video(&body.model, &body.prompt, &body.image_url, body.duration)
         .await
         .map_err(|e| AppError::Ai(anyhow::anyhow!("{}", e)))?;
@@ -3605,13 +3684,14 @@ async fn ai_duomi_query_task(
     State(s): State<AppState>,
     Path(task_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let duomi = s.duomi.read().await;
     // 先尝试统一查询
-    match s.duomi.query_task(&task_id).await {
+    match duomi.query_task(&task_id).await {
         Ok(r) => return Ok(Json(serde_json::to_value(&r).unwrap_or_default())),
         Err(_) => {}
     }
     // 降级到视频查询
-    match s.duomi.query_video(&task_id).await {
+    match duomi.query_video(&task_id).await {
         Ok(r) => Ok(Json(serde_json::to_value(&r).unwrap_or_default())),
         Err(e) => Err(AppError::Ai(anyhow::anyhow!("查询任务失败: {}", e))),
     }
