@@ -21,6 +21,7 @@ import {
 import { projectsApi, type ArtifactKind, type ProjectArtifact, type ProjectStatus } from '../api/projects'
 import { chaptersApi, type Chapter } from '../api/chapters'
 import { imagesApi, type StoryImagePayload } from '../api/images'
+import { authApi } from '../api/auth'
 import { extractErrorMessage } from '../api/errors'
 import {
   characterReplacementApi,
@@ -762,7 +763,7 @@ function copyDisplayText(kind: ArtifactKind, display: string): string {
     case 'side_dishes':
     case 'blurb':
     case 'book_summary':
-    case 'book_summary':
+    case 'book_polished':
       return renderedMarkdownToPlainText(display)
     case 'story_image':
       return display
@@ -1845,6 +1846,9 @@ function StoryImageCard({
   const [exportQuality, setExportQuality] = useState(88)
   const payload = parseStoryImageArtifact(artifact)
   const activeJob = globalJob?.kind === 'story_image' ? globalJob : undefined
+  // 复用 Shell 已缓存的登录信息，作者署名默认值取当前用户昵称
+  const auth = useQuery({ queryKey: ['auth', 'me'], queryFn: () => authApi.me(), retry: false })
+  const nickname = auth.data?.user.display_name ?? ''
 
   const sizeMap: Record<string, string> = {
     cover: '2:3',
@@ -1868,6 +1872,14 @@ function StoryImageCard({
       else { setPreset('custom'); setCustomVal(payload.cover_size) }
     }
   }, [payload, projectId])
+
+  // 署名默认值兜底：本地/产物都没有署名时，用当前登录用户昵称
+  useEffect(() => {
+    if (!nickname) return
+    if (readStoryImageAuthor(projectId)?.authorName) return
+    if (payload?.author_name) return
+    setAuthorName((prev) => prev || nickname)
+  }, [nickname, projectId, payload])
 
   // 作者署名设置变化即持久化，离开页面再回来不丢
   useEffect(() => {
@@ -2013,7 +2025,7 @@ function StoryImageCard({
           <input
             type="checkbox"
             checked={showAuthor}
-            onChange={(e) => { setShowAuthor(e.target.checked); setAuthorName(a => a || '作者名') }}
+            onChange={(e) => { setShowAuthor(e.target.checked); setAuthorName(a => a || nickname || '作者名') }}
             className="h-4 w-4 rounded border-gray-300 accent-sky-600"
           />
           封面带作者署名
@@ -2023,7 +2035,7 @@ function StoryImageCard({
             type="text"
             value={authorName}
             onChange={(e) => setAuthorName(e.target.value)}
-            placeholder="输入作者名"
+            placeholder={nickname || '输入作者名'}
             className="mt-2 block w-full rounded-md border border-gray-300 px-3 py-2 text-xs shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
           />
         )}

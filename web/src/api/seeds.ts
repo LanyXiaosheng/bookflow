@@ -61,10 +61,10 @@ export function totalOfScore(s: AnyScore): number {
   return l.title + l.opening + l.slap + l.emotion + l.twist + l.hook + l.finish
 }
 
-/** 对任意版本 score 判段位（用对应版本阈值）。 */
+/** 对任意版本 score 判段位（统一用 V2 阈值，与后端一致）。 */
 export function tierOfScore(s: AnyScore): Tier {
   const total = totalOfScore(s)
-  return isScoreV2(s) ? tierOfV2(total) : tierOfLegacy(total)
+  return tierOfV2(total)
 }
 
 /**

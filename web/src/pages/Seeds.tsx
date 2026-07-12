@@ -359,7 +359,7 @@ export default function Seeds() {
         <button
           type="button"
           onClick={() => setAiPanelOpen((v) => !v)}
-          className="flex w-full items-center gap-4 bg-gradient-to-r from-slate-50 to-violet-50 px-5 py-4 text-left"
+          className="flex w-full items-center gap-4 bg-slate-50 px-5 py-4 text-left"
         >
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
             <Brain className="h-4 w-4" />
@@ -568,7 +568,7 @@ export default function Seeds() {
               </section>
             </div>
 
-            <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-violet-100 bg-gradient-to-r from-violet-50 to-sky-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-600">
                   当前组合赛道

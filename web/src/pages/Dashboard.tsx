@@ -5,10 +5,7 @@ import {
   AlarmClock,
   Archive,
   ArrowRight,
-  Ban,
   BookMarked,
-  BookOpen,
-  BookOpenCheck,
   Check,
   ClipboardCheck,
   ClipboardList,
@@ -23,13 +20,11 @@ import {
   Plus,
   RefreshCw,
   Rocket,
-  Route as RouteIcon,
   Send,
   Settings2,
   Sparkles,
   Square,
   Target,
-  Terminal,
   TriangleAlert,
 } from 'lucide-react'
 import { dashboardApi, type PipelineStage, type AuthorStat } from '../api/dashboard'
@@ -200,20 +195,13 @@ function QuickStart(props: {
               </p>
               <div className="mt-4 flex flex-wrap gap-2">
                 {TRACK_TAGS.map((t) => (
-                  <Link
+                  <span
                     key={t.name}
-                    to="/tracks"
                     className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium ${t.cls}`}
                   >
                     {t.name}
-                  </Link>
+                  </span>
                 ))}
-                <Link
-                  to="/playbook"
-                  className="inline-flex items-center rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
-                >
-                  + playbook
-                </Link>
               </div>
             </div>
           </div>
@@ -722,12 +710,9 @@ function WritingMaterials() {
   return (
     <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm" data-testid="lane-materials">
       <h2 className="text-xl font-semibold text-gray-900">写作素材</h2>
-      <p className="mt-2 text-sm leading-6 text-gray-500">赛道、playbook、模板、禁用词表 — 写作时一键打开</p>
+      <p className="mt-2 text-sm leading-6 text-gray-500">模板与选题 — 写作时一键打开</p>
       <div className="mt-5 grid gap-3">
-        <MaterialRow Icon={RouteIcon} title="赛道配置" desc="主分类 + 情节词库，含受众画像、套路、禁忌" count="24+33" to="/tracks" />
-        <MaterialRow Icon={BookOpen} title="Playbook 写作手册" desc="去 AI 味 / 钩子 / 反转 / 精修清单" count="11" to="/playbook" />
         <MaterialRow Icon={FilePlus} title="项目模板" desc="立项时一键复制" count="1" to="/seeds" />
-        <MaterialRow Icon={Ban} title="禁用词表" desc="写作 + 发布检查双重扫描" count="217" to="/playbook" />
       </div>
     </section>
   )
@@ -929,22 +914,6 @@ function SkillResources() {
           desc="6 个阶段的入场/出场标准、字数硬底线、阶段迁移规则。"
           cta="打开 SOP.md"
           href="/SOP.md"
-        />
-        <SkillCard
-          Icon={BookOpenCheck}
-          iconBg="bg-emerald-50 text-emerald-600"
-          title="Playbook 写作手册"
-          desc="去 AI 味 / 代入感 / 钩子 / 反转 / 精修 / 禁用词表 共 11 篇。"
-          cta="打开 playbook/"
-          href="/playbook"
-        />
-        <SkillCard
-          Icon={Terminal}
-          iconBg="bg-violet-50 text-violet-600"
-          title="赛道库"
-          desc="主分类 + 情节词库，以及死局公式、常见反杀、标签体系。立项前先选赛道。"
-          cta="打开赛道库"
-          href="/tracks"
         />
       </div>
     </section>

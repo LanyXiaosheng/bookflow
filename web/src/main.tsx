@@ -17,8 +17,6 @@ import QuickRetro from './pages/QuickRetro'
 import AccountReview from './pages/AccountReview'
 import Stub from './pages/Stub'
 import Settings from './pages/Settings'
-import Tracks from './pages/Tracks'
-import Playbook from './pages/Playbook'
 import Auth from './pages/Auth'
 import { ConfirmProvider } from './components/ConfirmDialog'
 import RequireAuth from './components/RequireAuth'
@@ -51,8 +49,6 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/review" element={<RequireAuth><Review /></RequireAuth>} />
               <Route path="/review/quick" element={<RequireAuth><QuickRetro /></RequireAuth>} />
               <Route path="/account-review" element={<RequireAuth><AccountReview /></RequireAuth>} />
-              <Route path="/tracks" element={<Tracks />} />
-              <Route path="/playbook" element={<Playbook />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/auth" element={<Auth />} />
               <Route path="*" element={<Stub />} />

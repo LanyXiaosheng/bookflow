@@ -12,6 +12,11 @@ export default defineConfig({
     headless: true,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
+    // Chromium 148 起默认开启 Local Network Access 检查：开启 page.route 拦截后，
+    // 对 127.0.0.1 的模块请求会被 LNA 拦截（本机存在系统级 HTTP 代理时尤甚），
+    // 返回 JSON 错误页 → "MIME type application/json" → 整页白屏、所有 testid 找不到。
+    // 关掉该检查让本地 dev server 的模块正常加载。
+    launchOptions: { args: ['--disable-features=LocalNetworkAccessChecks'] },
   },
   webServer: [
     {

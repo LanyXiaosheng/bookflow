@@ -3,11 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowRight,
-  BookOpen,
   Check,
   ChevronLeft,
   ClipboardCheck,
-  ExternalLink,
   Loader2,
   Plus,
   Rocket,
@@ -322,7 +320,6 @@ export default function Write() {
                 <p className="text-xs text-gray-400">先选一章。</p>
               )}
             </div>
-            <PlaybookLinks />
           </aside>
         </div>
       </main>
@@ -415,35 +412,6 @@ function QaBanner({ result, onClose }: { result: PublishQaResult; onClose: () =>
             <X className="h-4 w-4" />
           </button>
         </div>
-      </div>
-    </div>
-  )
-}
-
-const PLAYBOOK_LINKS = [
-  { label: '去 AI 味 · 短句节奏', color: 'text-amber-600' },
-  { label: '爆点节奏 · 高潮设计', color: 'text-emerald-600' },
-  { label: '代入感 · 场景优先', color: 'text-blue-600' },
-  { label: '钩子 · 章尾悬念', color: 'text-violet-600' },
-]
-
-function PlaybookLinks() {
-  return (
-    <div className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
-      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-900">Playbook 参考</h3>
-        <a href="/playbook" className="text-xs text-blue-600 hover:underline">全部</a>
-      </div>
-      <div className="p-2 space-y-0.5">
-        {PLAYBOOK_LINKS.map((l) => (
-          <a key={l.label} href="/playbook" className="flex items-center justify-between rounded-md px-2.5 py-2 hover:bg-gray-50 text-xs">
-            <span className="flex items-center gap-2 text-gray-700">
-              <BookOpen className={`h-3.5 w-3.5 shrink-0 ${l.color}`} />
-              {l.label}
-            </span>
-            <ExternalLink className="h-3 w-3 text-gray-400 shrink-0" />
-          </a>
-        ))}
       </div>
     </div>
   )

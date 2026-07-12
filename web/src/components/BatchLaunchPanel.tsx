@@ -43,8 +43,8 @@ export default function BatchLaunchPanel({ state, onAbort, onClose, onRetryFaile
       className="mb-5 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200"
       data-testid="batch-launch-panel"
     >
-      <header className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-violet-50 to-sky-50 px-5 py-3">
-        <Rocket className="h-4 w-4 text-violet-600" />
+      <header className="flex items-center gap-3 border-b border-slate-100 bg-slate-50 px-5 py-3">
+        <Rocket className="h-4 w-4 text-slate-600" />
         <h2 className="text-sm font-semibold text-gray-900">
           批量立项 · {done}/{state.items.length} 完成
           {failed > 0 && <span className="ml-2 text-rose-600">{failed} 失败</span>}

@@ -64,10 +64,8 @@ impl SettingsRepo {
 
     /// 读 DB 单行；DB 字段全空时返回 None，外面用 .env 兜底
     pub async fn read(&self) -> Result<Option<Settings>> {
-        self.ensure_image_model_column().await?;
-        self.ensure_duomiapi_key_column().await?;
         let row = sqlx::query_as::<_, (String, String, String, String, String, String, i32)>(
-            "SELECT provider, base_url, api_key, model, COALESCE(image_model, 'gpt-image-2') AS image_model, COALESCE(duomiapi_key, '') AS duomiapi_key, timeout_secs FROM app_settings WHERE id = TRUE",
+            "SELECT provider, base_url, api_key, model, image_model, duomiapi_key, timeout_secs FROM app_settings WHERE id = TRUE",
         )
         .fetch_optional(&self.pool)
         .await
@@ -95,8 +93,6 @@ impl SettingsRepo {
     }
 
     pub async fn upsert(&self, s: &Settings) -> Result<Settings> {
-        self.ensure_image_model_column().await?;
-        self.ensure_duomiapi_key_column().await?;
         let row = sqlx::query_as::<_, (String, String, String, String, String, String, i32)>(
             r#"
             UPDATE app_settings
@@ -125,26 +121,6 @@ impl SettingsRepo {
             duomiapi_key,
             timeout_secs,
         })
-    }
-
-    async fn ensure_image_model_column(&self) -> Result<()> {
-        sqlx::query(
-            "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS image_model TEXT NOT NULL DEFAULT 'gpt-image-2'",
-        )
-        .execute(&self.pool)
-        .await
-        .context("补 image_model 列失败")?;
-        Ok(())
-    }
-
-    async fn ensure_duomiapi_key_column(&self) -> Result<()> {
-        sqlx::query(
-            "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS duomiapi_key TEXT NOT NULL DEFAULT ''",
-        )
-        .execute(&self.pool)
-        .await
-        .context("补 duomiapi_key 列失败")?;
-        Ok(())
     }
 
     /// 写 .env 兜底值进 DB（首次启动用）

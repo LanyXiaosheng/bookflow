@@ -5,7 +5,7 @@ COPY web/package.json web/tsconfig*.json web/vite.config.ts web/postcss* web/tai
 RUN npm install --ignore-scripts
 COPY web/src ./src
 COPY web/public ./public
-RUN npm run build; mkdir -p /app/dist
+RUN npm run build && mkdir -p /app/dist
 
 # ===== build backend =====
 FROM rust:1.86-alpine AS backend-builder
