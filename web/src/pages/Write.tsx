@@ -108,20 +108,20 @@ export default function Write() {
   }
 
   return (
-    <div className="bg-gray-50">
-      <header className="sticky top-14 z-20 bg-white border-b border-gray-200">
+    <div>
+      <header className="sticky top-14 z-20 bg-white/[0.03] backdrop-blur-xl border-b border-white/10">
         <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 h-12 flex items-center gap-3 text-sm">
           <button
             type="button"
             onClick={() => navigate(`/projects/${projectId}`)}
-            className="text-gray-500 hover:text-gray-800 inline-flex items-center gap-1"
+            className="text-gray-400 hover:text-gray-200 inline-flex items-center gap-1 transition-colors"
           >
             <ChevronLeft className="h-4 w-4" /> 返回
           </button>
-          <span className="text-gray-300">/</span>
-          <span className="font-semibold text-gray-900 truncate">{project.data?.title ?? '…'}</span>
-          <span className="text-xs text-gray-400 truncate">{project.data?.track}</span>
-          <span className="ml-auto text-xs text-gray-500">
+          <span className="text-gray-600">/</span>
+          <span className="font-semibold text-white truncate">{project.data?.title ?? '…'}</span>
+          <span className="text-xs text-gray-500 truncate">{project.data?.track}</span>
+          <span className="ml-auto text-xs text-gray-400">
             {chapters.data ? `${chapters.data.length} 章 · 共 ${totalWords(chapters.data)} 字` : ''}
           </span>
           {project.data?.status === 'writing' && (
@@ -131,7 +131,7 @@ export default function Write() {
               disabled={fullBook.progress.running || finalize.isPending}
               data-testid="ai-full-book-btn"
               title="基于项目标题：补齐到 N 章 → 每章 AI 拆段 + AI 写满"
-              className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-violet-500 disabled:opacity-50 transition-colors"
             >
               {fullBook.progress.running ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -147,7 +147,7 @@ export default function Write() {
             <button
               type="button"
               onClick={fullBook.abort}
-              className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+              className="glass-pill inline-flex items-center gap-1 px-2 py-1 text-xs text-gray-300"
               data-testid="ai-full-book-abort-btn"
               title="中断后已写入的段会保留"
             >
@@ -155,7 +155,7 @@ export default function Write() {
             </button>
           )}
           {fullBook.progress.error && (
-            <span className="text-xs text-rose-600 inline-flex items-center gap-1">
+            <span className="text-xs text-rose-300 inline-flex items-center gap-1">
               <TriangleAlert className="h-3 w-3" /> 全篇失败：{fullBook.progress.error}
             </span>
           )}
@@ -173,7 +173,7 @@ export default function Write() {
                         onClick={() => publishQa.mutate()}
                         disabled={publishQa.isPending}
                         data-testid="qa-check-btn"
-                        className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                        className="glass-pill inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium text-gray-200 disabled:opacity-50"
                       >
                         {publishQa.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ClipboardCheck className="h-3 w-3" />}
                         QA 自检
@@ -203,8 +203,8 @@ export default function Write() {
                     }
                     className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 ${
                       enough
-                        ? 'bg-emerald-600 hover:bg-emerald-700'
-                        : 'bg-gray-300 cursor-not-allowed'
+                        ? 'bg-emerald-600 hover:bg-emerald-500'
+                        : 'bg-white/10 text-gray-500 cursor-not-allowed'
                     }`}
                     data-testid="finalize-btn"
                   >
@@ -223,7 +223,7 @@ export default function Write() {
             </>
           )}
           {finalize.isError && (
-            <span className="text-xs text-rose-600 inline-flex items-center gap-1">
+            <span className="text-xs text-rose-300 inline-flex items-center gap-1">
               <TriangleAlert className="h-3 w-3" />
               定稿失败：{(finalize.error as { response?: { data?: { detail?: string } }; message?: string }).response?.data?.detail ?? (finalize.error as Error).message}
             </span>
@@ -240,14 +240,14 @@ export default function Write() {
       <main className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[240px_minmax(0,1fr)_300px]">
           {/* 左栏：章节列表 */}
-          <aside className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-3 h-fit">
+          <aside className="glass-card p-3 h-fit">
             <header className="flex items-center mb-2">
-              <span className="text-sm font-semibold text-gray-700">章节</span>
+              <span className="text-sm font-semibold text-gray-200">章节</span>
               <button
                 type="button"
                 onClick={() => createChapter.mutate()}
                 disabled={createChapter.isPending}
-                className="ml-auto inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                className="glass-pill ml-auto inline-flex items-center gap-1 px-2 py-1 text-xs text-gray-300 disabled:opacity-50"
                 data-testid="new-chapter-btn"
               >
                 {createChapter.isPending ? (
@@ -266,20 +266,20 @@ export default function Write() {
                   <button
                     type="button"
                     onClick={() => setActiveId(c.id)}
-                    className={`w-full text-left rounded-md px-2 py-1.5 text-sm transition ${
+                    className={`w-full text-left rounded-md px-2 py-1.5 text-sm transition-colors ${
                       c.id === activeId
-                        ? 'bg-blue-50 text-blue-700'
-                        : 'text-gray-700 hover:bg-gray-50'
+                        ? 'bg-blue-500/10 text-blue-300 border border-blue-400/20'
+                        : 'text-gray-300 hover:bg-white/5'
                     }`}
                   >
                     <div className="flex items-center gap-1.5">
                       <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded text-[10px] font-semibold ${
-                        explosive ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'
+                        explosive ? 'bg-emerald-500/15 text-emerald-300' : 'bg-white/10 text-gray-400'
                       }`}>
                         {explosive ? '★' : c.idx}
                       </span>
                       <span className="flex-1 truncate">{c.title || '（未命名）'}</span>
-                      <span className="text-[10px] text-gray-400">{c.word_count}字</span>
+                      <span className="text-[10px] text-gray-500">{c.word_count}字</span>
                     </div>
                   </button>
                 </li>
@@ -287,12 +287,12 @@ export default function Write() {
               })}
             </ul>
             {chapters.data?.length === 0 && (
-              <p className="text-xs text-gray-400 px-2 py-3">点「新章」开始第 1 章</p>
+              <p className="text-xs text-gray-500 px-2 py-3">点「新章」开始第 1 章</p>
             )}
           </aside>
 
           {/* 中栏：正文编辑 */}
-          <section className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-5 min-h-[60vh]">
+          <section className="glass-card p-5 min-h-[60vh]">
             {active ? (
               <ChapterEditor
                 key={active.id}
@@ -313,11 +313,11 @@ export default function Write() {
 
           {/* 右栏：AI 助手 + playbook */}
           <aside className="space-y-3 lg:sticky lg:top-[100px] lg:self-start lg:max-h-[calc(100vh-120px)] lg:overflow-y-auto">
-            <div className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4">
+            <div className="glass-card p-4">
               {active ? (
                 <AiPanel chapter={active} disabled={project.data?.status !== 'writing'} />
               ) : (
-                <p className="text-xs text-gray-400">先选一章。</p>
+                <p className="text-xs text-gray-500">先选一章。</p>
               )}
             </div>
           </aside>
@@ -337,23 +337,23 @@ function WordCountBar({ chapters }: { chapters: Chapter[] }) {
   const pct = Math.min(100, Math.round((total / need) * 100))
   const done = total >= need
   return (
-    <div className={`sticky top-[104px] z-10 border-b ${done ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+    <div className={`sticky top-[104px] z-10 border-b backdrop-blur-xl ${done ? 'bg-emerald-500/10 border-emerald-400/20' : 'bg-amber-500/10 border-amber-400/20'}`}>
       <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-1.5">
         <div className="flex items-center gap-3 text-xs overflow-x-auto">
-          {!done && <TriangleAlert className="h-3.5 w-3.5 text-amber-600 shrink-0" />}
-          <span className={`font-medium shrink-0 ${done ? 'text-emerald-800' : 'text-amber-800'}`}>
+          {!done && <TriangleAlert className="h-3.5 w-3.5 text-amber-300 shrink-0" />}
+          <span className={`font-medium shrink-0 ${done ? 'text-emerald-300' : 'text-amber-300'}`}>
             {total.toLocaleString('zh-CN')} / {need.toLocaleString('zh-CN')} 字
           </span>
           <div className="w-20 shrink-0">
-            <div className={`h-1.5 w-full rounded-full overflow-hidden ${done ? 'bg-emerald-100' : 'bg-amber-100'}`}>
+            <div className={`h-1.5 w-full rounded-full overflow-hidden bg-white/10`}>
               <div className={`h-full rounded-full ${done ? 'bg-emerald-500' : 'bg-amber-500'}`} style={{ width: `${pct}%` }} />
             </div>
           </div>
-          <span className="text-gray-300 shrink-0">·</span>
+          <span className="text-gray-600 shrink-0">·</span>
           <div className="flex items-center gap-1 overflow-x-auto">
             {chapters.map((c) => (
               <span key={c.id} className={`px-1.5 py-0.5 rounded font-mono shrink-0 text-[11px] ${
-                c.word_count > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'
+                c.word_count > 0 ? 'bg-emerald-500/15 text-emerald-300' : 'bg-white/10 text-gray-500'
               }`}>
                 {c.idx}:{c.word_count > 0 ? c.word_count : '—'}
               </span>
@@ -373,9 +373,9 @@ const QA_DIMS: Array<{ label: string; sk: keyof PublishQaResult; ck: keyof Publi
   { label: '标题匹配度', sk: 'title_match_score', ck: 'title_match_comment' },
 ]
 const VERDICT_STYLE = {
-  pass:   { wrap: 'bg-emerald-50 border-emerald-200', text: 'text-emerald-900', badge: 'bg-emerald-100 text-emerald-800', label: '通过' },
-  revise: { wrap: 'bg-amber-50 border-amber-200',   text: 'text-amber-900',   badge: 'bg-amber-100 text-amber-800',   label: '需修改' },
-  reject: { wrap: 'bg-rose-50 border-rose-200',     text: 'text-rose-900',    badge: 'bg-rose-100 text-rose-800',     label: '不发' },
+  pass:   { wrap: 'bg-emerald-500/10 border-emerald-400/20', text: 'text-emerald-200', badge: 'bg-emerald-500/15 text-emerald-300', label: '通过' },
+  revise: { wrap: 'bg-amber-500/10 border-amber-400/20',   text: 'text-amber-200',   badge: 'bg-amber-500/15 text-amber-300',   label: '需修改' },
+  reject: { wrap: 'bg-rose-500/10 border-rose-400/20',     text: 'text-rose-200',    badge: 'bg-rose-500/15 text-rose-300',     label: '不发' },
 }
 
 function QaBanner({ result, onClose }: { result: PublishQaResult; onClose: () => void }) {
@@ -463,17 +463,17 @@ function ChapterEditor({ chapter, editable, liveText }: ChapterEditorProps) {
   return (
     <div className="flex flex-col gap-3 h-full">
       <div className="flex items-center gap-2">
-        <span className="font-mono text-xs text-gray-400">#{chapter.idx}</span>
+        <span className="font-mono text-xs text-gray-500">#{chapter.idx}</span>
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="章节标题"
           disabled={!editable || streaming}
-          className="flex-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-sm font-medium outline-none focus:border-blue-500 disabled:bg-gray-50"
+          className="glass-field flex-1 px-2 py-1 text-sm font-medium text-gray-100 outline-none placeholder:text-white/40 focus:border-blue-400/40 disabled:opacity-60"
           data-testid="chapter-title-input"
         />
         {streaming && (
-          <span className="inline-flex items-center gap-1 rounded-md bg-violet-100 px-2 py-0.5 text-[11px] text-violet-700">
+          <span className="inline-flex items-center gap-1 rounded-md bg-violet-500/15 px-2 py-0.5 text-[11px] text-violet-300">
             <Sparkles className="h-3 w-3 animate-pulse" /> AI 写入中
           </span>
         )}
@@ -485,25 +485,25 @@ function ChapterEditor({ chapter, editable, liveText }: ChapterEditorProps) {
           editable ? '在这里写正文，或者用右边 AI 工具拆 beats / 段写。' : '已定稿（只读）'
         }
         readOnly={!editable || streaming}
-        className={`flex-1 min-h-[420px] resize-y rounded-md border bg-white px-3 py-2 font-mono text-[14px] leading-7 outline-none whitespace-pre-wrap ${
-          streaming ? 'border-violet-300 bg-violet-50/30' : 'border-gray-200 focus:border-blue-500'
-        } disabled:bg-gray-50`}
+        className={`flex-1 min-h-[420px] resize-y rounded-md border px-3 py-2 font-mono text-[14px] leading-7 text-gray-100 outline-none whitespace-pre-wrap placeholder:text-white/40 ${
+          streaming ? 'border-violet-400/30 bg-violet-500/[0.07]' : 'border-white/10 bg-white/[0.02] focus:border-blue-400/40'
+        }`}
         data-testid="chapter-body-textarea"
       />
-      <footer className="flex items-center gap-3 text-xs text-gray-500">
+      <footer className="flex items-center gap-3 text-xs text-gray-400">
         <span data-testid="chapter-wc">
-          字数 <span className="font-mono font-semibold text-gray-900">{wc}</span>
+          字数 <span className="font-mono font-semibold text-white">{wc}</span>
         </span>
-        {streaming && <span className="text-violet-600">AI 流式生成中…</span>}
+        {streaming && <span className="text-violet-300">AI 流式生成中…</span>}
         {!streaming && savedAt && (
-          <span className="text-emerald-600">已保存 {savedAt.toLocaleTimeString()}</span>
+          <span className="text-emerald-300">已保存 {savedAt.toLocaleTimeString()}</span>
         )}
         {editable && !streaming && (
           <button
             type="button"
             onClick={() => save.mutate()}
             disabled={!dirty || save.isPending}
-            className="ml-auto inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-40"
+            className="ml-auto inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-40 transition-colors"
             data-testid="save-chapter-btn"
           >
             {save.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
@@ -648,7 +648,7 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
 
   return (
     <div className="flex flex-col gap-3 text-sm">
-      <header className="flex items-center gap-1 text-violet-700">
+      <header className="flex items-center gap-1 text-violet-300">
         <Sparkles className="h-4 w-4" />
         <span className="font-semibold">AI 辅助</span>
       </header>
@@ -657,7 +657,7 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
         type="button"
         onClick={() => aiBeats.mutate()}
         disabled={disabled || aiBeats.isPending || fullChapter.running || !chapter.title.trim()}
-        className="inline-flex items-center justify-center gap-1 rounded-md bg-violet-600 px-3 py-2 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+        className="inline-flex items-center justify-center gap-1 rounded-md bg-violet-600 px-3 py-2 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-50 transition-colors"
         data-testid="ai-beats-btn"
       >
         {aiBeats.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
@@ -669,7 +669,7 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
         <button
           type="button"
           onClick={stopFullChapter}
-          className="inline-flex items-center justify-center gap-1 rounded-md bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-700"
+          className="inline-flex items-center justify-center gap-1 rounded-md bg-rose-600 px-3 py-2 text-xs font-semibold text-white hover:bg-rose-500 transition-colors"
           data-testid="ai-full-chapter-stop-btn"
           title="停止全章生成，已写好的段落会保留并落库"
         >
@@ -681,7 +681,7 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
           type="button"
           onClick={generateFullChapter}
           disabled={disabled || aiBeats.isPending || !chapter.title.trim()}
-          className="inline-flex items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+          className="inline-flex items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
           data-testid="ai-full-chapter-btn"
           title="基于章节标题：AI 拆 5-7 个 beat → 逐 beat 写一段 → 直接拼到正文末"
         >
@@ -690,7 +690,7 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
         </button>
       )}
       {fullChapter.running && (
-        <p className="text-xs text-emerald-700 inline-flex items-center gap-1" data-testid="ai-full-chapter-progress">
+        <p className="text-xs text-emerald-300 inline-flex items-center gap-1" data-testid="ai-full-chapter-progress">
           <Loader2 className="h-3 w-3 animate-spin" />
           {fullChapter.total > 0
             ? `AI 写第 ${fullChapter.current}/${fullChapter.total} 段…`
@@ -698,25 +698,25 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
         </p>
       )}
       {fullChapter.error && (
-        <p className="text-xs text-rose-600 inline-flex items-center gap-1">
+        <p className="text-xs text-rose-300 inline-flex items-center gap-1">
           <TriangleAlert className="h-3 w-3" /> 全章生成失败：{fullChapter.error}
         </p>
       )}
       {writing && writeStream.retry && (
-        <p className="text-xs text-amber-600 inline-flex items-center gap-1" data-testid="write-retry-status">
+        <p className="text-xs text-amber-300 inline-flex items-center gap-1" data-testid="write-retry-status">
           <Loader2 className="h-3 w-3 animate-spin" /> 上游繁忙，正在重试（{writeStream.retry.attempt}/{writeStream.retry.max}）…
         </p>
       )}
       {writeStream.status === 'error' && (
-        <p className="text-xs text-rose-600 inline-flex items-center gap-1">
+        <p className="text-xs text-rose-300 inline-flex items-center gap-1">
           <TriangleAlert className="h-3 w-3" /> 段落生成失败：{writeStream.error}
         </p>
       )}
       {!chapter.title.trim() && (
-        <p className="text-xs text-gray-400">先写章节标题再拆段。</p>
+        <p className="text-xs text-gray-500">先写章节标题再拆段。</p>
       )}
       {aiBeats.isError && (
-        <p className="text-xs text-rose-600 inline-flex items-center gap-1">
+        <p className="text-xs text-rose-300 inline-flex items-center gap-1">
           <TriangleAlert className="h-3 w-3" /> 拆段失败，可重试
         </p>
       )}
@@ -726,21 +726,21 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
           {beats.map((b) => (
             <article
               key={b.id}
-              className={`rounded-md border p-2 ${
-                activeBeatId === b.id ? 'border-violet-300 bg-violet-50' : 'border-gray-200'
+              className={`rounded-md border p-2 transition-colors ${
+                activeBeatId === b.id ? 'border-violet-400/30 bg-violet-500/15' : 'border-white/10'
               }`}
             >
               <div className="flex items-start gap-2">
-                <span className="font-mono text-[10px] text-gray-400 mt-0.5">{b.id}</span>
+                <span className="font-mono text-[10px] text-gray-500 mt-0.5">{b.id}</span>
                 <div className="flex-1">
-                  <div className="text-xs font-semibold text-gray-900">{b.label}</div>
-                  {b.note && <div className="text-[11px] text-gray-600 mt-0.5 leading-relaxed">{b.note}</div>}
+                  <div className="text-xs font-semibold text-gray-100">{b.label}</div>
+                  {b.note && <div className="text-[11px] text-gray-400 mt-0.5 leading-relaxed">{b.note}</div>}
                 </div>
                 <button
                   type="button"
                   onClick={() => startWrite(b)}
                   disabled={disabled || writing || fullChapter.running}
-                  className="shrink-0 inline-flex items-center gap-1 rounded border border-violet-200 bg-white px-2 py-1 text-[10px] font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+                  className="shrink-0 inline-flex items-center gap-1 rounded border border-violet-400/30 bg-violet-500/10 px-2 py-1 text-[10px] font-medium text-violet-300 hover:bg-violet-500/20 disabled:opacity-50 transition-colors"
                   data-testid={`ai-write-${b.id}`}
                 >
                   {writing && activeBeatId === b.id ? (
@@ -757,11 +757,11 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
       )}
 
       {(draft || writeStream.text) && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3" data-testid="ai-draft">
-          <div className="text-xs text-emerald-700 font-semibold mb-1.5">
+        <div className="rounded-md border border-emerald-400/20 bg-emerald-500/[0.07] p-3" data-testid="ai-draft">
+          <div className="text-xs text-emerald-300 font-semibold mb-1.5">
             AI 草稿（{Array.from(writeStream.text || draft).length} 字）
           </div>
-          <div className="text-[12px] leading-6 text-gray-800 whitespace-pre-wrap">
+          <div className="text-[12px] leading-6 text-gray-200 whitespace-pre-wrap">
             {writeStream.text || draft}
             {writing && <span className="inline-block w-2 h-4 bg-emerald-400 align-text-bottom animate-pulse ml-0.5" />}
           </div>
@@ -770,7 +770,7 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
               type="button"
               onClick={() => adopt.mutate()}
               disabled={adopt.isPending || writing}
-              className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
               data-testid="adopt-draft-btn"
             >
               {adopt.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ArrowRight className="h-3 w-3" />}
@@ -782,7 +782,7 @@ function AiPanel({ chapter, disabled }: AiPanelProps) {
                 writeStream.abort()
                 setDraft('')
               }}
-              className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+              className="glass-pill inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs text-gray-300"
             >
               {writing ? '停止' : '丢弃'}
             </button>

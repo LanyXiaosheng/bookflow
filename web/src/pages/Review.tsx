@@ -291,15 +291,15 @@ export default function Review() {
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <Link
           to="/"
-          className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800"
+          className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-200"
         >
           <ArrowLeft className="h-4 w-4" />
           返回看板
         </Link>
-        <h1 className="text-2xl font-semibold text-gray-900">复盘</h1>
+        <h1 className="text-2xl font-semibold text-white">复盘</h1>
         <Link
           to="/review/quick"
-          className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+          className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-500"
         >
           <Zap className="h-3.5 w-3.5" />
           快捷复盘
@@ -307,12 +307,12 @@ export default function Review() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+        <aside className="glass-card p-4">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold text-gray-900">待复盘</h2>
-            <span className="text-xs text-gray-500">{pending.data?.length ?? 0} 条</span>
+            <h2 className="text-sm font-semibold text-white">待复盘</h2>
+            <span className="text-xs text-gray-400">{pending.data?.length ?? 0} 条</span>
           </div>
-          {pending.isLoading && <p className="mt-4 text-sm text-gray-500">加载中…</p>}
+          {pending.isLoading && <p className="mt-4 text-sm text-gray-400">加载中…</p>}
           {pending.isError && <p className="mt-4 text-sm text-rose-600">待复盘加载失败</p>}
           {!pending.isLoading && !pending.isError && (
             <ul className="mt-4 space-y-2" data-testid="review-pending-list">
@@ -326,18 +326,18 @@ export default function Review() {
                       type="button"
                       onClick={() => setSelectedKey(pendingKey(item))}
                       className={[
-                        'w-full rounded-lg border px-3 py-3 text-left transition',
+                        'w-full rounded-lg border px-3 py-3 text-left transition-colors',
                         active
-                          ? 'border-blue-300 bg-blue-50'
-                          : 'border-gray-200 bg-gray-50 hover:border-gray-300 hover:bg-white',
+                          ? 'border-blue-400/30 bg-blue-500/10'
+                          : 'border-white/[0.06] bg-white/[0.02] hover:border-white/15 hover:bg-white/[0.06]',
                       ].join(' ')}
                     >
-                      <div className="text-sm font-medium text-gray-900 line-clamp-2">{item.title}</div>
-                      <div className="mt-1 text-xs text-gray-500">
+                      <div className="text-sm font-medium text-white line-clamp-2">{item.title}</div>
+                      <div className="mt-1 text-xs text-gray-400">
                         {stageLabel(item.stage)}
                       </div>
                       <TrackPills track={item.track} compact />
-                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-gray-500">
+                      <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-gray-400">
                         <span>{statusLabel(item.status)} {formatDate(item.published_at)}</span>
                         <span>{item.total_words} 字</span>
                         <span>{item.data_recorded ? '已录数据' : '待录数据'}</span>
@@ -347,7 +347,7 @@ export default function Review() {
                 )
               })}
               {pending.data?.length === 0 && (
-                <li className="rounded-lg border border-dashed border-gray-200 px-3 py-8 text-center text-sm text-gray-500">
+                <li className="rounded-lg border border-dashed border-white/10 px-3 py-8 text-center text-sm text-gray-400">
                   暂无待复盘项目
                 </li>
               )}
@@ -355,9 +355,9 @@ export default function Review() {
           )}
         </aside>
 
-        <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+        <section className="glass-card p-5">
           {!selectedPending && !pending.isLoading && (
-            <div className="rounded-lg border border-dashed border-gray-200 px-4 py-12 text-center text-sm text-gray-500">
+            <div className="rounded-lg border border-dashed border-white/10 px-4 py-12 text-center text-sm text-gray-400">
               暂无可复盘项目
             </div>
           )}
@@ -365,16 +365,16 @@ export default function Review() {
           {selectedPending && (
             <>
               <header
-                className="rounded-lg border border-gray-100 bg-gray-50 p-4"
+                className="glass-inset p-4"
                 data-testid="review-project-summary"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-xs font-medium text-blue-600">
+                    <div className="text-xs font-medium text-blue-300">
                       {stageLabel(selectedPending.stage)}
                     </div>
-                    <h2 className="mt-1 text-xl font-semibold text-gray-900">{selectedPending.title}</h2>
-                    <div className="mt-2 flex flex-wrap gap-3 text-sm text-gray-500">
+                    <h2 className="mt-1 text-xl font-semibold text-white">{selectedPending.title}</h2>
+                    <div className="mt-2 flex flex-wrap gap-3 text-sm text-gray-400">
                       <TrackPills track={selectedPending.track} compact />
                       <span>{selectedPending.total_words} 字</span>
                       <span>发布时间 {formatDate(selectedPending.published_at)}</span>
@@ -388,7 +388,7 @@ export default function Review() {
                   </div>
                   <Link
                     to={`/projects/${selectedPending.project_id}`}
-                    className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-white"
+                    className="glass-pill inline-flex items-center gap-1 px-3 py-1.5 text-sm"
                     data-testid="review-project-detail-link"
                   >
                     项目详情
@@ -406,7 +406,7 @@ export default function Review() {
                     min="0"
                     value={form.show_count}
                     onChange={(e) => updateForm({ show_count: e.target.value })}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="阅读量" htmlFor="review-read-count">
@@ -417,7 +417,7 @@ export default function Review() {
                     min="0"
                     value={form.read_count}
                     onChange={(e) => updateForm({ read_count: e.target.value })}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="点击率" htmlFor="review-completion-rate">
@@ -430,7 +430,7 @@ export default function Review() {
                     step="0.001"
                     value={form.completion_rate}
                     onChange={(e) => updateForm({ completion_rate: e.target.value })}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="评论数" htmlFor="review-comment-count">
@@ -441,7 +441,7 @@ export default function Review() {
                     min="0"
                     value={form.comment_count}
                     onChange={(e) => updateForm({ comment_count: e.target.value })}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="点赞数" htmlFor="review-like-count">
@@ -452,7 +452,7 @@ export default function Review() {
                     min="0"
                     value={form.like_count}
                     onChange={(e) => updateForm({ like_count: e.target.value })}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="书架量" htmlFor="review-library-count">
@@ -463,7 +463,7 @@ export default function Review() {
                     min="0"
                     value={form.library_count}
                     onChange={(e) => updateForm({ library_count: e.target.value })}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="互动量" htmlFor="review-engagement-count">
@@ -474,7 +474,7 @@ export default function Review() {
                     min="0"
                     value={form.engagement_count}
                     onChange={(e) => updateForm({ engagement_count: e.target.value })}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
               </div>
@@ -486,7 +486,7 @@ export default function Review() {
                     data-testid="review-overall-result"
                     value={form.overall_result}
                     onChange={(e) => updateForm({ overall_result: e.target.value as '' | ReviewResult })}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   >
                     <option value="">未选择</option>
                     <option value="爆">爆</option>
@@ -504,7 +504,7 @@ export default function Review() {
                     value={form.title_result}
                     onChange={(e) => updateForm({ title_result: e.target.value })}
                     rows={3}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="开头结论" htmlFor="review-hook-result">
@@ -514,7 +514,7 @@ export default function Review() {
                     value={form.hook_result}
                     onChange={(e) => updateForm({ hook_result: e.target.value })}
                     rows={3}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="情绪结论" htmlFor="review-emotion-result">
@@ -524,7 +524,7 @@ export default function Review() {
                     value={form.emotion_result}
                     onChange={(e) => updateForm({ emotion_result: e.target.value })}
                     rows={3}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="成功原因" htmlFor="review-success-reason">
@@ -534,7 +534,7 @@ export default function Review() {
                     value={form.success_reason}
                     onChange={(e) => updateForm({ success_reason: e.target.value })}
                     rows={3}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="失败原因" htmlFor="review-failure-reason">
@@ -544,7 +544,7 @@ export default function Review() {
                     value={form.failure_reason}
                     onChange={(e) => updateForm({ failure_reason: e.target.value })}
                     rows={3}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="是否继续这个赛道" htmlFor="review-continue-track">
@@ -554,7 +554,7 @@ export default function Review() {
                     value={form.continue_track}
                     onChange={(e) => updateForm({ continue_track: e.target.value })}
                     rows={3}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="可复用结论" htmlFor="review-reusable-conclusion">
@@ -564,7 +564,7 @@ export default function Review() {
                     value={form.reusable_conclusion}
                     onChange={(e) => updateForm({ reusable_conclusion: e.target.value })}
                     rows={3}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
                 <Field label="下一步动作" htmlFor="review-next-action">
@@ -574,7 +574,7 @@ export default function Review() {
                     value={form.next_action}
                     onChange={(e) => updateForm({ next_action: e.target.value })}
                     rows={3}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-400"
+                    className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                   />
                 </Field>
               </div>
@@ -584,7 +584,7 @@ export default function Review() {
                   type="button"
                   onClick={() => aiAnalyze.mutate()}
                   disabled={aiAnalyze.isPending}
-                  className="inline-flex items-center gap-2 rounded-md border border-purple-300 bg-purple-50 px-4 py-2 text-sm font-medium text-purple-700 hover:bg-purple-100 disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-md border border-violet-400/30 bg-violet-500/15 px-4 py-2 text-sm font-medium text-violet-300 transition-colors hover:bg-violet-500/25 disabled:opacity-50"
                   data-testid="review-ai-analyze-btn"
                 >
                   {aiAnalyze.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
@@ -618,7 +618,7 @@ export default function Review() {
                   </span>
                 )}
                 {selectedReview?.updated_at && (
-                  <span className="text-sm text-gray-500">
+                  <span className="text-sm text-gray-400">
                     最近更新 {formatDate(selectedReview.updated_at)}
                   </span>
                 )}
@@ -642,7 +642,7 @@ function Field({
 }) {
   return (
     <label htmlFor={htmlFor} className="block">
-      <div className="mb-1 text-sm font-medium text-gray-700">{label}</div>
+      <div className="mb-1 text-sm font-medium text-gray-200">{label}</div>
       {children}
     </label>
   )

@@ -37,32 +37,32 @@ export default function Settings() {
   return (
     <main className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
       <header className="mb-6 sm:mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">设置</h1>
-        <p className="mt-2 text-sm text-gray-500">
+        <h1 className="text-3xl font-bold text-white">设置</h1>
+        <p className="mt-2 text-sm text-gray-400">
           配置选题加速 / AI 写作 / 去 AI 味要用的大模型 API。改完保存即生效，不用重启。
         </p>
       </header>
 
-      <section className="overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-gray-200">
-        <div className="flex items-start gap-3 border-b border-gray-100 px-4 py-4 sm:items-center sm:px-6">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+      <section className="glass-card overflow-hidden">
+        <div className="flex items-start gap-3 border-b border-white/10 px-4 py-4 sm:items-center sm:px-6">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500/15 text-blue-300">
             <Brain className="h-5 w-5" />
           </div>
           <div className="min-w-0">
-            <h2 className="text-lg font-semibold text-gray-900">LLM API 接入</h2>
-            <p className="mt-1 text-xs text-gray-500">
+            <h2 className="text-lg font-semibold text-white">LLM API 接入</h2>
+            <p className="mt-1 text-xs text-gray-400">
               支持 Anthropic Messages 协议 / OpenAI Chat Completions 兼容协议
             </p>
           </div>
         </div>
 
         {settings.isLoading && (
-          <div className="flex items-center gap-2 px-4 py-10 text-sm text-gray-500 sm:px-6">
+          <div className="flex items-center gap-2 px-4 py-10 text-sm text-gray-400 sm:px-6">
             <Loader2 className="h-4 w-4 animate-spin" /> 加载中
           </div>
         )}
         {settings.isError && (
-          <div className="m-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 sm:m-6">
+          <div className="m-4 rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-3 text-sm text-red-300 sm:m-6">
             加载失败：{(settings.error as Error)?.message}
           </div>
         )}
@@ -74,8 +74,8 @@ export default function Settings() {
         )}
       </section>
 
-      <section className="mt-6 overflow-hidden rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600 sm:p-5">
-        <div className="flex items-center gap-2 font-medium text-gray-900">
+      <section className="glass-inset mt-6 overflow-hidden p-4 text-sm text-gray-400 sm:p-5">
+        <div className="flex items-center gap-2 font-medium text-gray-100">
           <ServerCog className="h-4 w-4" /> 部署提示
         </div>
         <ul className="mt-2 list-disc space-y-1 break-words pl-5">
@@ -84,11 +84,11 @@ export default function Settings() {
             当前服务从 .env 读取初始值并写入数据库；之后所有改动都走数据库，重启后保持新值。
           </li>
           <li>
-            <code className="break-all rounded bg-white px-1.5 py-0.5 text-xs ring-1 ring-gray-200">
+            <code className="break-all rounded bg-white/5 px-1.5 py-0.5 text-xs text-gray-200 ring-1 ring-white/10">
               base_url
             </code>{' '}
             末尾不要带斜杠也不要带{' '}
-            <code className="break-all rounded bg-white px-1.5 py-0.5 text-xs ring-1 ring-gray-200">
+            <code className="break-all rounded bg-white/5 px-1.5 py-0.5 text-xs text-gray-200 ring-1 ring-white/10">
               /v1/...
             </code>
             ，框架会自己补。
@@ -167,7 +167,7 @@ function SettingsForm({
           id="provider"
           value={provider}
           onChange={(e) => setProvider(e.target.value)}
-          className="block min-w-0 w-full max-w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="block min-w-0 w-full max-w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 transition-colors focus:border-white/25 focus:outline-none focus:ring-1 focus:ring-white/25"
         >
           {PROVIDERS.map((p) => (
             <option key={p.value} value={p.value}>
@@ -192,7 +192,7 @@ function SettingsForm({
           }
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
-          className="block min-w-0 w-full max-w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="block min-w-0 w-full max-w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 placeholder:text-white/40 transition-colors focus:border-white/25 focus:outline-none focus:ring-1 focus:ring-white/25"
         />
       </Field>
 
@@ -200,9 +200,9 @@ function SettingsForm({
         {initial.has_api_key && (
           <div
             id="api_key_masked"
-            className="mb-2 inline-flex max-w-full items-center gap-2 break-all rounded-md bg-gray-50 px-2.5 py-1 font-mono text-xs text-gray-600 ring-1 ring-gray-200"
+            className="mb-2 inline-flex max-w-full items-center gap-2 break-all rounded-md bg-white/[0.03] px-2.5 py-1 font-mono text-xs text-gray-400 ring-1 ring-white/10"
           >
-            <Check className="h-3.5 w-3.5 text-emerald-600" />
+            <Check className="h-3.5 w-3.5 text-emerald-300" />
             当前：{initial.api_key_masked}
           </div>
         )}
@@ -213,12 +213,12 @@ function SettingsForm({
             placeholder={initial.has_api_key ? '留空 = 不变；粘贴新值覆盖' : '粘贴新 key'}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            className="block min-w-0 w-full max-w-full rounded-lg border border-gray-300 px-3 py-2 pr-10 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="block min-w-0 w-full max-w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 pr-10 text-sm text-gray-100 placeholder:text-white/40 transition-colors focus:border-white/25 focus:outline-none focus:ring-1 focus:ring-white/25"
           />
           <button
             type="button"
             onClick={() => setShowKey((v) => !v)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
             aria-label={showKey ? '隐藏' : '显示'}
           >
             {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -235,7 +235,7 @@ function SettingsForm({
           list="model-hints"
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          className="block min-w-0 w-full max-w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="block min-w-0 w-full max-w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 placeholder:text-white/40 transition-colors focus:border-white/25 focus:outline-none focus:ring-1 focus:ring-white/25"
         />
         <datalist id="model-hints">
           {(MODEL_HINTS[provider] ?? []).map((m) => (
@@ -252,7 +252,7 @@ function SettingsForm({
           list="image-model-hints"
           value={imageModel}
           onChange={(e) => setImageModel(e.target.value)}
-          className="block min-w-0 w-full max-w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="block min-w-0 w-full max-w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 placeholder:text-white/40 transition-colors focus:border-white/25 focus:outline-none focus:ring-1 focus:ring-white/25"
         />
         <datalist id="image-model-hints">
           {(IMAGE_MODEL_HINTS[provider] ?? []).map((m) => (
@@ -266,8 +266,8 @@ function SettingsForm({
 
       <Field label="多米 API Key" htmlFor="duomiapi_key">
         {initial.duomiapi_key_set && (
-          <div className="mb-2 inline-flex max-w-full items-center gap-2 break-all rounded-md bg-gray-50 px-2.5 py-1 font-mono text-xs text-gray-600 ring-1 ring-gray-200">
-            <Check className="h-3.5 w-3.5 text-emerald-600" />
+          <div className="mb-2 inline-flex max-w-full items-center gap-2 break-all rounded-md bg-white/[0.03] px-2.5 py-1 font-mono text-xs text-gray-400 ring-1 ring-white/10">
+            <Check className="h-3.5 w-3.5 text-emerald-300" />
             当前：{initial.duomiapi_key_masked}
           </div>
         )}
@@ -277,10 +277,10 @@ function SettingsForm({
           placeholder={initial.duomiapi_key_set ? '留空 = 不变；粘贴新值覆盖' : '粘贴多米 API Key'}
           value={duomiapiKey}
           onChange={(e) => setDuomiapiKey(e.target.value)}
-          className="block min-w-0 w-full max-w-full rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="block min-w-0 w-full max-w-full rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 placeholder:text-white/40 transition-colors focus:border-white/25 focus:outline-none focus:ring-1 focus:ring-white/25"
         />
         <p className="mt-1 text-xs text-gray-500">
-          配置后生图走<a href="https://duomiapi.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">多米 API</a>，不受 provider 限制。key 仅以掩码方式回显，不能查看明文。
+          配置后生图走<a href="https://duomiapi.com" target="_blank" rel="noopener noreferrer" className="text-blue-300 underline hover:text-blue-200">多米 API</a>，不受 provider 限制。key 仅以掩码方式回显，不能查看明文。
         </p>
       </Field>
 
@@ -292,16 +292,16 @@ function SettingsForm({
           max={600}
           value={timeoutSecs}
           onChange={(e) => setTimeoutSecs(parseInt(e.target.value, 10) || 60)}
-          className="block w-full max-w-[8rem] rounded-lg border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="block w-full max-w-[8rem] rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 placeholder:text-white/40 transition-colors focus:border-white/25 focus:outline-none focus:ring-1 focus:ring-white/25"
         />
         <p className="mt-1 text-xs text-gray-500">单次 LLM 请求超时。改了下次新建客户端时生效。</p>
       </Field>
 
-      <div className="flex flex-col items-stretch gap-3 border-t border-gray-100 pt-5 sm:flex-row sm:items-center">
+      <div className="flex flex-col items-stretch gap-3 border-t border-white/10 pt-5 sm:flex-row sm:items-center">
         <button
           type="submit"
           disabled={!dirty || save.isPending}
-          className="inline-flex h-10 w-full items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:bg-gray-300 sm:w-auto"
+          className="inline-flex h-10 w-full items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 disabled:bg-white/10 disabled:text-gray-500 sm:w-auto"
         >
           {save.isPending ? (
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -311,12 +311,12 @@ function SettingsForm({
           保存
         </button>
         {save.isSuccess && !save.isPending && (
-          <span className="inline-flex items-center break-words text-sm text-emerald-700">
+          <span className="inline-flex items-center break-words text-sm text-emerald-300">
             <Check className="mr-1 h-4 w-4" /> 已保存并生效
           </span>
         )}
         {save.isError && (
-          <span className="inline-flex items-center break-words text-sm text-red-700">
+          <span className="inline-flex items-center break-words text-sm text-red-300">
             <TriangleAlert className="mr-1 h-4 w-4" />
             {(save.error as Error).message}
           </span>
@@ -337,7 +337,7 @@ function Field({
 }) {
   return (
     <div className="min-w-0">
-      <label htmlFor={htmlFor} className="mb-1.5 block text-sm font-medium text-gray-900">
+      <label htmlFor={htmlFor} className="mb-1.5 block text-sm font-medium text-gray-200">
         {label}
       </label>
       {children}

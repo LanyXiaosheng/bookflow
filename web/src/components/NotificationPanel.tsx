@@ -18,12 +18,12 @@ function categoryLabel(category: NotificationItem['category']): string {
 function levelClass(level: NotificationItem['level']): string {
   switch (level) {
     case 'error':
-      return 'bg-rose-100 text-rose-700'
+      return 'bg-rose-500/15 text-rose-300'
     case 'warning':
-      return 'bg-amber-100 text-amber-700'
+      return 'bg-amber-500/15 text-amber-300'
     case 'info':
     default:
-      return 'bg-sky-100 text-sky-700'
+      return 'bg-sky-500/15 text-sky-300'
   }
 }
 
@@ -61,13 +61,13 @@ export default function NotificationPanel({ onNavigate }: NotificationPanelProps
 
   return (
     <div
-      className="absolute right-0 top-full mt-2 w-[360px] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-xl"
+      className="glass-card absolute right-0 top-full mt-2 w-[360px] overflow-hidden"
       data-testid="notification-panel"
     >
-      <div className="border-b border-gray-100 px-4 py-3">
+      <div className="border-b border-white/10 px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-gray-900">通知中心</div>
+            <div className="text-sm font-semibold text-white">通知中心</div>
             <div className="text-xs text-gray-400">
               未读 {unreadCount} 条
             </div>
@@ -79,7 +79,7 @@ export default function NotificationPanel({ onNavigate }: NotificationPanelProps
             type="button"
             onClick={() => actions.markAllRead.mutate()}
             disabled={batchBusy || unreadCount === 0}
-            className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-md border border-white/10 px-2.5 py-1.5 text-xs text-gray-300 hover:bg-white/5 disabled:opacity-50"
             data-testid="notifications-read-all"
           >
             <CheckCheck className="h-3.5 w-3.5" />
@@ -90,8 +90,8 @@ export default function NotificationPanel({ onNavigate }: NotificationPanelProps
             onClick={() => setUnreadOnly((v) => !v)}
             className={`rounded-md px-2.5 py-1.5 text-xs ${
               unreadOnly
-                ? 'bg-blue-600 text-white'
-                : 'border border-gray-200 text-gray-600 hover:bg-gray-50'
+                ? 'bg-white text-black font-medium'
+                : 'border border-white/10 text-gray-300 hover:bg-white/5'
             }`}
             data-testid="notifications-unread-toggle"
           >
@@ -101,7 +101,7 @@ export default function NotificationPanel({ onNavigate }: NotificationPanelProps
             type="button"
             onClick={() => actions.clearResolved.mutate()}
             disabled={batchBusy}
-            className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-md border border-white/10 px-2.5 py-1.5 text-xs text-gray-300 hover:bg-white/5 disabled:opacity-50"
             data-testid="notifications-clear-resolved"
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -112,12 +112,12 @@ export default function NotificationPanel({ onNavigate }: NotificationPanelProps
 
       <div className="max-h-[420px] overflow-auto px-2 py-2">
         {loading ? (
-          <div className="flex items-center justify-center gap-2 px-4 py-10 text-sm text-gray-500">
+          <div className="flex items-center justify-center gap-2 px-4 py-10 text-sm text-gray-400">
             <Loader2 className="h-4 w-4 animate-spin" />
             加载通知中
           </div>
         ) : items.length === 0 ? (
-          <div className="px-4 py-10 text-center text-sm text-gray-400">
+          <div className="px-4 py-10 text-center text-sm text-gray-500">
             {emptyText}
           </div>
         ) : (
@@ -127,8 +127,8 @@ export default function NotificationPanel({ onNavigate }: NotificationPanelProps
                 key={item.id}
                 className={`rounded-xl border px-3 py-3 ${
                   item.status === 'unread'
-                    ? 'border-blue-200 bg-blue-50/50'
-                    : 'border-gray-200 bg-white'
+                    ? 'border-white/15 bg-white/[0.06]'
+                    : 'border-white/[0.06] bg-white/[0.02]'
                 }`}
                 data-testid="notification-item"
               >
@@ -141,18 +141,18 @@ export default function NotificationPanel({ onNavigate }: NotificationPanelProps
                         {categoryLabel(item.category)}
                       </span>
                       {item.status === 'unread' && (
-                        <span className="rounded-full bg-blue-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                        <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] font-semibold text-black">
                           未读
                         </span>
                       )}
                     </div>
-                    <div className="mt-1 text-sm font-medium text-gray-900">
+                    <div className="mt-1 text-sm font-medium text-white">
                       {item.title}
                     </div>
-                    <div className="mt-1 text-xs leading-5 text-gray-500">
+                    <div className="mt-1 text-xs leading-5 text-gray-400">
                       {item.body}
                     </div>
-                    <div className="mt-2 text-[11px] text-gray-400">
+                    <div className="mt-2 text-[11px] text-gray-500">
                       {formatTime(item.updated_at)}
                     </div>
                   </div>
@@ -165,7 +165,7 @@ export default function NotificationPanel({ onNavigate }: NotificationPanelProps
                         if (item.status === 'unread') actions.markRead.mutate(item.id)
                         onNavigate?.()
                       }}
-                      className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+                      className="inline-flex items-center rounded-md bg-white px-3 py-1.5 text-xs font-medium text-black hover:bg-gray-200"
                       data-testid="notification-primary-action"
                     >
                       {item.action_label ?? '查看'}
@@ -175,7 +175,7 @@ export default function NotificationPanel({ onNavigate }: NotificationPanelProps
                     <button
                       type="button"
                       onClick={() => actions.markRead.mutate(item.id)}
-                      className="rounded-md border border-gray-200 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+                      className="rounded-md border border-white/10 px-3 py-1.5 text-xs text-gray-300 hover:bg-white/5"
                       data-testid="notification-mark-read"
                     >
                       标记已读

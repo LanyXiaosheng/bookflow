@@ -12,7 +12,7 @@ export default function TrackPills({
   return (
     <div className={`flex flex-wrap gap-1.5 ${compact ? '' : 'mt-1'}`} data-testid="track-pills">
       <span
-        className={`inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-blue-700 ${
+        className={`inline-flex items-center rounded-full border border-blue-400/20 bg-blue-500/10 px-2.5 py-1 text-blue-300 ${
           compact ? 'text-[10px]' : 'text-xs'
         } font-medium`}
       >
@@ -21,7 +21,7 @@ export default function TrackPills({
       {plots.map((plot) => (
         <span
           key={plot}
-          className={`inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-violet-700 ${
+          className={`inline-flex items-center rounded-full border border-violet-400/20 bg-violet-500/15 px-2.5 py-1 text-violet-300 ${
             compact ? 'text-[10px]' : 'text-xs'
           } font-medium`}
         >

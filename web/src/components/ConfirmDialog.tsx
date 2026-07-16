@@ -84,23 +84,23 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           <button
             type="button"
             aria-label="关闭"
-            className="absolute inset-0 bg-black/40"
+            className="absolute inset-0 bg-black/60"
             onClick={() => close(false)}
           />
           {/* 弹层 */}
-          <div className="relative w-full max-w-[420px] rounded-lg bg-white shadow-xl ring-1 ring-gray-200">
+          <div className="glass-card relative w-full max-w-[420px]">
             <header className="flex items-start gap-3 px-5 pt-5">
               {tone === 'danger' && (
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-600">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-500/15 text-rose-300">
                   <AlertTriangle className="h-5 w-5" />
                 </span>
               )}
               <div className="flex-1 pt-1">
-                <h2 id="confirm-title" className="text-base font-semibold text-gray-900">
+                <h2 id="confirm-title" className="text-base font-semibold text-white">
                   {pending.title}
                 </h2>
                 {pending.description && (
-                  <div className="mt-1.5 text-sm leading-6 text-gray-600">
+                  <div className="mt-1.5 text-sm leading-6 text-gray-400">
                     {pending.description}
                   </div>
                 )}
@@ -109,17 +109,17 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
                 type="button"
                 aria-label="关闭"
                 onClick={() => close(false)}
-                className="ml-2 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                className="ml-2 rounded p-1 text-gray-400 hover:bg-white/10 hover:text-gray-200"
               >
                 <X className="h-4 w-4" />
               </button>
             </header>
-            <footer className="mt-5 flex items-center justify-end gap-2 border-t border-gray-100 px-5 py-3">
+            <footer className="mt-5 flex items-center justify-end gap-2 border-t border-white/10 px-5 py-3">
               <button
                 ref={cancelBtnRef}
                 type="button"
                 onClick={() => close(false)}
-                className="rounded-md border border-gray-300 bg-white px-4 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="rounded-md border border-white/10 bg-white/[0.05] px-4 py-1.5 text-sm font-medium text-gray-200 hover:bg-white/10"
                 data-testid="confirm-cancel"
               >
                 {pending.cancelText ?? '取消'}
@@ -127,10 +127,10 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
               <button
                 type="button"
                 onClick={() => close(true)}
-                className={`rounded-md px-4 py-1.5 text-sm font-semibold text-white ${
+                className={`rounded-md px-4 py-1.5 text-sm font-semibold ${
                   tone === 'danger'
-                    ? 'bg-rose-600 hover:bg-rose-700'
-                    : 'bg-blue-600 hover:bg-blue-700'
+                    ? 'bg-rose-500/15 text-rose-300 hover:bg-rose-500/25'
+                    : 'bg-blue-600 text-white hover:bg-blue-500'
                 }`}
                 data-testid="confirm-ok"
               >

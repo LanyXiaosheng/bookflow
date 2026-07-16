@@ -4,5 +4,100 @@
 
 html, body, #root {
   height: 100%;
-  background: #f9fafb;
+  background: #0a0a0f;
+  color: #e5e7eb;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+}
+
+/* ── 暗色玻璃设计 token（内页复用）──
+   纯暗底 + 半透明玻璃卡片。深色分层：
+   页面底 #0a0a0f → 卡片 rgba(255,255,255,.04) → 内嵌行 rgba(255,255,255,.02) */
+@layer components {
+  /* 主卡片：玻璃面板 */
+  .glass-card {
+    @apply rounded-2xl border border-white/10 bg-white/[0.04] shadow-[0_1px_0_rgba(255,255,255,0.06)_inset,0_8px_30px_rgba(0,0,0,0.4)] backdrop-blur-xl;
+  }
+  /* 内嵌小块：列表行 / 次级容器 */
+  .glass-inset {
+    @apply rounded-xl border border-white/[0.06] bg-white/[0.02] transition-colors;
+  }
+  .glass-inset-hover {
+    @apply hover:border-white/15 hover:bg-white/[0.06];
+  }
+  /* 胶囊按钮 / 玻璃药丸 */
+  .glass-pill {
+    @apply rounded-full border border-white/10 bg-white/[0.05] text-gray-200 backdrop-blur-md transition-colors hover:border-white/20 hover:bg-white/10;
+  }
+  /* 输入框玻璃 */
+  .glass-field {
+    @apply rounded-xl border border-white/10 bg-white/[0.03] transition-colors focus-within:border-white/25;
+  }
+}
+
+/* ── Cinematic auth scope (登录/落地页专用，不影响内页浅色主题) ── */
+.auth-cinematic {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #000;
+  color: #fff;
+}
+
+/* Liquid glass — 近透明白 + 模糊 + inset 高光 + 渐变描边 */
+.liquid-glass {
+  background: rgba(255, 255, 255, 0.01);
+  background-blend-mode: luminosity;
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  border: none;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  position: relative;
+  overflow: hidden;
+}
+.liquid-glass::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.4px;
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.45) 0%,
+    rgba(255, 255, 255, 0.15) 20%,
+    rgba(255, 255, 255, 0) 40%,
+    rgba(255, 255, 255, 0) 60%,
+    rgba(255, 255, 255, 0.15) 80%,
+    rgba(255, 255, 255, 0.45) 100%
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Blur-fade-up 入场动画（staggered delay 用内联 style 控制） */
+@keyframes blurFadeUp {
+  from {
+    opacity: 0;
+    filter: blur(20px);
+    transform: translateY(40px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+.animate-blur-fade-up {
+  opacity: 0;
+  animation: blurFadeUp 1s ease-out forwards;
+}
+
+/* 底部模糊遮罩：只糊底部，向中间淡出，无暗色渐变 */
+.auth-bottom-blur {
+  -webkit-mask-image: linear-gradient(to top, black 0%, transparent 45%);
+  mask-image: linear-gradient(to top, black 0%, transparent 45%);
 }

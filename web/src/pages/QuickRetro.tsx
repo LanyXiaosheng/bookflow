@@ -275,9 +275,9 @@ function generateActions(result: AnalysisResult): string[] {
 
 function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-      <div className="text-xs font-medium text-gray-500">{label}</div>
-      <div className={`mt-1 text-2xl font-bold ${color || 'text-gray-900'}`}>{value}</div>
+    <div className="glass-card p-4">
+      <div className="text-xs font-medium text-gray-400">{label}</div>
+      <div className={`mt-1 text-2xl font-bold ${color || 'text-white'}`}>{value}</div>
       {sub && <div className="mt-1 text-xs text-gray-400">{sub}</div>}
     </div>
   )
@@ -293,16 +293,16 @@ function MiniTable({
   rows: React.ReactNode[][]
 }) {
   return (
-    <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
-      <div className="border-b border-gray-100 px-4 py-3">
-        <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+    <div className="glass-card">
+      <div className="border-b border-white/10 px-4 py-3">
+        <h3 className="text-sm font-semibold text-white">{title}</h3>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead>
-            <tr className="border-b border-gray-100 bg-gray-50">
+            <tr className="border-b border-white/10 bg-white/[0.02]">
               {headers.map((h) => (
-                <th key={h} className="px-4 py-2 text-xs font-medium text-gray-500">
+                <th key={h} className="px-4 py-2 text-xs font-medium text-gray-400">
                   {h}
                 </th>
               ))}
@@ -310,7 +310,7 @@ function MiniTable({
           </thead>
           <tbody>
             {rows.map((row, i) => (
-              <tr key={i} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
+              <tr key={i} className="border-b border-white/[0.06] last:border-0 hover:bg-white/5">
                 {row.map((cell, j) => (
                   <td key={j} className="px-4 py-2">
                     {cell}
@@ -471,13 +471,13 @@ export default function QuickRetro() {
         <div className="flex flex-wrap items-center gap-3">
           <Link
             to="/review"
-            className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-800"
+            className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-gray-200"
           >
             <ArrowLeft className="h-4 w-4" />
             返回复盘
           </Link>
-          <h1 className="text-2xl font-semibold text-gray-900">快捷复盘</h1>
-          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+          <h1 className="text-2xl font-semibold text-white">快捷复盘</h1>
+          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-300">
             一键抓取 + 自动落库
           </span>
         </div>
@@ -500,7 +500,7 @@ export default function QuickRetro() {
             )
           }
             disabled={saveBatch.isPending}
-            className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50"
             data-testid="quick-retro-save-btn"
           >
             {saveBatch.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -510,8 +510,8 @@ export default function QuickRetro() {
       </div>
 
       {/* Input */}
-      <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-        <label htmlFor="quick-retro-curl" className="block text-sm font-medium text-gray-700 mb-2">
+      <div className="glass-card p-5">
+        <label htmlFor="quick-retro-curl" className="block text-sm font-medium text-gray-200 mb-2">
           方式零：粘贴作品列表 curl（推荐，自动提取 book_id 批量抓详情并补录到 7d）
         </label>
         <textarea
@@ -520,7 +520,7 @@ export default function QuickRetro() {
           value={curlInput}
           onChange={(e) => setCurlInput(e.target.value)}
           placeholder={`curl 'https://fanqienovel.com/api/author/short_article/list/v0/?aid=2503&...' \\\n  -H 'accept: application/json, text/plain, */*' \\\n  -b 'sessionid=...'`}
-          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono outline-none focus:border-blue-400 resize-y"
+          className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm font-mono text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25 resize-y"
         />
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <button
@@ -529,7 +529,7 @@ export default function QuickRetro() {
               if (curlInput.trim()) fanqieFetchFromCurl.mutate(curlInput.trim())
             }}
             disabled={fanqieFetchFromCurl.isPending}
-            className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-50"
           >
             {fanqieFetchFromCurl.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
             解析 curl 并补录 7d
@@ -538,14 +538,14 @@ export default function QuickRetro() {
             <button
               type="button"
               onClick={() => setCurlInput('')}
-              className="text-sm text-gray-500 hover:text-gray-700"
+              className="text-sm text-gray-400 hover:text-gray-200"
             >
               清空 curl
             </button>
           )}
         </div>
         {fanqieFetchFromCurl.isError && (
-          <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <div className="mt-3 rounded-md border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {fanqieFetchFromCurl.error instanceof Error ? fanqieFetchFromCurl.error.message : 'curl 解析/抓取失败'}
           </div>
         )}
@@ -555,8 +555,8 @@ export default function QuickRetro() {
           </div>
         )}
 
-        <div className="mt-4 pt-4 border-t border-gray-100">
-        <label htmlFor="quick-retro-json" className="block text-sm font-medium text-gray-700 mb-2">
+        <div className="mt-4 pt-4 border-t border-white/[0.06]">
+        <label htmlFor="quick-retro-json" className="block text-sm font-medium text-gray-200 mb-2">
           方式一：粘贴 Cookies 一键抓取（先打开番茄后台确认已登录，再粘贴 Cookie 字符串）
         </label>
         <div className="flex gap-2">
@@ -565,7 +565,7 @@ export default function QuickRetro() {
             value={cookiesInput}
             onChange={(e) => setCookiesInput(e.target.value)}
             placeholder="bd_sso_hi3jfd=...; csrf_session_id=...; sessionid=...; passport_csrf_token=..."
-            className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm font-mono outline-none focus:border-blue-400"
+            className="flex-1 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm font-mono text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
           />
           <button
             type="button"
@@ -573,7 +573,7 @@ export default function QuickRetro() {
               if (cookiesInput.trim()) fanqieFetch.mutate(cookiesInput.trim())
             }}
             disabled={fanqieFetch.isPending}
-            className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
           >
             {fanqieFetch.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
             一键抓取
@@ -595,8 +595,8 @@ export default function QuickRetro() {
           </div>
         )}
 
-        <div className="mt-4 pt-4 border-t border-gray-100">
-        <label htmlFor="quick-retro-json" className="block text-sm font-medium text-gray-700 mb-2">
+        <div className="mt-4 pt-4 border-t border-white/10">
+        <label htmlFor="quick-retro-json" className="block text-sm font-medium text-gray-200 mb-2">
           方式二：直接粘贴 JSON 数据
         </label>
         <textarea
@@ -606,14 +606,14 @@ export default function QuickRetro() {
           value={raw}
           onChange={(e) => setRaw(e.target.value)}
           placeholder={`{"item_list": [{"multi_title": ["标题"], "read_count": "123", ...}]}`}
-          className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono outline-none focus:border-blue-400 resize-y"
+          className="w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm font-mono text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25 resize-y"
         />
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <button
             type="button"
             onClick={handleParse}
             disabled={parsing}
-            className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-50"
             data-testid="quick-retro-parse-btn"
           >
             {parsing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
@@ -623,19 +623,19 @@ export default function QuickRetro() {
             <button
               type="button"
               onClick={() => { setRaw(''); setResult(null); setError('') }}
-              className="text-sm text-gray-500 hover:text-gray-700"
+              className="text-sm text-gray-400 hover:text-gray-200"
             >
               清空
             </button>
           )}
         </div>
         {error && (
-          <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700" data-testid="quick-retro-error">
+          <div className="mt-3 rounded-md border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300" data-testid="quick-retro-error">
             {error}
           </div>
         )}
         {saveBatch.isError && (
-          <div className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <div className="mt-3 rounded-md border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
             {saveBatch.error instanceof Error ? saveBatch.error.message : '落库失败'}
           </div>
         )}
@@ -654,8 +654,8 @@ export default function QuickRetro() {
         <div className="mt-6 space-y-6">
           {/* Overview cards */}
           <div>
-            <h2 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
-              <BarChart3 className="h-5 w-5 text-blue-600" />
+            <h2 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
+              <BarChart3 className="h-5 w-5 text-blue-400" />
               概览
             </h2>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
@@ -667,13 +667,13 @@ export default function QuickRetro() {
                 label="数据显示(ON)"
                 value={`${result.dataShownCount}`}
                 sub={`均读 ${fmt(Math.round(result.avgReadsShown))}`}
-                color={result.avgReadsShown > 100 ? 'text-emerald-600' : 'text-gray-900'}
+                color={result.avgReadsShown > 100 ? 'text-emerald-300' : 'text-white'}
               />
               <StatCard
                 label="数据隐藏(OFF)"
                 value={`${result.dataHiddenCount}`}
                 sub={`均读 ${fmt(Math.round(result.avgReadsHidden))}`}
-                color={result.dataHiddenCount > result.dataShownCount ? 'text-amber-600' : 'text-gray-900'}
+                color={result.dataHiddenCount > result.dataShownCount ? 'text-amber-300' : 'text-white'}
               />
             </div>
           </div>
@@ -686,8 +686,8 @@ export default function QuickRetro() {
               rows={result.top5.map((item, i) => {
                 const br = batchResults.get(item.title)
                 return [
-                <span key="r" className="font-medium text-gray-900">{i + 1}</span>,
-                <span key="t" className="text-gray-900 max-w-[200px] truncate block">
+                <span key="r" className="font-medium text-gray-100">{i + 1}</span>,
+                <span key="t" className="text-gray-100 max-w-[200px] truncate block">
                   {matchProject(item.title) ? (
                     <Link
                       to={`/projects/${matchProject(item.title)!.id}`}
@@ -699,11 +699,11 @@ export default function QuickRetro() {
                     item.title
                   )}
                 </span>,
-                <span key="rc" className={item.reads > 100 ? 'font-semibold text-emerald-600' : 'text-gray-600'}>
+                <span key="rc" className={item.reads > 100 ? 'font-semibold text-emerald-300' : 'text-gray-400'}>
                   {fmt(item.reads)}
                 </span>,
-                <span key="wc" className="text-gray-500">{fmt(item.words)}</span>,
-                <span key="fm" className="text-xs text-gray-500">
+                <span key="wc" className="text-gray-400">{fmt(item.words)}</span>,
+                <span key="fm" className="text-xs text-gray-400">
                   {detectFormulas(item.title).join(' · ') || '-'}
                 </span>,
                 <span key="st">
@@ -737,7 +737,7 @@ export default function QuickRetro() {
                 <span key="r" className="font-medium text-gray-400">
                   {result.items.length - result.bottom5.indexOf(item)}
                 </span>,
-                <span key="t" className="text-gray-600 max-w-[200px] truncate block">
+                <span key="t" className="text-gray-300 max-w-[200px] truncate block">
                   {matchProject(item.title) ? (
                     <Link
                       to={`/projects/${matchProject(item.title)!.id}`}
@@ -750,7 +750,7 @@ export default function QuickRetro() {
                   )}
                 </span>,
                 <span key="rc" className="text-red-500">{item.reads}</span>,
-                <span key="wc" className="text-gray-500">{fmt(item.words)}</span>,
+                <span key="wc" className="text-gray-400">{fmt(item.words)}</span>,
                 <span key="ca" className="text-xs text-gray-400">
                   {item.categories.slice(0, 3).join(' / ')}
                 </span>,
@@ -763,8 +763,8 @@ export default function QuickRetro() {
             title="分类标签频次 TOP 10"
             headers={['标签', '出现次数', '覆盖率']}
             rows={result.categoryFreq.map((c) => [
-              <span key="n" className="text-gray-900">{c.name}</span>,
-              <span key="ct" className="font-medium text-gray-700">{c.count}</span>,
+              <span key="n" className="text-gray-100">{c.name}</span>,
+              <span key="ct" className="font-medium text-gray-200">{c.count}</span>,
               <span key="p" className="text-xs text-gray-400">
                 {((c.count / result.items.length) * 100).toFixed(0)}%
               </span>,
@@ -776,10 +776,10 @@ export default function QuickRetro() {
             title="字数分布"
             headers={['区间', '篇数', '占比']}
             rows={result.wordBuckets.map((b) => [
-              <span key="r" className="text-gray-900">{b.range}</span>,
-              <span key="c" className="font-medium text-gray-700">{b.count}</span>,
-              <span key="p" className="text-gray-500">
-                <span className="inline-block w-16 align-middle mr-2">
+              <span key="r" className="text-gray-100">{b.range}</span>,
+              <span key="c" className="font-medium text-gray-200">{b.count}</span>,
+              <span key="p" className="text-gray-400">
+                <span className="inline-block w-16 align-middle mr-2 rounded-full bg-white/10">
                   <span
                     className="block h-1.5 rounded-full bg-blue-500"
                     style={{ width: `${Math.max(b.pct, 2)}%` }}
@@ -795,16 +795,16 @@ export default function QuickRetro() {
             title="标题公式检测（TOP 8 阅读量）"
             headers={['阅读', '标题', '检测到的公式']}
             rows={result.formulaResults.map((f) => [
-              <span key="r" className={f.reads > 100 ? 'font-semibold text-emerald-600' : 'text-gray-600'}>
+              <span key="r" className={f.reads > 100 ? 'font-semibold text-emerald-300' : 'text-gray-300'}>
                 {fmt(f.reads)}
               </span>,
-              <span key="t" className="text-gray-900 max-w-[280px] truncate block">{f.title}</span>,
+              <span key="t" className="text-gray-100 max-w-[280px] truncate block">{f.title}</span>,
               <span key="fm" className="text-xs">
                 {f.formulas.length > 0
                   ? f.formulas.map((tag) => (
                       <span
                         key={tag}
-                        className="mr-1 inline-block rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700"
+                        className="mr-1 inline-block rounded-full bg-blue-500/15 px-2 py-0.5 text-xs font-medium text-blue-300"
                       >
                         {tag}
                       </span>
@@ -815,15 +815,15 @@ export default function QuickRetro() {
           />
 
           {/* Key findings */}
-          <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
-            <div className="border-b border-gray-100 px-4 py-3">
-              <h3 className="text-sm font-semibold text-gray-900">核心发现</h3>
+          <div className="glass-card">
+            <div className="border-b border-white/10 px-4 py-3">
+              <h3 className="text-sm font-semibold text-white">核心发现</h3>
             </div>
             <div className="px-4 py-3">
               <ul className="space-y-2">
                 {generateFindings(result).map((f, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
-                    <span className="mt-0.5 shrink-0 text-blue-500">•</span>
+                  <li key={i} className="flex items-start gap-2 text-sm text-gray-200">
+                    <span className="mt-0.5 shrink-0 text-blue-400">•</span>
                     {f}
                   </li>
                 ))}
@@ -832,14 +832,14 @@ export default function QuickRetro() {
           </div>
 
           {/* Action items */}
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 shadow-sm">
-            <div className="border-b border-emerald-200 px-4 py-3">
-              <h3 className="text-sm font-semibold text-emerald-900">行动建议</h3>
+          <div className="glass-card border-emerald-400/20 bg-emerald-500/[0.07]">
+            <div className="border-b border-emerald-400/20 px-4 py-3">
+              <h3 className="text-sm font-semibold text-emerald-300">行动建议</h3>
             </div>
             <div className="px-4 py-3">
               <ul className="space-y-2">
                 {generateActions(result).map((a, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-emerald-800">
+                  <li key={i} className="flex items-start gap-2 text-sm text-emerald-200">
                     <span className="mt-0.5 shrink-0 font-bold">{i + 1}.</span>
                     {a}
                   </li>
@@ -852,7 +852,7 @@ export default function QuickRetro() {
 
       {/* Empty state */}
       {!result && !error && (
-        <div className="mt-6 rounded-lg border border-dashed border-gray-200 px-4 py-12 text-center text-sm text-gray-400">
+        <div className="mt-6 rounded-lg border border-dashed border-white/10 px-4 py-12 text-center text-sm text-gray-500">
           粘贴番茄作品列表 JSON 数据，点击"解析"查看快捷复盘报告
         </div>
       )}

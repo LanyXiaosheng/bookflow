@@ -61,12 +61,12 @@ const LEGACY_DIM_LABELS: Record<keyof LegacyScore, string> = {
 }
 
 const TRACK_PILL_TONES = [
-  'border-orange-200 bg-orange-50 text-orange-700',
-  'border-green-200 bg-green-50 text-green-700',
-  'border-blue-200 bg-blue-50 text-blue-700',
-  'border-purple-200 bg-purple-50 text-purple-700',
-  'border-rose-200 bg-rose-50 text-rose-700',
-  'border-cyan-200 bg-cyan-50 text-cyan-700',
+  'border-orange-400/30 bg-orange-500/10 text-orange-300',
+  'border-green-400/30 bg-green-500/10 text-green-300',
+  'border-blue-400/30 bg-blue-500/10 text-blue-300',
+  'border-purple-400/30 bg-purple-500/10 text-purple-300',
+  'border-rose-400/30 bg-rose-500/10 text-rose-300',
+  'border-cyan-400/30 bg-cyan-500/10 text-cyan-300',
 ] as const
 
 function toneForIndex(index: number): string {
@@ -79,9 +79,9 @@ function tierOf(total: number): Tier {
 
 const TIER_LABEL: Record<Tier, string> = { greenlight: '立项', backlog: '备选', reject: '不做' }
 const TIER_BG: Record<Tier, string> = {
-  greenlight: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  backlog: 'bg-amber-50 text-amber-700 border-amber-200',
-  reject: 'bg-rose-50 text-rose-700 border-rose-200',
+  greenlight: 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30',
+  backlog: 'bg-amber-500/10 text-amber-300 border-amber-400/30',
+  reject: 'bg-rose-500/10 text-rose-300 border-rose-400/30',
 }
 
 /** 测试垃圾启发式：以「测试 / e2e / smoke / playwright / test」开头 */
@@ -353,48 +353,48 @@ export default function Seeds() {
       />
       {/* AI 批量生成选题（紧凑可折叠） */}
       <section
-        className="mb-5 overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200"
+        className="glass-card mb-5 overflow-hidden"
         data-testid="ai-generate-panel"
       >
         <button
           type="button"
           onClick={() => setAiPanelOpen((v) => !v)}
-          className="flex w-full items-center gap-4 bg-slate-50 px-5 py-4 text-left"
+          className="flex w-full items-center gap-4 bg-white/[0.02] px-5 py-4 text-left transition-colors hover:bg-white/[0.04]"
         >
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-violet-300">
             <Brain className="h-4 w-4" />
           </div>
           <div className="flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-base font-semibold text-gray-900">AI 批量出选题</h2>
-              <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[10px] text-slate-600 shadow-sm">
+              <h2 className="text-base font-semibold text-white">AI 批量出选题</h2>
+              <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[10px] text-gray-400">
                 {track}
               </span>
               {drafts.data && drafts.data.length > 0 && (
-                <span className="text-[11px] text-slate-400">历史 {drafts.data.length} 候选</span>
+                <span className="text-[11px] text-gray-500">历史 {drafts.data.length} 候选</span>
               )}
             </div>
-            <p className="mt-1 text-xs text-slate-500">
+            <p className="mt-1 text-xs text-gray-400">
               先定赛道，再批量生成标题，最后挑高分候选推进立项。
             </p>
           </div>
           {aiPanelOpen ? (
-            <ChevronUp className="h-4 w-4 text-slate-400" />
+            <ChevronUp className="h-4 w-4 text-gray-500" />
           ) : (
-            <ChevronDown className="h-4 w-4 text-slate-400" />
+            <ChevronDown className="h-4 w-4 text-gray-500" />
           )}
         </button>
 
         {aiPanelOpen && (
-          <div className="border-t border-slate-100 px-5 py-5">
+          <div className="border-t border-white/10 px-5 py-5">
             {/* AI 推荐主分类+情节组合 */}
-            <div className="mb-4 rounded-2xl border border-violet-100 bg-violet-50/50 p-4">
+            <div className="mb-4 rounded-2xl border border-violet-400/20 bg-violet-500/[0.07] p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-violet-700">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-violet-300">
                     <Brain className="h-3.5 w-3.5" /> AI 推荐组合
                   </div>
-                  <p className="mt-1 text-xs text-violet-500">
+                  <p className="mt-1 text-xs text-violet-400">
                     不知道做什么？让 AI 按当下热度推荐「主分类 + 情节」组合，点一下直接套用。
                   </p>
                 </div>
@@ -403,7 +403,7 @@ export default function Seeds() {
                   onClick={() => aiRecommendTrack.mutate()}
                   disabled={aiRecommendTrack.isPending}
                   data-testid="ai-recommend-track-btn"
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-violet-500 disabled:opacity-50"
                 >
                   {aiRecommendTrack.isPending ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -414,7 +414,7 @@ export default function Seeds() {
                 </button>
               </div>
               {aiRecommendTrack.isError && (
-                <div className="mt-3 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">
+                <div className="mt-3 flex items-start gap-2 rounded-md border border-rose-400/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">
                   <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   推荐失败：{(aiRecommendTrack.error as Error)?.message}
                 </div>
@@ -424,32 +424,32 @@ export default function Seeds() {
                   {aiRecommendTrack.data.map((rec, i) => (
                     <li
                       key={i}
-                      className="flex flex-col rounded-xl border border-violet-200 bg-white p-3"
+                      className="flex flex-col rounded-xl border border-violet-400/20 bg-violet-500/[0.07] p-3"
                       data-testid={`track-recommend-${i}`}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold text-gray-900">{rec.primary}</span>
+                        <span className="text-sm font-semibold text-white">{rec.primary}</span>
                         {rec.heat && <HeatBadge heat={rec.heat} className="shrink-0" />}
                       </div>
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {rec.plots.map((p) => (
                           <span
                             key={p}
-                            className="inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] text-violet-700"
+                            className="inline-flex items-center rounded-full border border-violet-400/20 bg-violet-500/15 px-2 py-0.5 text-[11px] text-violet-300"
                           >
                             {p}
                           </span>
                         ))}
                       </div>
                       {rec.reason && (
-                        <p className="mt-2 text-[11px] leading-5 text-slate-500 line-clamp-2">
+                        <p className="mt-2 text-[11px] leading-5 text-gray-400 line-clamp-2">
                           {rec.reason}
                         </p>
                       )}
                       <button
                         type="button"
                         onClick={() => applyTrackRecommendation(rec)}
-                        className="mt-2 inline-flex items-center justify-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2.5 py-1.5 text-[11px] font-medium text-violet-700 hover:bg-violet-100"
+                        className="mt-2 inline-flex items-center justify-center gap-1 rounded-md border border-violet-400/30 bg-violet-500/15 px-2.5 py-1.5 text-[11px] font-medium text-violet-300 transition-colors hover:bg-violet-500/25"
                         data-testid={`track-recommend-apply-${i}`}
                       >
                         套用这组
@@ -460,12 +460,12 @@ export default function Seeds() {
               )}
             </div>
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
-              <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <section className="glass-inset p-4">
                 <div className="mb-3">
-                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
                     主分类
                   </div>
-                  <p className="mt-1 text-xs text-slate-400">
+                  <p className="mt-1 text-xs text-gray-500">
                     只能选一个，先定受众和情绪大盘。
                   </p>
                 </div>
@@ -486,7 +486,7 @@ export default function Seeds() {
                       className={`relative inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition ${
                         trackPrimary === value
                           ? `${toneForIndex(index)} ring-2 ring-offset-1 ring-current shadow-sm`
-                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                          : 'border-white/10 bg-white/[0.05] text-gray-300 hover:border-white/20 hover:bg-white/10'
                       }`}
                     >
                       {value}
@@ -495,30 +495,30 @@ export default function Seeds() {
                 </div>
               </section>
 
-              <section className="rounded-2xl border border-violet-100 bg-violet-50/40 p-4">
+              <section className="rounded-2xl border border-violet-400/20 bg-violet-500/[0.07] p-4">
                 <div className="mb-3 flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-700">
+                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">
                       情节标签
                     </div>
-                    <p className="mt-1 text-xs text-violet-500">
+                    <p className="mt-1 text-xs text-violet-400">
                       可多选，补冲突钩子、关系结构和爽点方向。
                     </p>
                   </div>
-                  <span className="inline-flex shrink-0 items-center rounded-full border border-violet-200 bg-white px-2.5 py-1 text-[11px] font-medium text-violet-700">
+                  <span className="inline-flex shrink-0 items-center rounded-full border border-violet-400/30 bg-violet-500/15 px-2.5 py-1 text-[11px] font-medium text-violet-300">
                     已选 {trackPlots.length}
                   </span>
                 </div>
                 <div className="space-y-4">
-                  <div className="rounded-xl border border-violet-100 bg-white/80 p-3" data-testid="track-plot-selected">
+                  <div className="rounded-xl border border-violet-400/20 bg-white/[0.02] p-3" data-testid="track-plot-selected">
                     <div className="mb-2 flex items-center justify-between gap-3">
-                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-600">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-300">
                         已选情节
                       </div>
                       <button
                         type="button"
                         onClick={() => setTrackPlots([defaultPlotForPrimary(trackPrimary)])}
-                        className="text-[11px] text-violet-500 hover:text-violet-700"
+                        className="text-[11px] text-violet-400 hover:text-violet-300"
                         data-testid="track-plot-reset"
                       >
                         重置
@@ -536,7 +536,7 @@ export default function Seeds() {
                             })
                           }}
                           data-testid={`gen-track-plot-${plot}`}
-                          className="inline-flex items-center rounded-full border border-violet-200 bg-violet-100 px-3 py-1.5 text-xs font-medium text-violet-700 ring-2 ring-offset-1 ring-violet-200 transition"
+                          className="inline-flex items-center rounded-full border border-violet-400/30 bg-violet-500/20 px-3 py-1.5 text-xs font-medium text-violet-300 ring-2 ring-offset-1 ring-offset-transparent ring-violet-400/30 transition-colors"
                         >
                           {plot}
                         </button>
@@ -544,8 +544,8 @@ export default function Seeds() {
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-violet-100 bg-white/60 p-3">
-                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-600">
+                  <div className="rounded-xl border border-violet-400/20 bg-white/[0.02] p-3">
+                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-300">
                       可选情节
                     </div>
                     <div className="max-h-52 overflow-y-auto px-1 pt-1 pr-1">
@@ -556,7 +556,7 @@ export default function Seeds() {
                             type="button"
                             onClick={() => setTrackPlots((current) => [...current, plot])}
                             data-testid={`gen-track-plot-${plot}`}
-                            className="inline-flex items-center rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50"
+                            className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:border-white/20 hover:bg-white/10"
                           >
                             {plot}
                           </button>
@@ -568,12 +568,12 @@ export default function Seeds() {
               </section>
             </div>
 
-            <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/[0.02] p-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-600">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-300">
                   当前组合赛道
                 </div>
-                <div className="mt-1 break-all text-sm font-semibold text-slate-900">
+                <div className="mt-1 break-all text-sm font-semibold text-white">
                   {track}
                 </div>
               </div>
@@ -582,7 +582,7 @@ export default function Seeds() {
                 onClick={() => aiGen.mutate(track)}
                 disabled={aiGen.isPending}
                 data-testid="ai-generate-btn"
-                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-500 disabled:opacity-50"
               >
                 {aiGen.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -594,7 +594,7 @@ export default function Seeds() {
             </div>
 
           {aiGen.isError && (
-            <div className="mt-4 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+            <div className="mt-4 flex items-start gap-2 rounded-md border border-rose-400/30 bg-rose-500/10 p-3 text-sm text-rose-300">
               <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
                 <div className="font-medium">生成失败</div>
@@ -604,8 +604,8 @@ export default function Seeds() {
           )}
 
           {aiGen.data && (
-            <div className="mt-6 rounded-2xl border border-violet-100 bg-violet-50/40 p-4">
-              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-violet-700">
+            <div className="mt-6 rounded-2xl border border-violet-400/20 bg-violet-500/[0.07] p-4">
+              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-violet-300">
                 <Wand2 className="h-3.5 w-3.5" /> 本次生成（{aiGen.data.candidates.length}）
               </div>
               <ul className="grid gap-3 lg:grid-cols-2">
@@ -632,8 +632,8 @@ export default function Seeds() {
           {/* 历史候选：全部赛道、按时间倒序，跨刷新和换标签都在。
               已被立项为「已发」/「归档」的标题会被隐藏，不占列表空间。 */}
           {drafts.data && drafts.data.length > 0 && (
-            <div className="mt-6 rounded-2xl border border-slate-100 bg-slate-50/60 p-4">
-              <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+            <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+              <div className="mb-3 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-gray-400">
                 <History className="h-3.5 w-3.5" /> 历史候选 · 全部赛道（{
                   drafts.data.filter((d) =>
                     !aiGen.data?.candidates.some((c) => c.title === d.title) &&
@@ -644,7 +644,7 @@ export default function Seeds() {
                   type="button"
                   onClick={() => backfillHeat.mutate()}
                   disabled={backfillHeat.isPending}
-                  className="ml-1 inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-medium normal-case tracking-normal text-violet-700 hover:bg-violet-100 disabled:opacity-50"
+                  className="ml-1 inline-flex items-center gap-1 rounded-full border border-violet-400/30 bg-violet-500/15 px-2.5 py-1 text-[11px] font-medium normal-case tracking-normal text-violet-300 hover:bg-violet-500/25 disabled:opacity-50"
                   data-testid="backfill-heat-btn"
                   title="给还没有热度的历史候选补全热度+推荐原因（一次最多 60 个，可多次点）"
                 >
@@ -656,20 +656,20 @@ export default function Seeds() {
                   {backfillHeat.isPending ? '补全中…' : '补全历史热度'}
                 </button>
                 {backfillHeat.data && (
-                  <span className="text-[11px] font-medium normal-case tracking-normal text-emerald-600">
+                  <span className="text-[11px] font-medium normal-case tracking-normal text-emerald-300">
                     已补 {backfillHeat.data.updated_titles} 个标题
                   </span>
                 )}
                 {selectedDrafts.size > 0 && (
-                  <span className="ml-2 inline-flex items-center gap-2 rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 normal-case tracking-normal">
-                    <span className="text-[11px] font-medium text-violet-700">
+                  <span className="ml-2 inline-flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-500/15 px-2.5 py-1 normal-case tracking-normal">
+                    <span className="text-[11px] font-medium text-violet-300">
                       已选 {selectedDrafts.size}
                     </span>
                     <button
                       type="button"
                       onClick={runBatchDrafts}
                       disabled={batch.state.running}
-                      className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+                      className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-violet-500 disabled:opacity-50"
                       data-testid="batch-launch-drafts-btn"
                       title="对选中候选先建种子再立项，并发跑全流程"
                     >
@@ -683,7 +683,7 @@ export default function Seeds() {
                     <button
                       type="button"
                       onClick={() => setSelectedDrafts(new Set())}
-                      className="text-[11px] text-violet-500 hover:text-violet-700"
+                      className="text-[11px] text-violet-400 hover:text-violet-300"
                     >
                       清空
                     </button>
@@ -732,11 +732,11 @@ export default function Seeds() {
       </section>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
-        <section className="rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 p-6 lg:sticky lg:top-20">
+        <section className="glass-card p-6 lg:sticky lg:top-20">
           <header className="mb-4 flex flex-wrap items-center gap-2">
-            <Sparkles className="h-5 w-5 text-violet-600" />
-            <h1 className="text-lg font-semibold">选题评分卡</h1>
-            <span className="hidden rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-500 sm:inline-flex">
+            <Sparkles className="h-5 w-5 text-violet-400" />
+            <h1 className="text-lg font-semibold text-white">选题评分卡</h1>
+            <span className="hidden rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-gray-400 sm:inline-flex">
               4 维 · 每维 1-10 · 立项 ≥30 / 备选 ≥22
             </span>
             <button
@@ -745,7 +745,7 @@ export default function Seeds() {
               disabled={aiLaunch.isPending}
               data-testid="ai-launch-btn"
               title={`基于赛道「${track}」让 AI 直接生成最高分选题并立项进入项目明细`}
-              className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-60"
+              className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-violet-600 px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-violet-500 disabled:opacity-60"
             >
               {aiLaunch.isPending ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -756,7 +756,7 @@ export default function Seeds() {
             </button>
           </header>
           {aiLaunch.isError && (
-            <div className="mb-4 flex items-start gap-2 rounded-md border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">
+            <div className="mb-4 flex items-start gap-2 rounded-md border border-rose-400/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">
               <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <div>
                 AI 立项失败：{(aiLaunch.error as Error)?.message}
@@ -765,27 +765,27 @@ export default function Seeds() {
           )}
 
           <label className="block">
-            <span className="text-sm font-medium text-gray-700">脑洞标题</span>
+            <span className="text-sm font-medium text-gray-200">脑洞标题</span>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="例：婚礼彩排那天伴娘群里弹出他和伴娘的开房记录"
-              className={`mt-1 block w-full rounded-md border px-3 py-2 text-sm outline-none ${
-                titleErr ? 'border-rose-300 focus:border-rose-500' : 'border-gray-300 focus:border-blue-500'
+              className={`mt-1 block w-full rounded-md border bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 ${
+                titleErr ? 'border-rose-400/40 focus:border-rose-400' : 'border-white/10 focus:border-white/25'
               }`}
               maxLength={50}
               data-testid="seed-title"
             />
             <div className="mt-1 flex items-center justify-between text-xs">
-              <span className={titleErr ? 'text-rose-600' : 'text-gray-400'}>
+              <span className={titleErr ? 'text-rose-300' : 'text-gray-400'}>
                 {titleErr ?? `${titleLen} / 25`}
               </span>
               <button
                 type="button"
                 onClick={runAiScore}
                 disabled={!title.trim() || !!titleErr || aiScore.isPending}
-                className="inline-flex items-center gap-1 rounded-md border border-violet-300 bg-violet-50 px-2 py-1 text-violet-700 hover:bg-violet-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-1 rounded-md border border-violet-400/30 bg-violet-500/15 px-2 py-1 text-violet-300 transition-colors hover:bg-violet-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
                 data-testid="ai-score-btn"
               >
                 {aiScore.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
@@ -796,11 +796,11 @@ export default function Seeds() {
 
           <div className="mt-4 grid grid-cols-2 gap-3">
             <label className="block">
-              <span className="text-sm font-medium text-gray-700">来源</span>
+              <span className="text-sm font-medium text-gray-200">来源</span>
               <select
                 value={source}
                 onChange={(e) => setSource(e.target.value)}
-                className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+                className="mt-1 block w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
                 data-testid="seed-source"
               >
                 {['脑洞', '爆款标题拆解', '评论区痛点', '对标账号'].map((v) => (
@@ -814,27 +814,27 @@ export default function Seeds() {
           </div>
 
           <label className="block mt-4">
-            <span className="text-sm font-medium text-gray-700">一句话卖点</span>
+            <span className="text-sm font-medium text-gray-200">一句话卖点</span>
             <textarea
               value={whyBuy}
               onChange={(e) => setWhyBuy(e.target.value)}
               rows={2}
               placeholder="谁 + 在什么死局里 + 怎么反杀"
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+              className="mt-1 block w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
               data-testid="seed-why-buy"
             />
             <p className="mt-1 text-xs text-gray-400">格式：角色 + 处境 + 动作</p>
           </label>
 
-          <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+          <div className="mt-4 glass-inset p-4">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">
               当前赛道设定
             </div>
             <TrackPills track={track} />
           </div>
 
           <label className="block mt-4">
-            <span className="text-sm font-medium text-gray-700">主分类</span>
+            <span className="text-sm font-medium text-gray-200">主分类</span>
             <select
               value={trackPrimary}
               onChange={(e) => {
@@ -846,7 +846,7 @@ export default function Seeds() {
                     : current,
                 )
               }}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+              className="mt-1 block w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
               data-testid="seed-track-primary"
             >
               {TRACK_PRIMARY_OPTIONS.map((value) => (
@@ -858,7 +858,7 @@ export default function Seeds() {
           </label>
 
           <label className="block mt-4">
-            <span className="text-sm font-medium text-gray-700">情节（可多选）</span>
+            <span className="text-sm font-medium text-gray-200">情节（可多选）</span>
             <div className="mt-2 flex flex-wrap gap-2" data-testid="seed-track-plot">
               {TRACK_PLOT_OPTIONS.map((value) => {
                 const active = trackPlots.includes(value)
@@ -876,10 +876,10 @@ export default function Seeds() {
                       })
                     }}
                     data-testid={`seed-track-plot-${value}`}
-                    className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                    className={`inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                       active
-                        ? 'border-violet-200 bg-violet-50 text-violet-700'
-                        : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                        ? 'border-violet-400/30 bg-violet-500/15 text-violet-300'
+                        : 'border-white/10 bg-white/[0.03] text-gray-400 hover:bg-white/10 hover:text-gray-200'
                     }`}
                   >
                     {value}
@@ -890,7 +890,7 @@ export default function Seeds() {
           </label>
 
           <label className="block mt-4">
-            <span className="text-sm font-medium text-gray-700">最终赛道</span>
+            <span className="text-sm font-medium text-gray-200">最终赛道</span>
             <input
               type="text"
               value={track}
@@ -899,7 +899,7 @@ export default function Seeds() {
                 setTrackPrimary(parsed.primary as TrackPrimary)
                 setTrackPlots(parsed.plots)
               }}
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+              className="mt-1 block w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-gray-100 outline-none transition-colors placeholder:text-white/40 focus:border-white/25"
               data-testid="seed-track"
             />
             <p className="mt-1 text-xs text-gray-400">
@@ -907,25 +907,25 @@ export default function Seeds() {
             </p>
           </label>
 
-          <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+          <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02]">
+            <div className="flex items-center justify-between border-b border-white/10 px-5 py-3">
               <div>
-                <h3 className="text-sm font-semibold text-gray-900">4 维度评分</h3>
-                <p className="mt-0.5 text-xs text-gray-500">每项 1-10 · 满分 40</p>
+                <h3 className="text-sm font-semibold text-white">4 维度评分</h3>
+                <p className="mt-0.5 text-xs text-gray-400">每项 1-10 · 满分 40</p>
               </div>
               <div className="text-right">
-                <div className={`text-3xl font-bold font-mono ${tier === 'greenlight' ? 'text-emerald-600' : tier === 'backlog' ? 'text-amber-600' : 'text-rose-600'}`} data-testid="score-total">{total}</div>
-                <div className={`text-xs font-semibold ${tier === 'greenlight' ? 'text-emerald-700' : tier === 'backlog' ? 'text-amber-700' : 'text-rose-700'}`} data-testid="tier-label">{TIER_LABEL[tier]}</div>
+                <div className={`text-3xl font-bold font-mono ${tier === 'greenlight' ? 'text-emerald-300' : tier === 'backlog' ? 'text-amber-300' : 'text-rose-300'}`} data-testid="score-total">{total}</div>
+                <div className={`text-xs font-semibold ${tier === 'greenlight' ? 'text-emerald-300' : tier === 'backlog' ? 'text-amber-300' : 'text-rose-300'}`} data-testid="tier-label">{TIER_LABEL[tier]}</div>
               </div>
             </div>
-            <div className="divide-y divide-slate-100">
+            <div className="divide-y divide-white/10">
               {DIM_KEYS.map((k) => (
                 <div key={k} className="grid grid-cols-[1fr_auto_2fr_auto] items-center gap-3 px-5 py-3">
                   <div className="min-w-0">
-                    <div className="text-sm font-medium text-gray-900">{DIM_LABELS[k]}</div>
-                    <div className="mt-0.5 text-xs text-gray-500 truncate">{DIM_DESC[k]}</div>
+                    <div className="text-sm font-medium text-gray-100">{DIM_LABELS[k]}</div>
+                    <div className="mt-0.5 text-xs text-gray-400 truncate">{DIM_DESC[k]}</div>
                   </div>
-                  <span className={`inline-flex h-6 w-6 items-center justify-center rounded-md text-xs font-semibold ${score[k] >= 9 ? 'bg-emerald-100 text-emerald-700' : score[k] >= 7 ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'}`} data-testid={`score-${k}`}>
+                  <span className={`inline-flex h-6 w-6 items-center justify-center rounded-md text-xs font-semibold ${score[k] >= 9 ? 'bg-emerald-500/15 text-emerald-300' : score[k] >= 7 ? 'bg-blue-500/15 text-blue-300' : 'bg-white/[0.06] text-gray-400'}`} data-testid={`score-${k}`}>
                     {score[k]}
                   </span>
                   <input
@@ -942,19 +942,19 @@ export default function Seeds() {
           </div>
 
           {/* 言情向附加 */}
-          <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <div className="border-b border-slate-100 px-5 py-3">
-              <h3 className="text-sm font-semibold text-gray-900">言情向附加</h3>
-              <p className="mt-0.5 text-xs text-gray-500">现言/古言赛道填写</p>
+          <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.02]">
+            <div className="border-b border-white/10 px-5 py-3">
+              <h3 className="text-sm font-semibold text-white">言情向附加</h3>
+              <p className="mt-0.5 text-xs text-gray-400">现言/古言赛道填写</p>
             </div>
             <div className="p-5">
-              <div className="text-sm font-medium text-gray-700 mb-2">类型</div>
+              <div className="text-sm font-medium text-gray-200 mb-2">类型</div>
               <div className="flex flex-wrap gap-2">
                 {(['angsty', 'sweet', 'mixed'] as const).map((t) => {
                   const label = { angsty: '虐爽向', sweet: '甜宠向', mixed: '虐爽转甜宠' }[t]
                   return (
-                    <label key={t} className={`inline-flex cursor-pointer items-center rounded-full border px-3 py-1.5 text-sm transition ${
-                      romanceType === t ? 'border-blue-300 bg-blue-50 font-medium text-blue-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                    <label key={t} className={`inline-flex cursor-pointer items-center rounded-full border px-3 py-1.5 text-sm transition-colors ${
+                      romanceType === t ? 'border-blue-400/30 bg-blue-500/15 font-medium text-blue-300' : 'border-white/10 text-gray-400 hover:bg-white/[0.06]'
                     }`}>
                       <input type="radio" name="romance-type" checked={romanceType === t} onChange={() => setRomanceType(t)} className="mr-1.5 h-3.5 w-3.5" />
                       {label}
@@ -965,12 +965,12 @@ export default function Seeds() {
             </div>
           </div>
 
-          <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4">
+          <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-4">
             <button
               type="button"
               disabled={!canSubmit}
               onClick={onSubmit}
-              className="ml-auto inline-flex h-9 items-center rounded-md bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+              className="ml-auto inline-flex h-9 items-center rounded-md bg-blue-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-blue-500 disabled:bg-white/10 disabled:text-gray-500 disabled:cursor-not-allowed"
               data-testid="submit-seed"
             >
               {create.isPending ? '提交中…' : projectize.isPending ? '立项中…' : tier === 'greenlight' ? '立项 →' : tier === 'backlog' ? '入备选池' : '保存（不立项）'}
@@ -978,30 +978,30 @@ export default function Seeds() {
           </div>
 
           {create.isError && (
-            <p className="mt-3 text-sm text-rose-600 flex items-center gap-1">
+            <p className="mt-3 text-sm text-rose-300 flex items-center gap-1">
               <TriangleAlert className="h-4 w-4" />
               提交失败：{extractErrorMessage(create.error)}
             </p>
           )}
           {create.isSuccess && !create.isPending && (
-            <p className="mt-3 text-sm text-emerald-600 flex items-center gap-1">
+            <p className="mt-3 text-sm text-emerald-300 flex items-center gap-1">
               <Check className="h-4 w-4" />
               已落库
             </p>
           )}
         </section>
 
-        <aside className="rounded-2xl bg-white shadow-sm ring-1 ring-slate-200 p-5 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:sticky lg:top-20">
-          <header className="sticky top-0 z-10 -mx-5 -mt-5 mb-4 space-y-2 border-b border-slate-100 bg-white px-5 pt-5 pb-3">
+        <aside className="glass-card p-5 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:sticky lg:top-20">
+          <header className="sticky top-0 z-10 -mx-5 -mt-5 mb-4 space-y-2 border-b border-white/10 bg-white/[0.03] px-5 pt-5 pb-3 backdrop-blur-xl">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-sm font-semibold text-gray-700">最近选题</h2>
+                <h2 className="text-sm font-semibold text-gray-200">最近选题</h2>
                 <p className="mt-0.5 text-[11px] text-gray-400">
                   {visibleSeeds.length} 条可见
                   {hiddenCount > 0 ? `，已隐藏 ${hiddenCount} 条测试数据` : ''}
                 </p>
               </div>
-              <label className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] text-gray-500 cursor-pointer">
+              <label className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-gray-400 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={hideTestData}
@@ -1012,13 +1012,13 @@ export default function Seeds() {
                 隐藏测试
               </label>
             </div>
-            <div className="rounded-xl bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+            <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] text-gray-400">
               绿灯项目可直接点进项目明细，未立项的种子可继续推进。
             </div>
             {/* 批量立项操作条 */}
             {launchableSeeds.length > 0 && (
               <div className="flex flex-wrap items-center gap-2 rounded-xl border border-violet-100 bg-violet-50/60 px-3 py-2">
-                <label className="inline-flex items-center gap-1.5 text-[11px] font-medium text-violet-700 cursor-pointer">
+                <label className="inline-flex items-center gap-1.5 text-[11px] font-medium text-violet-300 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={allLaunchableSelected}
@@ -1045,7 +1045,7 @@ export default function Seeds() {
                   type="button"
                   onClick={runBatch}
                   disabled={selected.size === 0 || batch.state.running}
-                  className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+                  className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-violet-500 disabled:opacity-50"
                   data-testid="batch-launch-btn"
                   title="并发跑全流程，带失败自动重试"
                 >
@@ -1092,8 +1092,8 @@ export default function Seeds() {
                   }
                   role={clickable ? 'button' : undefined}
                   tabIndex={clickable ? 0 : undefined}
-                  className={`group rounded-md border border-gray-200 p-2 text-xs transition ${
-                    clickable ? 'cursor-pointer hover:border-blue-300 hover:bg-blue-50/40' : 'opacity-70'
+                  className={`group rounded-md border border-white/10 p-2 text-xs transition-colors ${
+                    clickable ? 'cursor-pointer hover:border-blue-400/40 hover:bg-blue-500/[0.08]' : 'opacity-70'
                   }`}
                 >
                   <div>
@@ -1110,7 +1110,7 @@ export default function Seeds() {
                             aria-label={`选择 ${s.title}`}
                           />
                         )}
-                        <span className="font-medium text-gray-900 truncate">{s.title}</span>
+                        <span className="font-medium text-gray-100 truncate">{s.title}</span>
                       </span>
                       <span className={`shrink-0 inline-flex items-center rounded-full border px-1.5 text-[10px] font-semibold ${TIER_BG[s.tier]}`}>
                         {TIER_LABEL[s.tier]}
@@ -1185,13 +1185,13 @@ export default function Seeds() {
           className="absolute inset-0 bg-black/30"
           onClick={() => setDrawer(false)}
         />
-        <aside className="absolute right-0 top-0 h-full w-full sm:w-[420px] bg-white shadow-xl border-l border-gray-200 flex flex-col">
-          <header className="flex items-center gap-2 px-5 py-4 border-b border-gray-200">
-            <Wand2 className="h-4 w-4 text-violet-600" />
-            <h2 className="font-semibold text-gray-900">AI 试评</h2>
+        <aside className="glass-card absolute right-0 top-0 h-full w-full sm:w-[420px] rounded-none border-l border-white/10 flex flex-col">
+          <header className="flex items-center gap-2 px-5 py-4 border-b border-white/10">
+            <Wand2 className="h-4 w-4 text-violet-300" />
+            <h2 className="font-semibold text-white">AI 试评</h2>
             <button
               type="button"
-              className="ml-auto rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              className="ml-auto rounded-md p-1 text-gray-400 transition-colors hover:bg-white/10 hover:text-gray-200"
               onClick={() => setDrawer(false)}
               data-testid="ai-drawer-close"
               aria-label="关闭"
@@ -1201,19 +1201,19 @@ export default function Seeds() {
           </header>
 
           <div className="flex-1 overflow-y-auto px-5 py-4">
-            <p className="text-xs text-gray-500 mb-3">
+            <p className="text-xs text-gray-400 mb-3">
               用 Claude 按 7 维爽文标准给「{title}」打分。
             </p>
 
             {aiScore.isPending && (
-              <div className="flex items-center gap-2 text-sm text-gray-500">
+              <div className="flex items-center gap-2 text-sm text-gray-400">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 AI 评估中（通常 4-10 秒）…
               </div>
             )}
 
             {aiScore.isError && (
-              <div className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+              <div className="rounded-md border border-rose-400/30 bg-rose-500/10 p-3 text-sm text-rose-300">
                 <div className="flex items-center gap-1 font-medium">
                   <TriangleAlert className="h-4 w-4" />
                   调用失败
@@ -1234,10 +1234,10 @@ export default function Seeds() {
             {aiScore.data && (
               <div className="space-y-4" data-testid="ai-result">
                 <div className="flex items-baseline gap-3">
-                  <span className="text-3xl font-bold font-mono text-gray-900" data-testid="ai-total">
+                  <span className="text-3xl font-bold font-mono text-white" data-testid="ai-total">
                     {aiTotal}
                   </span>
-                  <span className="text-sm text-gray-500">/ 40</span>
+                  <span className="text-sm text-gray-400">/ 40</span>
                   {aiTier && (
                     <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${TIER_BG[aiTier]}`}>
                       {TIER_LABEL[aiTier]}
@@ -1248,8 +1248,8 @@ export default function Seeds() {
                 <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
                   {DIM_KEYS.map((k) => (
                     <div key={k} className="flex items-center justify-between">
-                      <span className="text-gray-600">{DIM_LABELS[k]}</span>
-                      <span className="font-mono font-semibold text-gray-900">
+                      <span className="text-gray-400">{DIM_LABELS[k]}</span>
+                      <span className="font-mono font-semibold text-gray-100">
                         {aiScore.data!.score[k]}
                       </span>
                     </div>
@@ -1257,20 +1257,20 @@ export default function Seeds() {
                 </div>
 
                 {aiScore.data.benchmark && (
-                  <div className="rounded-md border border-violet-200 bg-violet-50 p-3 text-xs leading-relaxed text-violet-700" data-testid="ai-benchmark">
+                  <div className="rounded-md border border-violet-400/30 bg-violet-500/10 p-3 text-xs leading-relaxed text-violet-300" data-testid="ai-benchmark">
                     <span className="font-semibold">对标爆款：</span>
                     {aiScore.data.benchmark}
                   </div>
                 )}
 
-                <div className="rounded-md bg-gray-50 border border-gray-200 p-3 text-sm leading-relaxed text-gray-700">
+                <div className="glass-inset p-3 text-sm leading-relaxed text-gray-300">
                   {aiScore.data.rationale}
                 </div>
 
                 {aiScore.data.suggestions.length > 0 && (
                   <div>
-                    <h3 className="text-xs font-semibold text-gray-700 mb-1">优化建议</h3>
-                    <ul className="space-y-1 text-sm text-gray-600 list-disc pl-5">
+                    <h3 className="text-xs font-semibold text-gray-300 mb-1">优化建议</h3>
+                    <ul className="space-y-1 text-sm text-gray-400 list-disc pl-5">
                       {aiScore.data.suggestions.map((s, i) => (
                         <li key={i}>{s}</li>
                       ))}
@@ -1282,18 +1282,18 @@ export default function Seeds() {
           </div>
 
           {aiScore.data && (
-            <footer className="border-t border-gray-200 px-5 py-3 flex gap-2">
+            <footer className="border-t border-white/10 px-5 py-3 flex gap-2">
               <button
                 type="button"
                 onClick={() => setDrawer(false)}
-                className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                className="flex-1 glass-pill px-3 py-2 text-sm font-medium"
               >
                 关闭
               </button>
               <button
                 type="button"
                 onClick={adoptAiScore}
-                className="flex-1 rounded-md bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-700"
+                className="flex-1 rounded-md bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-500"
                 data-testid="ai-adopt"
               >
                 采纳分数
@@ -1358,7 +1358,7 @@ function CandidateCard({
   return (
     <li
       data-testid={`${testIdPrefix}-candidate-${index}`}
-      className={`rounded-2xl border border-slate-200 p-4 ${muted ? 'bg-white' : 'bg-slate-50/70'}`}
+      className={`rounded-2xl border border-white/10 p-4 ${muted ? 'bg-white/[0.02]' : 'bg-white/[0.04]'}`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
@@ -1372,7 +1372,7 @@ function CandidateCard({
               aria-label={`选择 ${title}`}
             />
           )}
-          <h3 className="text-sm font-semibold text-gray-900 leading-6">{title}</h3>
+          <h3 className="text-sm font-semibold text-gray-100 leading-6">{title}</h3>
         </div>
         <span
           className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${TIER_BG[t]}`}
@@ -1390,7 +1390,7 @@ function CandidateCard({
           <HeatBadge heat={heat} />
         </div>
       )}
-      <p className="mt-2 text-xs leading-6 text-slate-500 line-clamp-3">{why_buy}</p>
+      <p className="mt-2 text-xs leading-6 text-gray-400 line-clamp-3">{why_buy}</p>
       {recommendReason && (
         <p
           className="mt-1.5 flex items-start gap-1 text-[11px] leading-5 text-violet-600"
@@ -1404,7 +1404,7 @@ function CandidateCard({
         {dimEntries.map(([label, val]) => (
           <span
             key={label}
-            className="inline-flex items-center rounded-full bg-white px-2 py-0.5 text-[11px] text-slate-600 ring-1 ring-slate-200"
+            className="inline-flex items-center rounded-full bg-white/[0.05] px-2 py-0.5 text-[11px] text-gray-300 ring-1 ring-white/10"
             title={label}
           >
             {label.slice(0, 2)} {val}
@@ -1416,7 +1416,7 @@ function CandidateCard({
           type="button"
           onClick={onAdopt}
           data-testid={`${testIdPrefix}-adopt-${index}`}
-          className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+          className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:border-white/20 hover:bg-white/10"
         >
           <ListPlus className="h-3.5 w-3.5" /> 填入评分卡
         </button>
@@ -1428,10 +1428,10 @@ function CandidateCard({
           title={t === 'reject' ? '评分不足 23 分，先用「填入评分卡」改一下' : ''}
           className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-xs font-semibold shadow-sm ${
             t === 'greenlight'
-              ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+              ? 'bg-emerald-600 text-white hover:bg-emerald-500'
               : t === 'backlog'
-                ? 'bg-amber-600 text-white hover:bg-amber-700'
-                : 'cursor-not-allowed bg-gray-200 text-gray-500'
+                ? 'bg-amber-600 text-white hover:bg-amber-500'
+                : 'cursor-not-allowed bg-white/10 text-gray-500'
           } disabled:opacity-60`}
         >
           {isLaunching ? (

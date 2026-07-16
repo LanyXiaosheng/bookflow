@@ -61,10 +61,10 @@ const PROJECT_STATUS_LABEL: Record<ProjectStatus, string> = {
 }
 
 const PROJECT_STATUS_STYLE: Record<ProjectStatus, string> = {
-  writing: 'border-blue-200 bg-blue-50 text-blue-700',
-  ready: 'border-amber-200 bg-amber-50 text-amber-700',
-  published: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-  archived: 'border-slate-200 bg-slate-50 text-slate-600',
+  writing: 'border-blue-400/20 bg-blue-500/10 text-blue-300',
+  ready: 'border-amber-400/20 bg-amber-500/10 text-amber-300',
+  published: 'border-emerald-400/20 bg-emerald-500/15 text-emerald-300',
+  archived: 'border-white/10 bg-white/[0.04] text-gray-500',
 }
 
 /** 后端只允许单步前进：写作→待发→已发→归档 */
@@ -239,18 +239,18 @@ export default function ProjectDetail() {
   }, [fullPipeline.progress.running, characterSetup, confirmedCharacterSetupVersion])
 
   return (
-    <div className="bg-gray-50">
-      <header className="sticky top-14 z-20 bg-white border-b border-gray-200">
+    <div>
+      <header className="sticky top-14 z-20 bg-white/[0.03] backdrop-blur-xl border-b border-white/10">
         <div className="mx-auto flex min-h-12 max-w-[1200px] flex-wrap items-center gap-2 px-4 py-3 text-sm sm:gap-3 sm:px-6 lg:px-8">
           <Link
             to="/projects"
-            className="inline-flex shrink-0 items-center gap-1 text-gray-500 hover:text-gray-800"
+            className="inline-flex shrink-0 items-center gap-1 text-gray-500 transition-colors hover:text-gray-100"
           >
             <ChevronLeft className="h-4 w-4" /> 返回项目列表
           </Link>
-          <span className="hidden text-gray-300 sm:inline">/</span>
+          <span className="hidden text-gray-400 sm:inline">/</span>
           <div className="min-w-0 flex-1">
-            <div className="truncate font-semibold text-gray-900">
+            <div className="truncate font-semibold text-white">
               {project.data?.title ?? '…'}
             </div>
             <div className="sm:hidden">
@@ -276,7 +276,7 @@ export default function ProjectDetail() {
                     if (to) transition.mutate(to)
                   }}
                   disabled={transition.isPending}
-                  className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  className="glass-pill inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-gray-200 transition-colors disabled:opacity-50"
                   data-testid="project-status-next-btn"
                   title={`推进到「${PROJECT_STATUS_LABEL[nextProjectStatus(project.data.status)!]}」`}
                 >
@@ -299,7 +299,7 @@ export default function ProjectDetail() {
                 project.data?.status !== 'writing'
               }
               title={`串行跑完 6 步：README → 角色设定 → 大纲 → 正文（目标 ${bodyTarget} 章）→ 全书汇总 → 配套素材。已有产物的步骤会跳过。`}
-              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50 sm:flex-none"
+              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50 sm:flex-none"
               data-testid="full-pipeline-btn"
             >
               {fullPipeline.progress.running && !fullPipeline.stale ? (
@@ -328,7 +328,7 @@ export default function ProjectDetail() {
               <button
                 type="button"
                 onClick={fullPipeline.abort}
-                className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 sm:flex-none"
+                className="glass-pill inline-flex flex-1 items-center justify-center gap-1 px-2 py-1.5 text-xs text-gray-300 transition-colors sm:flex-none"
                 data-testid="full-pipeline-abort-btn"
               >
                 中断
@@ -339,7 +339,7 @@ export default function ProjectDetail() {
               onClick={runProjectizeFlow}
               disabled={pipeline.progress.running || fullPipeline.progress.running}
               title="串行重新生成 README → 角色设定，确认后再生成大纲"
-              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50 sm:flex-none"
+              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50 sm:flex-none"
               data-testid="projectize-flow-btn"
             >
               {pipeline.progress.running ? (
@@ -355,7 +355,7 @@ export default function ProjectDetail() {
               <button
                 type="button"
                 onClick={pipeline.abort}
-                className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 sm:flex-none"
+                className="glass-pill inline-flex flex-1 items-center justify-center gap-1 px-2 py-1.5 text-xs text-gray-300 transition-colors sm:flex-none"
                 data-testid="projectize-flow-abort-btn"
               >
                 中断
@@ -363,30 +363,30 @@ export default function ProjectDetail() {
             )}
             <Link
               to={`/projects/${projectId}/write`}
-              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 sm:flex-none"
+              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 sm:flex-none"
             >
               <Pencil className="h-3 w-3" /> 进入写作
             </Link>
           </div>
         </div>
         {transition.isError && (
-          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-600 inline-flex items-center gap-1">
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-300 inline-flex items-center gap-1">
             <TriangleAlert className="h-3 w-3" />
             状态切换失败：{extractErrorMessage(transition.error)}
           </div>
         )}
         {pipeline.progress.error && (
-          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-600 inline-flex items-center gap-1">
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-300 inline-flex items-center gap-1">
             <TriangleAlert className="h-3 w-3" />
             前期方案流失败：{pipeline.progress.error}
           </div>
         )}
         {fullPipeline.progress.error && (
-          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-600 inline-flex items-center gap-1">
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-rose-300 inline-flex items-center gap-1">
             <TriangleAlert className="h-3 w-3" />
             一键全流程中断/失败：{fullPipeline.progress.error}
             {fullPipeline.progress.skipped.length > 0 && (
-              <span className="ml-2 text-gray-400">
+              <span className="ml-2 text-gray-500">
                 （已跳过：
                 {fullPipeline.progress.skipped
                   .map((k) => PIPELINE_STEP_LABELS[k])
@@ -397,7 +397,7 @@ export default function ProjectDetail() {
           </div>
         )}
         {fullPipeline.progress.running && fullPipeline.progress.skipped.length > 0 && (
-          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-gray-500">
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-gray-400">
             已跳过（产物已存在）：
             {fullPipeline.progress.skipped
               .map((k) => PIPELINE_STEP_LABELS[k])
@@ -405,7 +405,7 @@ export default function ProjectDetail() {
           </div>
         )}
         {fullPipeline.progress.running && fullPipeline.stale && (
-          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-amber-600 inline-flex items-center gap-1">
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-amber-300 inline-flex items-center gap-1">
             <TriangleAlert className="h-3 w-3" />
             全流程状态已暂停在
             {fullPipeline.progress.currentKey
@@ -415,7 +415,7 @@ export default function ProjectDetail() {
           </div>
         )}
         {fullPipeline.progress.running && !fullPipeline.stale && fullPipeline.progress.stepRetry && (
-          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-amber-600 inline-flex items-center gap-1">
+          <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 pb-2 text-xs text-amber-300 inline-flex items-center gap-1">
             <RefreshCw className="h-3 w-3 animate-spin" />
             {fullPipeline.progress.currentKey
               ? PIPELINE_STEP_LABELS[fullPipeline.progress.currentKey]
@@ -621,28 +621,28 @@ function WorkflowStrip({
   ]
 
   return (
-    <section className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4">
+    <section className="glass-card p-4">
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-6">
         {steps.map((step, index) => (
           <div
             key={step.label}
             className={`rounded-md border px-3 py-2 ${
               step.done
-                ? 'border-emerald-200 bg-emerald-50'
-                : 'border-gray-200 bg-gray-50'
+                ? 'border-emerald-400/20 bg-emerald-500/[0.07]'
+                : 'border-white/10 bg-white/[0.02]'
             }`}
           >
             <div className="flex items-center gap-2">
               <span
                 className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-semibold ${
-                  step.done ? 'bg-emerald-600 text-white' : 'bg-white text-gray-400 ring-1 ring-gray-200'
+                  step.done ? 'bg-emerald-600 text-white' : 'bg-white/[0.06] text-gray-400 ring-1 ring-white/10'
                 }`}
               >
                 {index + 1}
               </span>
-              <span className="text-xs font-semibold text-gray-900">{step.label}</span>
+              <span className="text-xs font-semibold text-white">{step.label}</span>
             </div>
-            <div className="mt-1 truncate text-[11px] text-gray-500">{step.hint}</div>
+            <div className="mt-1 truncate text-[11px] text-gray-400">{step.hint}</div>
           </div>
         ))}
       </div>
@@ -1085,19 +1085,19 @@ function ArtifactStreamCard({
 
   return (
     <section
-      className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4"
+      className="glass-card p-4"
       data-testid={`${kind}-card`}
     >
       <header className="flex items-center gap-2 mb-3">
-        <Sparkles className="h-4 w-4 text-violet-600" />
+        <Sparkles className="h-4 w-4 text-violet-300" />
         <h2 className="text-sm font-semibold">{title}</h2>
         {showCharCount && displayChars > 0 && (
-          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500">
+          <span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium text-gray-400">
             {displayChars.toLocaleString('zh-CN')} 字
           </span>
         )}
         {artifact && !streaming && (
-          <span className="text-[10px] text-gray-400">v{artifact.version}</span>
+          <span className="text-[10px] text-gray-500">v{artifact.version}</span>
         )}
         {display && copyable && (
           <button
@@ -1107,7 +1107,7 @@ function ArtifactStreamCard({
               setCopyState(ok ? 'done' : 'error')
               window.setTimeout(() => setCopyState('idle'), 1500)
             }}
-            className="ml-auto inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+            className="glass-pill ml-auto inline-flex items-center gap-1 px-3 py-1.5 text-xs text-gray-300 transition-colors"
             data-testid={`copy-${kind}-btn`}
           >
             {copyState === 'done' ? '已复制' : copyState === 'error' ? '复制失败' : '复制'}
@@ -1122,7 +1122,7 @@ function ArtifactStreamCard({
                 `${projectTitle?.trim() || '未命名'}-${title}`,
               )
             }
-            className={`${copyable ? '' : 'ml-auto '}inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50`}
+            className={`glass-pill ${copyable ? '' : 'ml-auto '}inline-flex items-center gap-1 px-3 py-1.5 text-xs text-gray-300 transition-colors`}
             data-testid={`download-${kind}-btn`}
             title={`下载 ${projectTitle?.trim() || '未命名'}-${title}.txt`}
           >
@@ -1135,7 +1135,7 @@ function ArtifactStreamCard({
           onClick={() => sse.start(endpoint)}
           disabled={streaming || disabled}
           title={disabled ? disabledHint : ''}
-          className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+          className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-50"
           data-testid={`ai-${kind}-btn`}
         >
           {streaming ? (
@@ -1149,7 +1149,7 @@ function ArtifactStreamCard({
           <button
             type="button"
             onClick={abortStream}
-            className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+            className="glass-pill inline-flex items-center gap-1 px-3 py-1.5 text-xs text-gray-300 transition-colors"
             data-testid={`ai-${kind}-abort-btn`}
             title="中断当前生成并清除运行状态"
           >
@@ -1166,17 +1166,17 @@ function ArtifactStreamCard({
               sse.start(`${endpoint}?from=${chapterCount}`)
             }}
             disabled={disabled}
-            className="inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100"
+            className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-300 transition-colors hover:bg-amber-500/15"
           >
             中断续传
           </button>
         )}
       </header>
 
-      {disabled && <p className="text-xs text-gray-400 mb-2">{disabledHint}</p>}
+      {disabled && <p className="text-xs text-gray-500 mb-2">{disabledHint}</p>}
       {streaming && (
         <p
-          className="mb-2 inline-flex items-center gap-1 text-xs text-violet-700"
+          className="mb-2 inline-flex items-center gap-1 text-xs text-violet-300"
           data-testid={`${kind}-live-status`}
         >
           <Sparkles className="h-3 w-3 animate-pulse" />
@@ -1186,7 +1186,7 @@ function ArtifactStreamCard({
       )}
       {streaming && sse.retry && (
         <p
-          className="mb-2 inline-flex items-center gap-1 text-xs text-amber-600"
+          className="mb-2 inline-flex items-center gap-1 text-xs text-amber-300"
           data-testid={`${kind}-retry-status`}
         >
           <Loader2 className="h-3 w-3 animate-spin" />
@@ -1194,7 +1194,7 @@ function ArtifactStreamCard({
         </p>
       )}
       {sse.status === 'error' && (
-        <p className="text-xs text-rose-600 inline-flex items-center gap-1 mb-2">
+        <p className="text-xs text-rose-300 inline-flex items-center gap-1 mb-2">
           <TriangleAlert className="h-3 w-3" /> 生成失败：{sse.error}
         </p>
       )}
@@ -1205,7 +1205,7 @@ function ArtifactStreamCard({
           {streaming && <span className="inline-block w-2 h-4 bg-violet-400 align-text-bottom animate-pulse ml-0.5" />}
         </MarkdownPreview>
       ) : (
-        <p className="text-xs text-gray-400">{emptyHint}</p>
+        <p className="text-xs text-gray-500">{emptyHint}</p>
       )}
       {footer && <div className="min-w-0">{footer}</div>}
     </section>
@@ -1358,11 +1358,11 @@ function CharacterSetupCard({
       externalStreaming={externalStreaming}
       footer={
         <div className="mt-3 flex flex-col gap-3 text-xs">
-          <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-3" data-testid="character-name-replace-panel">
+          <div className="rounded-lg border border-blue-400/20 bg-blue-500/[0.07] p-3" data-testid="character-name-replace-panel">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <div className="font-medium text-gray-900">替换角色名称</div>
-                  <div className="mt-1 text-[11px] text-gray-500">
+                  <div className="font-medium text-white">替换角色名称</div>
+                  <div className="mt-1 text-[11px] text-gray-400">
                     从角色设定里识别旧名字，按赛道主分类和情节分类生成本地推荐新名，再预览后统一替换到角色设定、README、大纲、正文、发布稿。
                   </div>
                 </div>
@@ -1373,7 +1373,7 @@ function CharacterSetupCard({
                     setActiveRecommendationName('')
                     previewMutation.reset()
                   }}
-                  className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50"
+                  className="glass-pill px-3 py-1.5 text-xs"
                   data-testid="character-name-replace-toggle"
                 >
                   {replaceOpen ? '收起' : '打开'}
@@ -1382,7 +1382,7 @@ function CharacterSetupCard({
               {replaceOpen && (
                 <div className="mt-3 space-y-3">
                   {!characterSetup && (
-                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                    <div className="rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
                       先生成角色设定，再识别旧角色名。当前还没有可供识别的角色设定正文。
                     </div>
                   )}
@@ -1399,7 +1399,7 @@ function CharacterSetupCard({
                         previewMutation.reset()
                       }}
                       disabled={!readme}
-                      className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                      className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
                       data-testid="character-name-detect-btn"
                     >
                       {!readme ? '等待 README 生成' : '识别旧角色名'}
@@ -1407,7 +1407,7 @@ function CharacterSetupCard({
                   </div>
                   {detected &&
                     detectedCandidates.length === 0 && (
-                      <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                      <div className="rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
                         还没从项目 README 里识别到可替换的旧名字。请先确认 README 里已经出现明确角色名，再继续。
                       </div>
                     )}
@@ -1416,17 +1416,17 @@ function CharacterSetupCard({
                       {mappings.map((item, idx) => (
                         <div
                           key={item.old_name}
-                          className="grid gap-2 rounded-md border border-gray-200 bg-white p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+                          className="grid gap-2 rounded-md border border-white/10 bg-white/[0.02] p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
                         >
-                          <label className="grid gap-1 text-gray-600">
+                          <label className="grid gap-1 text-gray-400">
                             <span>旧名字</span>
                             <input
                               value={item.old_name}
                               readOnly
-                              className="h-10 rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-800"
+                              className="glass-field h-10 px-3 py-2 text-sm text-gray-200"
                               data-testid={`character-name-old-${idx}`}
                             />
-                            <span className="text-[11px] text-gray-400">
+                            <span className="text-[11px] text-gray-500">
                               命中范围：{
                                 summarizeImpacts(item.old_name, {
                                   readme,
@@ -1438,7 +1438,7 @@ function CharacterSetupCard({
                               }
                             </span>
                           </label>
-                          <label className="grid gap-1 text-gray-600">
+                          <label className="grid gap-1 text-gray-400">
                             <span>新名字</span>
                             <input
                               value={item.new_name}
@@ -1450,26 +1450,26 @@ function CharacterSetupCard({
                                   ),
                                 )
                               }}
-                              className="h-10 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800"
+                              className="glass-field h-10 px-3 py-2 text-sm text-gray-200"
                               data-testid={`character-name-new-${idx}`}
                             />
-                            <span className="invisible text-[11px] text-gray-400">
+                            <span className="invisible text-[11px] text-gray-500">
                               命中范围占位
                             </span>
                           </label>
-                          <div className="grid gap-1 text-gray-600">
+                          <div className="grid gap-1 text-gray-400">
                             <span className="invisible">操作</span>
                             <button
                               type="button"
                               onClick={() => {
                                 requestRecommendation(item.old_name)
                               }}
-                              className="h-10 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 hover:bg-gray-100"
+                              className="glass-pill h-10 px-3 py-2 text-xs"
                               data-testid={`character-name-pick-${idx}`}
                             >
                               本地推荐
                             </button>
-                            <span className="invisible text-[11px] text-gray-400">
+                            <span className="invisible text-[11px] text-gray-500">
                               命中范围占位
                             </span>
                           </div>
@@ -1479,18 +1479,18 @@ function CharacterSetupCard({
                   )}
                   {activeRecommendationName &&
                     (recommendationQuery.isLoading || recommendationQuery.isFetching) && (
-                    <div className="rounded-md border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500">
+                    <div className="rounded-md border border-white/10 bg-white/[0.02] px-3 py-2 text-xs text-gray-400">
                       正在为“{activeRecommendationName}”生成本地推荐新名…
                     </div>
                   )}
                   {activeRecommendationName && recommendationQuery.isError && (
-                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                    <div className="rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
                       推荐加载失败：{(recommendationQuery.error as Error).message}。你仍然可以手动填写新名字并继续预览替换。
                     </div>
                   )}
                   {recommendation && (
                     <div
-                      className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700"
+                      className="rounded-md border border-blue-400/20 bg-blue-500/10 px-3 py-2 text-xs text-blue-300"
                       data-testid="character-name-recommendation"
                     >
                       本地推荐：{recommendation.recommended_name} · {recommendation.reason}
@@ -1506,7 +1506,7 @@ function CharacterSetupCard({
                           )
                           setActiveRecommendationName('')
                         }}
-                        className="ml-3 rounded-md border border-blue-200 bg-white px-2 py-1 text-[11px] text-blue-700 hover:bg-blue-50"
+                        className="ml-3 rounded-md border border-blue-400/30 bg-blue-500/10 px-2 py-1 text-[11px] text-blue-300 transition-colors hover:bg-blue-500/15"
                         data-testid="character-name-use-recommendation"
                       >
                         用推荐名
@@ -1519,7 +1519,7 @@ function CharacterSetupCard({
                       type="button"
                       onClick={() => previewMutation.mutate()}
                       disabled={!mappings.some((item) => item.new_name.trim()) || previewMutation.isPending}
-                      className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                      className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50"
                       data-testid="character-name-preview-btn"
                     >
                       预览替换
@@ -1536,7 +1536,7 @@ function CharacterSetupCard({
                         applyMutation.mutate()
                       }}
                       disabled={!preview || preview.items.length === 0 || applyMutation.isPending}
-                      className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                      className="rounded-md border border-emerald-400/30 bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-300 transition-colors hover:bg-emerald-500/25 disabled:opacity-50"
                       data-testid="character-name-apply-btn"
                     >
                       确认保存
@@ -1544,12 +1544,12 @@ function CharacterSetupCard({
                   </div>
                   )}
                   {previewMutation.isError && (
-                    <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                    <div className="rounded-md border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
                       预览失败：{(previewMutation.error as Error).message}
                     </div>
                   )}
                   {applyMutation.isError && (
-                    <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                    <div className="rounded-md border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
                       保存失败：{(applyMutation.error as Error).message}
                     </div>
                   )}
@@ -1563,8 +1563,8 @@ function CharacterSetupCard({
           <span
             className={`rounded-full px-2 py-1 ${
               characterSetupConfirmed
-                ? 'bg-emerald-50 text-emerald-700'
-                : 'bg-amber-50 text-amber-700'
+                ? 'bg-emerald-500/15 text-emerald-300'
+                : 'bg-amber-500/10 text-amber-300'
             }`}
             data-testid="character-setup-confirm-state"
           >
@@ -1580,7 +1580,7 @@ function CharacterSetupCard({
             <button
               type="button"
               onClick={onConfirm}
-              className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+              className="inline-flex items-center gap-1 rounded-md border border-emerald-400/30 bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-300 transition-colors hover:bg-emerald-500/25"
               data-testid="character-setup-confirm-btn"
             >
               确认并作为大纲依据
@@ -1600,22 +1600,22 @@ function CharacterReplacementPreviewPanel({
 }) {
   return (
     <div
-      className="rounded-lg border border-gray-200 bg-white p-3"
+      className="glass-card p-3"
       data-testid="character-name-preview-panel"
     >
-      <div className="text-xs font-medium text-gray-900">
+      <div className="text-xs font-medium text-white">
         预览：{preview.old_name} → {preview.new_name}
       </div>
       <ul className="mt-2 space-y-2">
         {preview.items.map((item) => (
-          <li key={`${item.scope}-${item.label}`} className="rounded-md bg-gray-50 px-3 py-2">
-            <div className="text-[11px] font-medium text-gray-700">
+          <li key={`${item.scope}-${item.label}`} className="glass-inset rounded-md px-3 py-2">
+            <div className="text-[11px] font-medium text-gray-200">
               {item.label} · 命中 {item.hits} 处
             </div>
-            <div className="mt-1 text-[11px] text-gray-500">
+            <div className="mt-1 text-[11px] text-gray-400">
               替换前：{item.before_excerpt}
             </div>
-            <div className="mt-1 text-[11px] text-emerald-700">
+            <div className="mt-1 text-[11px] text-emerald-300">
               替换后：{item.after_excerpt}
             </div>
           </li>
@@ -1692,7 +1692,7 @@ function OutlineCard({
       globalJob={globalJob}
       notice={
         <div
-          className={`mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 ${
+          className={`mb-2 rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300 ${
             showStaleNotice ? '' : 'hidden'
           }`}
           data-testid="outline-stale-notice"
@@ -1716,10 +1716,10 @@ interface MarkdownPreviewProps {
 function MarkdownPreview({ content, maxHeightClass, testId, children }: MarkdownPreviewProps) {
   return (
     <div
-      className={`overflow-auto rounded border border-gray-100 bg-gray-50 p-4 ${maxHeightClass}`}
+      className={`overflow-auto glass-inset p-4 ${maxHeightClass}`}
       data-testid={testId}
     >
-      <div className="prose prose-sm max-w-none prose-headings:font-semibold prose-h1:text-xl prose-h1:mb-3 prose-h2:text-base prose-h2:mt-5 prose-h2:mb-2 prose-h3:text-sm prose-p:leading-7 prose-li:my-1 prose-ul:my-2 prose-ol:my-2 prose-table:text-sm prose-th:bg-white prose-code:bg-white prose-code:rounded prose-code:px-1.5 prose-code:py-0.5 prose-code:before:hidden prose-code:after:hidden">
+      <div className="prose prose-sm prose-invert max-w-none prose-headings:font-semibold prose-h1:text-xl prose-h1:mb-3 prose-h2:text-base prose-h2:mt-5 prose-h2:mb-2 prose-h3:text-sm prose-p:leading-7 prose-li:my-1 prose-ul:my-2 prose-ol:my-2 prose-table:text-sm prose-th:bg-white/10 prose-code:bg-white/10 prose-code:rounded prose-code:px-1.5 prose-code:py-0.5 prose-code:before:hidden prose-code:after:hidden">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
         {children}
       </div>
@@ -1790,15 +1790,15 @@ function ProjectPackageCard({
   }
 
   return (
-    <section className="rounded-lg bg-white p-4 shadow-sm ring-1 ring-gray-200">
+    <section className="glass-card p-4">
       <header className="mb-3 flex items-center gap-2">
-        <FileArchive className="h-4 w-4 text-emerald-600" />
+        <FileArchive className="h-4 w-4 text-emerald-300" />
         <h2 className="text-sm font-semibold">一键打包</h2>
         <button
           type="button"
           onClick={handlePackage}
           disabled={disabled}
-          className="ml-auto inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+          className="ml-auto inline-flex items-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
           data-testid="download-project-package-btn"
           title={missing.length > 0 ? `缺少：${missing.join('、')}` : ''}
         >
@@ -1806,16 +1806,16 @@ function ProjectPackageCard({
           {packing ? '打包中…' : '下载 ZIP'}
         </button>
       </header>
-      <p className="text-xs leading-5 text-gray-500">
+      <p className="text-xs leading-5 text-gray-400">
         打包配套素材、全书汇总和 3:4 裁剪封面，文件名按当前项目标题生成。
       </p>
       {missing.length > 0 && (
-        <p className="mt-2 text-xs text-amber-600">
+        <p className="mt-2 text-xs text-amber-300">
           还缺：{missing.join('、')}
         </p>
       )}
       {error && (
-        <p className="mt-2 inline-flex items-center gap-1 text-xs text-rose-600">
+        <p className="mt-2 inline-flex items-center gap-1 text-xs text-rose-300">
           <TriangleAlert className="h-3 w-3" /> 打包失败：{error}
         </p>
       )}
@@ -1932,21 +1932,21 @@ function StoryImageCard({
 
   return (
     <section
-      className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4"
+      className="glass-card p-4"
       data-testid="story_image-card"
     >
       <header className="mb-3 flex items-center gap-2">
-        <ImageIcon className="h-4 w-4 text-sky-600" />
+        <ImageIcon className="h-4 w-4 text-sky-300" />
         <h2 className="text-sm font-semibold">小说配图</h2>
         {artifact && !generating && (
-          <span className="text-[10px] text-gray-400">v{artifact.version}</span>
+          <span className="text-[10px] text-gray-500">v{artifact.version}</span>
         )}
         <button
           type="button"
           onClick={start}
           disabled={generating || !!activeJob || disabled}
           title={disabled ? disabledHint : ''}
-          className="ml-auto inline-flex items-center gap-1 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+          className="ml-auto inline-flex items-center gap-1 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
           data-testid="ai-story-image-btn"
         >
           {generating || activeJob ? (
@@ -1958,10 +1958,10 @@ function StoryImageCard({
         </button>
       </header>
 
-      {disabled && <p className="mb-2 text-xs text-gray-400">{disabledHint}</p>}
+      {disabled && <p className="mb-2 text-xs text-gray-500">{disabledHint}</p>}
 
       {/* 尺寸预设 */}
-      <p className="mb-1.5 text-[11px] font-medium text-gray-500">封面尺寸</p>
+      <p className="mb-1.5 text-[11px] font-medium text-gray-400">封面尺寸</p>
       <div className="mb-3 flex flex-wrap gap-2">
         {[
           { key: 'cover', label: '番茄封面', ratio: '2:3' },
@@ -1975,13 +1975,13 @@ function StoryImageCard({
             onClick={() => setPreset(opt.key as typeof preset)}
             className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] transition ${
               preset === opt.key
-                ? 'bg-sky-100 text-sky-700 ring-1 ring-sky-200'
-                : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                ? 'bg-sky-500/15 text-sky-300 ring-1 ring-sky-400/30'
+                : 'bg-white/5 text-gray-400 hover:bg-white/10'
             }`}
           >
             {opt.label}
             {opt.ratio && (
-              <span className={preset === opt.key ? 'text-[10px] text-sky-500' : 'text-[10px] text-gray-400'}>
+              <span className={preset === opt.key ? 'text-[10px] text-sky-500' : 'text-[10px] text-gray-500'}>
                 {opt.ratio}
               </span>
             )}
@@ -1992,41 +1992,41 @@ function StoryImageCard({
           onClick={() => setPreset('custom')}
           className={`rounded-full px-3 py-1 text-[11px] transition ${
             preset === 'custom'
-              ? 'bg-sky-100 text-sky-700 ring-1 ring-sky-200'
-              : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+              ? 'bg-sky-500/15 text-sky-300 ring-1 ring-sky-400/30'
+              : 'bg-white/5 text-gray-400 hover:bg-white/10'
           }`}
         >
           自定义
         </button>
       </div>
       {preset === 'custom' && (
-        <div className="mb-3 rounded-md border border-gray-200 bg-gray-50 p-3">
-          <label className="text-xs font-medium text-gray-700">
+        <div className="mb-3 glass-inset p-3">
+          <label className="text-xs font-medium text-gray-200">
             自定义尺寸
             <input
               type="text"
               value={customVal}
               onChange={(e) => setCustomVal(e.target.value)}
               placeholder="2:3 或 1024x1792"
-              className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-xs shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+              className="mt-1 block w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-gray-100 placeholder:text-white/40 focus:border-sky-400/40 focus:outline-none focus:ring-1 focus:ring-sky-400/40"
             />
           </label>
-          <p className="mt-1 text-[11px] text-gray-400">支持比例如 2:3 或像素如 1024x1792</p>
+          <p className="mt-1 text-[11px] text-gray-500">支持比例如 2:3 或像素如 1024x1792</p>
         </div>
       )}
 
       {/* 作者署名（影响生成与水印） */}
-      <div className="mb-3 rounded-md border border-gray-200 bg-gray-50 p-3">
-        <p className="mb-2 text-[11px] leading-5 text-gray-500">
+      <div className="glass-inset mb-3 p-3">
+        <p className="mb-2 text-[11px] leading-5 text-gray-400">
           默认按番茄小说封面尺寸 2:3 生成；预览和下载叠加作品名，作者署名可选。
         </p>
 
-        <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-700 select-none">
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-200 select-none">
           <input
             type="checkbox"
             checked={showAuthor}
             onChange={(e) => { setShowAuthor(e.target.checked); setAuthorName(a => a || nickname || '作者名') }}
-            className="h-4 w-4 rounded border-gray-300 accent-sky-600"
+            className="h-4 w-4 rounded border-white/20 bg-white/5 accent-sky-600"
           />
           封面带作者署名
         </label>
@@ -2036,26 +2036,26 @@ function StoryImageCard({
             value={authorName}
             onChange={(e) => setAuthorName(e.target.value)}
             placeholder={nickname || '输入作者名'}
-            className="mt-2 block w-full rounded-md border border-gray-300 px-3 py-2 text-xs shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+            className="mt-2 block w-full rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-gray-100 placeholder:text-white/40 focus:border-sky-400/40 focus:outline-none focus:ring-1 focus:ring-sky-400/40"
           />
         )}
       </div>
 
       {(generating || activeJob) && (
-        <p className="mb-2 inline-flex items-center gap-1 text-xs text-sky-700">
+        <p className="mb-2 inline-flex items-center gap-1 text-xs text-sky-300">
           <Sparkles className="h-3 w-3 animate-pulse" />
           AI 生成中 · {currentSize}
         </p>
       )}
       {error && (
-        <p className="mb-2 inline-flex items-center gap-1 text-xs text-rose-600">
+        <p className="mb-2 inline-flex items-center gap-1 text-xs text-rose-300">
           <TriangleAlert className="h-3 w-3" /> 生成失败：{error}
         </p>
       )}
 
       {payload ? (
         <div className="space-y-3">
-          <div className="relative overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
+          <div className="relative overflow-hidden rounded-lg border border-white/10 bg-white/[0.02]">
             <img
               src={payload.data_url}
               alt="小说配图"
@@ -2063,9 +2063,9 @@ function StoryImageCard({
             />
           </div>
           {/* 导出选项 */}
-          <div className="flex flex-wrap items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
-            <span className="text-[11px] font-medium text-gray-500">格式</span>
-            <div className="inline-flex overflow-hidden rounded-md ring-1 ring-gray-300">
+          <div className="flex flex-wrap items-center gap-2 glass-inset px-3 py-2">
+            <span className="text-[11px] font-medium text-gray-400">格式</span>
+            <div className="inline-flex overflow-hidden rounded-md ring-1 ring-white/15">
               {(['png', 'jpg', 'jpeg'] as const).map((fmt) => (
                 <button
                   key={fmt}
@@ -2074,7 +2074,7 @@ function StoryImageCard({
                   className={`px-2.5 py-1 text-[11px] transition ${
                     exportFormat === fmt
                       ? 'bg-sky-600 text-white'
-                      : 'bg-white text-gray-500 hover:bg-gray-100'
+                      : 'bg-white/[0.04] text-gray-400 hover:bg-white/10'
                   }`}
                   data-testid={`cover-export-format-${fmt}`}
                 >
@@ -2083,7 +2083,7 @@ function StoryImageCard({
               ))}
             </div>
             {exportFormat !== 'png' && (
-              <label className="ml-1 inline-flex items-center gap-2 text-[11px] text-gray-500">
+              <label className="ml-1 inline-flex items-center gap-2 text-[11px] text-gray-400">
                 质量 {exportQuality}%
                 <input
                   type="range"
@@ -2097,7 +2097,7 @@ function StoryImageCard({
                 />
               </label>
             )}
-            <span className="ml-auto text-[10px] text-gray-400">
+            <span className="ml-auto text-[10px] text-gray-500">
               {exportFormat === 'png' ? '无损·体积大' : '<5MB 优先选 JPG'}
             </span>
           </div>
@@ -2107,7 +2107,7 @@ function StoryImageCard({
               type="button"
               onClick={() => handleDownload()}
               disabled={downloading}
-              className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-700 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-50"
               data-testid="download-story-image-btn"
             >
               <Download className="h-3 w-3" />
@@ -2117,28 +2117,28 @@ function StoryImageCard({
               type="button"
               onClick={() => handleDownload('cover')}
               disabled={downloading}
-              className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs text-sky-700 hover:bg-sky-100 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-md border border-sky-400/30 bg-sky-500/15 px-3 py-1.5 text-xs text-sky-300 transition-colors hover:bg-sky-500/25 disabled:opacity-50"
               data-testid="crop-story-image-btn"
               title="保持原图像素，按 3:4 比例裁剪（水平居中、顶部对齐）后下载"
             >
               <Crop className="h-3 w-3" />
               {downloading ? '处理中…' : '裁剪 3:4 下载'}
             </button>
-            <span className="ml-auto rounded-full bg-gray-100 px-2 py-1 text-[10px] text-gray-500">
+            <span className="ml-auto rounded-full bg-white/10 px-2 py-1 text-[10px] text-gray-400">
               {payload.model}
             </span>
           </div>
-          <details className="rounded-md border border-gray-200 bg-gray-50 p-3">
-            <summary className="cursor-pointer text-xs font-medium text-gray-700">
+          <details className="glass-inset p-3">
+            <summary className="cursor-pointer text-xs font-medium text-gray-200">
               查看生图提示词
             </summary>
-            <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-gray-600">
+            <pre className="mt-2 whitespace-pre-wrap break-words text-[11px] leading-5 text-gray-400">
               {payload.prompt}
             </pre>
           </details>
         </div>
       ) : (
-        <p className="text-xs text-gray-400">
+        <p className="text-xs text-gray-500">
           生成一张小说封面配图，优先吃 README、大纲和配套素材里的封面关键词。
         </p>
       )}
@@ -2202,19 +2202,19 @@ function BodyGenCard({
 
   return (
     <section
-      className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4"
+      className="glass-card p-4"
       data-testid="body-gen-card"
     >
       <header className="flex items-center gap-2 mb-3">
-        <Sparkles className="h-4 w-4 text-violet-600" />
+        <Sparkles className="h-4 w-4 text-violet-300" />
         <h2 className="text-sm font-semibold">正文</h2>
         {chapterCount > 0 && !activeProgress.running && (
-          <span className="text-[10px] text-gray-400">
+          <span className="text-[10px] text-gray-500">
             {chapterCount} 章 · {totalWords} 字
           </span>
         )}
         <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto sm:justify-end">
-          <label className="inline-flex items-center gap-1 text-xs text-gray-500">
+          <label className="inline-flex items-center gap-1 text-xs text-gray-400">
             目标
             <input
               type="number"
@@ -2226,7 +2226,7 @@ function BodyGenCard({
                 if (Number.isFinite(v)) setTarget(v)
               }}
               disabled={activeProgress.running || blocked}
-              className="w-16 rounded border border-gray-200 bg-white px-2 py-1 text-xs disabled:bg-gray-50"
+              className="glass-field w-16 px-2 py-1 text-xs text-gray-100 disabled:opacity-50"
               data-testid="body-target-input"
             />
             章
@@ -2236,7 +2236,7 @@ function BodyGenCard({
             onClick={() => run({ projectId, target })}
             disabled={activeProgress.running || blocked}
             title={blocked ? blockedHint : '基于章节标题：补齐到 N 章 → 每章 AI 拆段 + 写满'}
-            className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-50 sm:flex-none"
+            className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-500 disabled:opacity-50 sm:flex-none"
             data-testid="ai-body-btn"
           >
             {activeProgress.running ? (
@@ -2258,9 +2258,9 @@ function BodyGenCard({
                   title: '重新生成全部正文？',
                   description: (
                     <>
-                      会<span className="font-semibold text-rose-600">清空现有 {chapterCount} 章正文</span>
+                      会<span className="font-semibold text-rose-300">清空现有 {chapterCount} 章正文</span>
                       （共 {totalWords} 字），重新拆段并按更短的篇幅（每章约 2000 字）重写全书。
-                      <span className="text-gray-500">此操作不可恢复</span>，建议先确认你不需要现有内容。
+                      <span className="text-gray-400">此操作不可恢复</span>，建议先确认你不需要现有内容。
                     </>
                   ),
                   confirmText: '清空并重写',
@@ -2270,7 +2270,7 @@ function BodyGenCard({
               }}
               disabled={blocked}
               title={blocked ? blockedHint : '清空现有正文，每章约 2000 字重写全书（更短，便于全书汇总）'}
-              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50 sm:flex-none"
+              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-rose-400/30 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition-colors hover:bg-rose-500/15 disabled:opacity-50 sm:flex-none"
               data-testid="ai-body-regen-btn"
             >
               <RefreshCw className="h-3 w-3" />
@@ -2286,7 +2286,7 @@ function BodyGenCard({
                 abort()
                 clearAiJob(projectId)
               }}
-              className="inline-flex flex-1 items-center justify-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 sm:flex-none"
+              className="glass-pill inline-flex flex-1 items-center justify-center gap-1 px-2 py-1.5 text-xs text-gray-300 transition-colors sm:flex-none"
               data-testid="ai-body-abort-btn"
               title="中断后已写入的段不会回滚"
             >
@@ -2296,9 +2296,9 @@ function BodyGenCard({
         </div>
       </header>
 
-      {blocked && <p className="text-xs text-gray-400 mb-2">{blockedHint}</p>}
+      {blocked && <p className="text-xs text-gray-500 mb-2">{blockedHint}</p>}
       <div
-        className={`mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 ${
+        className={`mb-2 rounded-md border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300 ${
           bodyNeedsRefresh ? '' : 'hidden'
         }`}
         data-testid="body-stale-notice"
@@ -2306,13 +2306,13 @@ function BodyGenCard({
         当前正文可能基于旧设定或旧大纲生成，建议先确认角色设定并重生大纲后再继续正文。
       </div>
       {progress.error && (
-        <p className="text-xs text-rose-600 inline-flex items-center gap-1 mb-2">
+        <p className="text-xs text-rose-300 inline-flex items-center gap-1 mb-2">
           <TriangleAlert className="h-3 w-3" /> 生成失败：{progress.error}
         </p>
       )}
       {activeProgress.running && (
         <div
-          className="mb-3 rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700"
+          className="mb-3 rounded-md border border-violet-400/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-300"
           data-testid="body-live-status"
         >
           AI 生成中 · 第 {activeProgress.chapter}/{activeProgress.totalChapters} 章 · 段{' '}
@@ -2322,13 +2322,13 @@ function BodyGenCard({
       )}
       {activeProgress.liveBody?.text && (
         <div
-          className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 p-3"
+          className="mb-3 rounded-md border border-emerald-400/30 bg-emerald-500/10 p-3"
           data-testid="body-live-preview"
         >
-          <div className="mb-1 text-xs font-semibold text-emerald-700">
+          <div className="mb-1 text-xs font-semibold text-emerald-300">
             正在生成章节预览
           </div>
-          <div className="whitespace-pre-wrap text-[12px] leading-6 text-gray-800">
+          <div className="whitespace-pre-wrap text-[12px] leading-6 text-gray-200">
             {activeProgress.liveBody.text}
           </div>
         </div>
@@ -2339,14 +2339,14 @@ function BodyGenCard({
           {chapters!.map((c) => (
             <li
               key={c.id}
-              className="rounded-md border border-gray-200 px-2 py-1.5 flex items-center gap-2 text-xs"
+              className="glass-inset glass-inset-hover rounded-md px-2 py-1.5 flex items-center gap-2 text-xs"
             >
-              <span className="font-mono text-gray-400">#{c.idx}</span>
-              <span className="flex-1 truncate text-gray-800">{c.title || '（未命名）'}</span>
-              <span className="text-gray-400">{c.word_count}字</span>
+              <span className="font-mono text-gray-500">#{c.idx}</span>
+              <span className="flex-1 truncate text-gray-200">{c.title || '（未命名）'}</span>
+              <span className="text-gray-500">{c.word_count}字</span>
               <Link
                 to={`/projects/${projectId}/write`}
-                className="text-violet-600 hover:underline"
+                className="text-violet-300 hover:underline"
               >
                 打开
               </Link>
@@ -2354,7 +2354,7 @@ function BodyGenCard({
           ))}
         </ul>
       ) : (
-        <p className="text-xs text-gray-400">
+        <p className="text-xs text-gray-500">
           点上面按钮，AI 会自动建章 → 拆段 → 逐段写满；写完可以去「进入写作」做局部润色。
         </p>
       )}

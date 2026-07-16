@@ -22,10 +22,10 @@ const STATUS_LABEL: Record<ProjectStatus, string> = {
 }
 
 const STATUS_BG: Record<ProjectStatus, string> = {
-  writing: 'bg-blue-50 text-blue-700 border-blue-200',
-  ready: 'bg-amber-50 text-amber-700 border-amber-200',
-  published: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  archived: 'bg-slate-50 text-slate-600 border-slate-200',
+  writing: 'bg-blue-500/10 text-blue-300 border-blue-400/30',
+  ready: 'bg-amber-500/10 text-amber-300 border-amber-400/30',
+  published: 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30',
+  archived: 'bg-white/[0.04] text-gray-400 border-white/10',
 }
 
 const NEXT_LABEL: Record<ProjectStatus, string | null> = {
@@ -182,9 +182,9 @@ export default function ProjectList({
         onRetryFailed={batch.retryFailed}
       />
       <header className="flex items-center gap-3 mb-3">
-        <FileText className="h-5 w-5 text-blue-600" />
-        <h1 className="text-lg font-semibold">{title}</h1>
-        <span className="ml-auto text-xs text-gray-400">
+        <FileText className="h-5 w-5 text-blue-300" />
+        <h1 className="text-lg font-semibold text-white">{title}</h1>
+        <span className="ml-auto text-xs text-gray-500">
           {list.data
             ? `${visible.length}${hiddenCount > 0 ? ` · 隐藏 ${hiddenCount}` : ''} 个项目`
             : ''}
@@ -202,14 +202,14 @@ export default function ProjectList({
               data-testid={`status-tab-${t.key}`}
               className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition ${
                 status === t.key
-                  ? 'border-blue-300 bg-blue-50 text-blue-700'
-                  : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                  ? 'border-blue-400/30 bg-blue-500/15 text-blue-300'
+                  : 'border-white/10 bg-white/[0.04] text-gray-400 hover:bg-white/10'
               }`}
             >
               {t.label}
             </button>
           ))}
-          <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer">
+          <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-gray-400 cursor-pointer">
             <input
               type="checkbox"
               checked={hideTestData}
@@ -223,7 +223,7 @@ export default function ProjectList({
       )}
       {initialStatus !== 'all' && (
         <div className="mb-4 flex items-center gap-2">
-          <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-gray-500 cursor-pointer">
+          <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-gray-400 cursor-pointer">
             <input
               type="checkbox"
               checked={hideTestData}
@@ -236,15 +236,15 @@ export default function ProjectList({
         </div>
       )}
 
-      {list.isLoading && <p className="text-sm text-gray-500">加载中…</p>}
+      {list.isLoading && <p className="text-sm text-gray-400">加载中…</p>}
       {list.isError && (
-        <p className="text-sm text-rose-600 inline-flex items-center gap-1">
+        <p className="text-sm text-rose-300 inline-flex items-center gap-1">
           <TriangleAlert className="h-4 w-4" /> 加载失败
         </p>
       )}
       {runningJobs.length > 0 && (
         <div
-          className="mb-3 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-700"
+          className="mb-3 rounded-lg border border-violet-400/20 bg-violet-500/[0.07] px-3 py-2 text-xs text-violet-300"
           data-testid="ai-jobs-summary"
         >
           <div className="mb-1 flex items-center gap-1.5 font-semibold">
@@ -257,10 +257,10 @@ export default function ProjectList({
               return (
                 <span
                   key={`${job.projectId}-${job.startedAt}`}
-                  className="inline-flex max-w-full items-center gap-1 rounded-full border border-violet-200 bg-white px-2 py-0.5"
+                  className="inline-flex max-w-full items-center gap-1 rounded-full border border-violet-400/20 bg-white/[0.04] px-2 py-0.5"
                 >
                   {projectTitle && (
-                    <span className="max-w-[18rem] truncate text-violet-500">{projectTitle}</span>
+                    <span className="max-w-[18rem] truncate text-violet-400">{projectTitle}</span>
                   )}
                   <span className="font-medium">{renderAiJobText(job)}</span>
                 </span>
@@ -270,7 +270,7 @@ export default function ProjectList({
         </div>
       )}
       {visible.length === 0 && !list.isLoading && (
-        <div className="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center text-sm text-gray-500">
+        <div className="rounded-2xl border border-dashed border-white/15 bg-white/[0.02] p-12 text-center text-sm text-gray-400">
           {hiddenCount > 0
             ? '当前 tab 全部被「隐藏测试」过滤'
             : (emptyHint ?? '这里还没有项目')}
@@ -279,10 +279,10 @@ export default function ProjectList({
 
       {visible.length > 0 && (
         <div
-          className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-violet-100 bg-violet-50/60 px-3 py-2"
+          className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-violet-400/20 bg-violet-500/[0.07] px-3 py-2"
           data-testid="project-batch-bar"
         >
-          <label className="inline-flex items-center gap-1.5 text-[11px] font-medium text-violet-700 cursor-pointer">
+          <label className="inline-flex items-center gap-1.5 text-[11px] font-medium text-violet-300 cursor-pointer">
             <input
               type="checkbox"
               checked={allSelected}
@@ -292,8 +292,8 @@ export default function ProjectList({
             />
             全选（{visible.length}）
           </label>
-          <span className="text-[11px] text-violet-500">已选 {selected.size}</span>
-          <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-violet-600">
+          <span className="text-[11px] text-violet-400">已选 {selected.size}</span>
+          <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-violet-300">
             章数
             <input
               type="number"
@@ -301,7 +301,7 @@ export default function ProjectList({
               max={20}
               value={batchTarget}
               onChange={(e) => setBatchTarget(Number(e.target.value))}
-              className="w-12 rounded border border-violet-200 px-1.5 py-0.5 text-center text-xs"
+              className="w-12 rounded border border-violet-400/30 bg-white/[0.03] px-1.5 py-0.5 text-center text-xs text-gray-100"
               data-testid="project-batch-target"
             />
           </label>
@@ -309,7 +309,7 @@ export default function ProjectList({
             type="button"
             onClick={runBatch}
             disabled={selected.size === 0 || batch.state.running}
-            className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-violet-700 disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-500 disabled:opacity-50"
             data-testid="project-batch-launch-btn"
             title="并发跑全流程，已有产物的步骤自动跳过，失败自动重试"
           >
@@ -331,7 +331,7 @@ export default function ProjectList({
           return (
             <article
               key={project.id}
-              className="rounded-lg bg-white shadow-sm ring-1 ring-gray-200 p-4 flex flex-col"
+              className="glass-card p-4 flex flex-col transition hover:border-white/20 hover:-translate-y-0.5"
               data-testid="project-card"
             >
               <header className="flex items-start gap-2 mb-2">
@@ -343,7 +343,7 @@ export default function ProjectList({
                   data-testid="project-select"
                   aria-label={`选择 ${project.title}`}
                 />
-                <h2 className="font-semibold text-gray-900 text-[15px] leading-snug flex-1">
+                <h2 className="font-semibold text-white text-[15px] leading-snug flex-1">
                   {project.title}
                 </h2>
                 <span
@@ -354,7 +354,7 @@ export default function ProjectList({
               </header>
               {job && (
                 <div
-                  className="mb-3 flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-[11px] font-semibold text-violet-700"
+                  className="mb-3 flex items-center gap-1.5 rounded-lg border border-violet-400/30 bg-violet-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-violet-300"
                   data-testid="ai-job-badge"
                 >
                   <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
@@ -368,27 +368,27 @@ export default function ProjectList({
                 <div className="mb-3 space-y-1">
                   {meta.heat && <HeatBadge heat={meta.heat} />}
                   {meta.reason && (
-                    <p className="flex items-start gap-1 text-[11px] leading-5 text-violet-600">
+                    <p className="flex items-start gap-1 text-[11px] leading-5 text-violet-300">
                       <Sparkles className="mt-0.5 h-3 w-3 shrink-0" />
                       <span className="line-clamp-2">推荐：{meta.reason}</span>
                     </p>
                   )}
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-2 text-xs text-gray-600 mb-3">
+              <div className="grid grid-cols-2 gap-2 text-xs text-gray-400 mb-3">
                 <div>
-                  <div className="text-[11px] text-gray-400">章节</div>
-                  <div className="font-mono font-semibold text-gray-900">{project.chapter_count}</div>
+                  <div className="text-[11px] text-gray-500">章节</div>
+                  <div className="font-mono font-semibold text-white">{project.chapter_count}</div>
                 </div>
                 <div>
-                  <div className="text-[11px] text-gray-400">字数</div>
-                  <div className="font-mono font-semibold text-gray-900">{project.total_words}</div>
+                  <div className="text-[11px] text-gray-500">字数</div>
+                  <div className="font-mono font-semibold text-white">{project.total_words}</div>
                 </div>
               </div>
               <div className="mt-auto flex items-center gap-2">
                 <Link
                   to={`/projects/${project.id}`}
-                  className="flex-1 inline-flex items-center justify-center gap-1 rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  className="flex-1 inline-flex items-center justify-center gap-1 rounded-md border border-white/10 px-3 py-1.5 text-xs font-medium text-gray-200 transition-colors hover:bg-white/10 hover:border-white/20"
                   data-testid="project-open-btn"
                 >
                   打开 <ArrowRight className="h-3 w-3" />
@@ -398,7 +398,7 @@ export default function ProjectList({
                     type="button"
                     onClick={() => transition.mutate({ id: project.id, to: next })}
                     disabled={transition.isPending}
-                    className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
                     data-testid="project-next-btn"
                   >
                     {transition.isPending && transition.variables?.id === project.id ? (
@@ -415,7 +415,7 @@ export default function ProjectList({
                       description: (
                         <>
                           章节、AI 产物（README/大纲/发布稿/配套）、草稿都会一起删除，
-                          <span className="font-semibold text-rose-600">不可恢复</span>。
+                          <span className="font-semibold text-rose-300">不可恢复</span>。
                         </>
                       ),
                       confirmText: '删除',
@@ -424,7 +424,7 @@ export default function ProjectList({
                     if (ok) remove.mutate(project.id)
                   }}
                   disabled={remove.isPending && remove.variables === project.id}
-                  className="inline-flex items-center justify-center rounded-md border border-rose-200 bg-white p-1.5 text-rose-500 hover:bg-rose-50 disabled:opacity-50"
+                  className="inline-flex items-center justify-center rounded-md border border-rose-400/30 bg-rose-500/10 p-1.5 text-rose-300 transition-colors hover:bg-rose-500/20 disabled:opacity-50"
                   title="删除项目"
                   data-testid="project-delete-btn"
                   aria-label="删除项目"
